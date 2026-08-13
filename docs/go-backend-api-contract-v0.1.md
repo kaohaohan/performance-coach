@@ -376,10 +376,17 @@ Response `200`（陣列，每筆為一個 ScheduledWorkout 摘要）：
 
 ### POST /scheduled-workouts/{id}/session
 
-開始訓練。允許：該排程的 athlete 本人，或其 connected coach。
+開始訓練。允許：該排程的 athlete 本人，或其 connected coach；其他呼叫者 `404 NOT_FOUND`（不透露該 ScheduledWorkout 是否存在 — 見 §1）。`{id}` 格式錯誤 → `400 INVALID_ARGUMENT`。
 
-- 已存在 ACTIVE session → 回傳既有 session（冪等），HTTP 200
-- 已 COMPLETED → `409 CONFLICT`
+Response body 固定為（不含 `athleteId`、`scheduledWorkoutId`、`startedAt`、`completedAt` — 完整 session detail 屬於 `GET /sessions/{sessionId}` 的職責，不在此重複）：
+
+```json
+{ "id": "...", "status": "ACTIVE" }
+```
+
+- 尚無 session → 建立新 session，HTTP **`201 Created`**，回傳上述 shape
+- 已存在 ACTIVE session → 回傳既有 session（冪等，同一 shape），HTTP `200`
+- 已 COMPLETED → 不重新啟動、不修改，`409 CONFLICT`
 
 ### POST /sessions/{sessionId}/complete
 

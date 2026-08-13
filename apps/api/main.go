@@ -23,6 +23,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/workoutsession"
 )
 
 func main() {
@@ -64,6 +65,7 @@ func run() error {
 	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
+	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -403,6 +405,48 @@ func handleListMyScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(scheduled)
+	}
+}
+
+// handleStartSession starts training for a ScheduledWorkout, or resumes its
+// existing ACTIVE WorkoutSession (docs/go-backend-api-contract-v0.1.md
+// §3.7). Allowed callers: the ScheduledWorkout's athlete, or a connected
+// coach; any other caller (or a nonexistent id) gets 404, not 403 — this is
+// a resource-scoping check, not a role check.
+func handleStartSession(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		scheduledWorkoutID := r.PathValue("id")
+
+		session, created, err := workoutsession.Start(r.Context(), pool, user, scheduledWorkoutID)
+		if err != nil {
+			var validationErr *workoutsession.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, workoutsession.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "scheduled workout not found")
+			case errors.Is(err, workoutsession.ErrCompleted):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session already completed")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		status := http.StatusOK
+		if created {
+			status = http.StatusCreated
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(session)
 	}
 }
 
