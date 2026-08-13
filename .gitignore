@@ -1,0 +1,21 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+.next/
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
