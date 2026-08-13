@@ -1,16 +1,18 @@
-// Package scheduledworkout implements Coach-only ScheduledWorkout creation
-// (batch assignment) and the date-range list that powers the Calendar
-// frontend IA (docs/frontend-ui-spec.md,
-// docs/go-backend-api-contract-v0.1.md §3.5).
+// Package scheduledworkout implements ScheduledWorkout creation (Coach-only
+// batch assignment), the Coach-only date-range list that powers the
+// Calendar frontend IA, and the Athlete-only "today" list (docs/
+// frontend-ui-spec.md, docs/go-backend-api-contract-v0.1.md §3.5, §3.6).
 //
 // Create is a write endpoint: it schedules one Workout to one or more
 // connected Athletes on one date, snapshotting the workout's current
 // prescription independently into scheduled_workout_exercises for each
 // created ScheduledWorkout so later template edits never mutate assigned
-// training. ListForCoach is a read/list endpoint only: it returns summary
-// data (athlete, workout, session status) for rendering a Calendar.
-// Exercise prescriptions and set logs stay behind GET /sessions/{id} —
-// deliberately not duplicated there.
+// training. ListForCoach and ListForAthlete are read/list endpoints only.
+// ListForCoach returns summary data (athlete, workout, session status) for
+// rendering a Calendar; exercise prescriptions and set logs stay behind GET
+// /sessions/{id} — deliberately not duplicated there. ListForAthlete does
+// expand exercises, since that's the point of the Athlete Today view, but
+// always from the frozen snapshot, never the live workout template.
 package scheduledworkout
 
 import (
@@ -57,9 +59,10 @@ type ScheduledWorkout struct {
 	Session       *Session `json:"session"`
 }
 
-// ErrForbidden indicates the caller is authenticated but not authorized to
-// list scheduled workouts (i.e. not a COACH).
-var ErrForbidden = errors.New("scheduledworkout: caller is not a coach")
+// ErrForbidden indicates the caller is authenticated but their role is not
+// authorized for the requested operation (Create/ListForCoach require
+// COACH; ListForAthlete requires ATHLETE).
+var ErrForbidden = errors.New("scheduledworkout: caller's role is not authorized for this operation")
 
 // ErrAthleteNotFound indicates the caller requested a specific athleteId
 // that is not connected to them (or does not exist). Handlers map this to
@@ -494,4 +497,127 @@ func isConnected(ctx context.Context, pool *pgxpool.Pool, coachID, athleteID str
 		return false, err
 	}
 	return true, nil
+}
+
+// TodayScheduledWorkout is one item of the GET
+// /api/v1/me/scheduled-workouts response
+// (docs/go-backend-api-contract-v0.1.md §3.6): one of the caller athlete's
+// own ScheduledWorkouts on the requested date, with its frozen prescription
+// snapshot expanded. Deliberately a separate type from Created and
+// ScheduledWorkout — its envelope (flat workoutName, no embedded athlete)
+// doesn't match either, even though it reuses their Exercise/Plan/Session
+// building blocks.
+type TodayScheduledWorkout struct {
+	ID            string              `json:"id"`
+	ScheduledDate string              `json:"scheduledDate"`
+	WorkoutName   string              `json:"workoutName"`
+	Exercises     []ScheduledExercise `json:"exercises"`
+	Session       *Session            `json:"session"`
+}
+
+// ListForAthlete returns the caller's own ScheduledWorkouts on exactly one
+// date, exercises expanded from the frozen scheduled_workout_exercises
+// snapshot (docs/go-backend-api-contract-v0.1.md §3.6, §2 snapshot
+// precedence rule). Display fields (exercise name, target sets/reps/note/
+// rpe) always come from the snapshot row, never from the current exercises
+// or workout_exercises tables, so a later rename/edit of the template does
+// not change what the athlete already saw scheduled.
+//
+// Authorization: only an ATHLETE may call this; results are always scoped
+// to caller.ID — an athlete can never see another athlete's schedule. There
+// is no resource-scoping 404 here (unlike ListForCoach's athleteId filter):
+// identity comes solely from the caller, so "no rows" is a legitimate empty
+// result, not a hidden-resource case.
+//
+// scheduled_workouts joins 1:N to scheduled_workout_exercises (every
+// ScheduledWorkout has at least one snapshot exercise by construction — see
+// Create), so the query produces one SQL row per exercise. Rows are grouped
+// in Go, keyed by scheduled_workout id and in first-seen order, so each
+// ScheduledWorkout appears exactly once in the response with its exercises
+// appended in snapshot position order; multiple ScheduledWorkouts on the
+// same date (the schedule intentionally allows this — see §3.5) remain
+// separate entries, never merged or deduplicated.
+func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, date time.Time) ([]TodayScheduledWorkout, error) {
+	if caller.Role != "ATHLETE" {
+		return nil, ErrForbidden
+	}
+
+	const query = `
+		SELECT sw.id, sw.scheduled_date, w.name,
+		       swe.id, swe.exercise_id, swe.exercise_name,
+		       swe.target_sets, swe.target_reps, swe.target_prescription_note, swe.target_rpe, swe.position,
+		       ws.id, ws.status
+		FROM scheduled_workouts sw
+		JOIN workouts w ON w.id = sw.workout_id
+		JOIN scheduled_workout_exercises swe ON swe.scheduled_workout_id = sw.id
+		LEFT JOIN workout_sessions ws ON ws.scheduled_workout_id = sw.id
+		WHERE sw.athlete_id = $1 AND sw.scheduled_date = $2
+		ORDER BY sw.id, swe.position`
+
+	rows, err := pool.Query(ctx, query, caller.ID, date)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: list for athlete: %w", err)
+	}
+	defer rows.Close()
+
+	order := make([]string, 0)
+	byID := make(map[string]*TodayScheduledWorkout)
+	for rows.Next() {
+		var (
+			id, workoutName      string
+			scheduledDate        time.Time
+			swExerciseID, exID   string
+			exName               string
+			targetSets, position int
+			targetReps           *int
+			targetPrescriptNote  *string
+			targetRPE            *float64
+			sessionID, sessionSt *string
+		)
+		if err := rows.Scan(
+			&id, &scheduledDate, &workoutName,
+			&swExerciseID, &exID, &exName,
+			&targetSets, &targetReps, &targetPrescriptNote, &targetRPE, &position,
+			&sessionID, &sessionSt,
+		); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: scan today row: %w", err)
+		}
+
+		sw, ok := byID[id]
+		if !ok {
+			sw = &TodayScheduledWorkout{
+				ID:            id,
+				ScheduledDate: scheduledDate.Format(dateLayout),
+				WorkoutName:   workoutName,
+				Exercises:     make([]ScheduledExercise, 0, 1),
+			}
+			if sessionID != nil {
+				sw.Session = &Session{ID: *sessionID, Status: *sessionSt}
+			}
+			byID[id] = sw
+			order = append(order, id)
+		}
+
+		sw.Exercises = append(sw.Exercises, ScheduledExercise{
+			ScheduledWorkoutExerciseID: swExerciseID,
+			ExerciseID:                 exID,
+			Name:                       exName,
+			Plan: Plan{
+				Sets:             targetSets,
+				Reps:             targetReps,
+				PrescriptionNote: targetPrescriptNote,
+				RPE:              targetRPE,
+			},
+			Position: position,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: iterate today rows: %w", err)
+	}
+
+	scheduled := make([]TodayScheduledWorkout, 0, len(order))
+	for _, id := range order {
+		scheduled = append(scheduled, *byID[id])
+	}
+	return scheduled, nil
 }

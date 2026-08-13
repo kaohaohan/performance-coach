@@ -63,6 +63,7 @@ func run() error {
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
+	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -355,6 +356,44 @@ func handleListScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 			case errors.Is(err, scheduledworkout.ErrAthleteNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(scheduled)
+	}
+}
+
+// handleListMyScheduledWorkouts returns the caller's own ScheduledWorkouts
+// on exactly one date, exercises expanded from the frozen prescription
+// snapshot. Athlete only (docs/go-backend-api-contract-v0.1.md §3.6).
+// Identity comes solely from the authenticated caller; no athleteId is ever
+// accepted from the client.
+func handleListMyScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
+	const dateLayout = "2006-01-02"
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		date, err := time.Parse(dateLayout, r.URL.Query().Get("date"))
+		if err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "date is required and must be a valid date (YYYY-MM-DD)")
+			return
+		}
+
+		scheduled, err := scheduledworkout.ListForAthlete(r.Context(), pool, user, date)
+		if err != nil {
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not an athlete")
 			default:
 				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 			}
