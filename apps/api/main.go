@@ -14,12 +14,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/athlete"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 )
 
@@ -59,6 +61,7 @@ func run() error {
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
+	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -246,6 +249,63 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(workouts)
+	}
+}
+
+// handleListScheduledWorkouts returns the caller's ScheduledWorkouts in a
+// required [from, to] date range, optionally filtered to one athlete.
+// Coach only. Powers the Calendar frontend IA
+// (docs/go-backend-api-contract-v0.1.md §3.5).
+func handleListScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
+	const dateLayout = "2006-01-02"
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		from, err := time.Parse(dateLayout, r.URL.Query().Get("from"))
+		if err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "from is required and must be a valid date (YYYY-MM-DD)")
+			return
+		}
+		to, err := time.Parse(dateLayout, r.URL.Query().Get("to"))
+		if err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "to is required and must be a valid date (YYYY-MM-DD)")
+			return
+		}
+		if to.Before(from) {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "to must not be before from")
+			return
+		}
+
+		var athleteID *string
+		if raw := r.URL.Query().Get("athleteId"); raw != "" {
+			if _, err := uuid.Parse(raw); err != nil {
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "athleteId must be a valid UUID")
+				return
+			}
+			athleteID = &raw
+		}
+
+		scheduled, err := scheduledworkout.ListForCoach(r.Context(), pool, user, from, to, athleteID)
+		if err != nil {
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.Is(err, scheduledworkout.ErrAthleteNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(scheduled)
 	}
 }
 

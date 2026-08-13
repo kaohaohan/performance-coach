@@ -10,7 +10,7 @@ Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
 
-> V0.5 變更：`GET /scheduled-workouts` 的 `athleteId` 改為選填，省略時回傳呼叫者跨所有已連結 athlete、指定日期範圍內的排程，供 Calendar 日/週檢視使用；同時明確定義該 endpoint 的 response shape（含 `session` 欄位）。純粹是既有 endpoint 的查詢維度放寬與回應格式明確化 — **不新增 domain object、不新增 endpoint、授權規則不變**。詳見 §3.5、§7.5，對應 `docs/mvp-specification.md`「Navigation Principle」與新的 `docs/frontend-ui-spec.md`。
+> V0.5 變更：`GET /scheduled-workouts` 實作為 Coach-only summary/list endpoint，`from`/`to` 必填、`athleteId` 選填。省略 `athleteId` 時回傳呼叫者跨所有已連結 athlete、指定日期範圍內的排程，供 Calendar 日/週檢視使用；提供 `athleteId` 但未連結時回 `404 NOT_FOUND`（刻意與 POST /scheduled-workouts 的 403 不一致，屬已知待清理項目）。Response 為 nested 摘要（`athlete{id,name}`、`workout{id,name}`、`session`），不含 exercises — 詳細處方與 SetLog 仍走 `GET /sessions/{id}`。純粹是既有 endpoint 的查詢維度放寬與回應格式明確化 — **不新增 domain object、不新增 endpoint**。詳見 §3.5、§7.5，對應 `docs/mvp-specification.md`「Navigation Principle」與 `docs/frontend-ui-spec.md`。
 > 
 
 > V0.4 變更（最後一輪 sanity check）：① 明確定義 snapshot 欄位優先於 Exercise current state ② 註明 exercise 同名衝突規則 ③ targetRepsNote → targetPrescriptionNote ④ SetLog.load/unit 改 nullable（bodyweight 動作）⑤ 「reps 永遠整數」改為 V0.1 範圍聲明
@@ -280,41 +280,38 @@ Service 層檢查（依序）：
 
 Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapshot）。
 
-### GET /scheduled-workouts?athleteId=&from=&to= — Coach only
+### GET /scheduled-workouts?from=&to=&athleteId= — Coach only
 
-列出呼叫者（caller）自己建立的排程，一律以 `coachId = caller.id` 為界（不因本次調整而改變）。
+列出呼叫者（caller）自己建立的排程，一律以 `coachId = caller.id` 為界（不因本次調整而改變）。**這是 summary/list endpoint**：只回傳 Calendar 渲染所需的摘要欄位，不含 exercise prescription — 那屬於 `GET /sessions/{id}` 的職責，不在此重複。
 
-- `athleteId`：**選填**（V0.5 起）。有值時只回傳該 athlete 的排程（原行為不變）；**省略時回傳呼叫者在 `from`–`to` 範圍內、跨所有已連結 athlete 的排程** — 供 Coach Calendar 日/週檢視使用（見 `docs/frontend-ui-spec.md`）。
-- `from`、`to`：以 `scheduled_date` 篩選的日期範圍，格式為純日期（`2026-08-14`）。
+- `from`、`to`：**必填**，以 `scheduled_date` 篩選的日期範圍（含首尾），格式為純日期（`2026-08-14`）。缺漏或無法解析 → `400 INVALID_ARGUMENT`；`to` 早於 `from` → 同樣 `400 INVALID_ARGUMENT`。
+- `athleteId`：**選填**（V0.5 起）。有值時只回傳該 athlete 的排程，且該 athlete 必須與呼叫者存在 `CoachAthlete` 關係，否則 `404 NOT_FOUND`（不透露該 athlete 是否存在 — 見 §1 授權與隱私原則；**注意此處刻意與 §3.5 POST /scheduled-workouts 的 403 不一致，屬已知待清理項目，本次不擴大範圍處理**）。省略時回傳呼叫者在 `from`–`to` 範圍內、跨所有已連結 athlete 的排程 — 供 Coach Calendar 日/週檢視使用（見 `docs/frontend-ui-spec.md`）。
 
-> **Calendar 是前端資訊架構（information architecture），建構在既有 `ScheduledWorkout` 模型之上。** 本次調整不新增 Calendar domain object，也不新增 endpoint，只放寬既有 endpoint 的查詢維度、並明確化其回應格式。授權規則不變。詳見 §7.5。
+> **Calendar 是前端資訊架構（information architecture），建構在既有 `ScheduledWorkout` 模型之上。** 本次調整不新增 Calendar domain object，也不新增 endpoint，只放寬既有 endpoint 的查詢維度、並明確化其回應格式。授權規則不變（角色檢查仍是 403；本 endpoint 的 resource-scoping 檢查是 404）。詳見 §7.5。
 > 
 
-Response `200`（陣列；每筆同 POST /scheduled-workouts 的單筆 snapshot，並新增 `session` 欄位）：
+Response `200`（陣列，每筆為一個 ScheduledWorkout 摘要）：
 
 ```json
 [
   {
     "id": "...",
-    "workoutId": "...",
-    "athleteId": "...",
     "scheduledDate": "2026-08-14",
-    "workoutName": "Monday Lower",
-    "exercises": [
-      {
-        "scheduledWorkoutExerciseId": "...",
-        "exerciseId": "...",
-        "name": "Back Squat",
-        "plan": { "sets": 4, "reps": 5, "rpe": 8 },
-        "position": 1
-      }
-    ],
+    "athlete": { "id": "...", "name": "Kevin" },
+    "workout": { "id": "...", "name": "Monday Lower" },
     "session": null
+  },
+  {
+    "id": "...",
+    "scheduledDate": "2026-08-14",
+    "athlete": { "id": "...", "name": "Priya" },
+    "workout": { "id": "...", "name": "Push Day" },
+    "session": { "id": "...", "status": "ACTIVE" }
   }
 ]
 ```
 
-`session` 語意同 §3.6 Athlete Today View：`null` 代表尚未開始；非 null（`{ id, status, ... }`）代表已開始/完成。前端（Calendar 日檢視、Coach review）據此顯示每個 athlete 當日的完成狀態。
+`session`：`null` 代表該 ScheduledWorkout 尚未開始訓練；非 null（`{ id, status }`，`status` ∈ `ACTIVE`/`COMPLETED`）代表已開始或完成。前端（Calendar 日檢視、Coach review 列表）據此顯示每個 athlete 當日的完成狀態；要看實際 SetLog / plan vs actual 仍需另呼叫 `GET /sessions/{id}`。
 
 ---
 
@@ -502,7 +499,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | GET/PATCH/DELETE /workouts/{id} | ✅ owner | ❌ 404 | ❌ 404 |
 | GET /athletes | ✅ | ❌ 403 | ❌ 403 |
 | POST /scheduled-workouts | ✅ 且每個 athlete 都需 connected | ❌ 403 | ❌ 403 |
-| GET /scheduled-workouts | ✅ 僅回自己建立的排程（`athleteId` 選填，見 §3.5） | ❌ 403 | ❌ 403 |
+| GET /scheduled-workouts | ✅ 僅回自己建立的排程（`athleteId` 選填；未連結該 athlete → 404，見 §3.5） | ❌ 403 | ❌ 403 |
 | GET /me/scheduled-workouts | ➖ (回自己的=空) | ✅ | ✅ (空) |
 | POST .../session (start) | ✅ connected | ✅ | ❌ 404 |
 | POST /sessions/{id}/complete | ✅ connected | ✅ | ❌ 404 |
