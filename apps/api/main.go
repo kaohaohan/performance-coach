@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/kaohaohan/performance-coach/apps/api/internal/athlete"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
@@ -54,6 +55,7 @@ func run() error {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
+	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -120,6 +122,33 @@ func handleMe(w http.ResponseWriter, r *http.Request) {
 		"name": user.Name,
 		"role": user.Role,
 	})
+}
+
+// handleAthletes returns the athletes connected to the caller, who must be
+// a COACH. Authorization (role check) happens in athlete.ListForCoach, not
+// here; this handler only decodes/encodes and picks the status code.
+func handleAthletes(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		athletes, err := athlete.ListForCoach(r.Context(), pool, user)
+		if err != nil {
+			if errors.Is(err, athlete.ErrForbidden) {
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+				return
+			}
+			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(athletes)
+	}
 }
 
 func writeStatus(w http.ResponseWriter, code int, status string) {
