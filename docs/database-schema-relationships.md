@@ -143,7 +143,7 @@ set_logs(
   load numeric null,
   unit text null,
   reps integer not null,
-  rpe numeric not null,
+  rpe numeric null,
   logged_by_user_id uuid not null references users(id),
   created_at timestamptz not null,
   unique (session_id, scheduled_workout_exercise_id, set_number)
