@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: performance-coach-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: performance
+      POSTGRES_PASSWORD: performance
+      POSTGRES_DB: performance_coach
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U performance -d performance_coach"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
