@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 )
@@ -43,9 +44,16 @@ func run() error {
 
 	log.Println("database connection verified")
 
+	verifier, err := authn.NewVerifier(startupCtx, cfg.FirebaseProjectID)
+	if err != nil {
+		return err
+	}
+	authMiddleware := authn.Middleware(verifier, pool)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(pool))
+	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -95,6 +103,23 @@ func handleReady(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 		writeStatus(w, http.StatusOK, "ok")
 	}
+}
+
+// handleMe returns the caller's internal identity, resolved by authn.Middleware.
+func handleMe(w http.ResponseWriter, r *http.Request) {
+	user, ok := authn.UserFromContext(r.Context())
+	if !ok {
+		authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"id":   user.ID,
+		"name": user.Name,
+		"role": user.Role,
+	})
 }
 
 func writeStatus(w http.ResponseWriter, code int, status string) {
