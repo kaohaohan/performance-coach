@@ -61,6 +61,7 @@ func run() error {
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
+	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 
 	srv := &http.Server{
@@ -249,6 +250,63 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(workouts)
+	}
+}
+
+// createScheduledWorkoutRequest is the wire shape for a POST
+// /api/v1/scheduled-workouts request body
+// (docs/go-backend-api-contract-v0.1.md §3.5).
+type createScheduledWorkoutRequest struct {
+	WorkoutID     string   `json:"workoutId"`
+	AthleteIDs    []string `json:"athleteIds"`
+	ScheduledDate string   `json:"scheduledDate"`
+}
+
+// handleCreateScheduledWorkouts decodes the request body, delegates
+// validation, authorization, and persistence to scheduledworkout.Create,
+// and maps its result to a status code. Coach only: schedules one Workout
+// to one or more connected Athletes on one date, atomically.
+func handleCreateScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req createScheduledWorkoutRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		input := scheduledworkout.CreateInput{
+			WorkoutID:     req.WorkoutID,
+			AthleteIDs:    req.AthleteIDs,
+			ScheduledDate: req.ScheduledDate,
+		}
+
+		created, err := scheduledworkout.Create(r.Context(), pool, user, input)
+		if err != nil {
+			var validationErr *scheduledworkout.ValidationError
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, scheduledworkout.ErrWorkoutNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "workout not found")
+			case errors.Is(err, scheduledworkout.ErrAthletesNotConnected):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "one or more athletes are not connected to caller")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(created)
 	}
 }
 

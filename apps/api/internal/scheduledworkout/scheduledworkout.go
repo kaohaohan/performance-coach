@@ -1,11 +1,16 @@
-// Package scheduledworkout implements the Coach-only, date-range list of
-// ScheduledWorkouts that powers the Calendar frontend IA
-// (docs/frontend-ui-spec.md, docs/go-backend-api-contract-v0.1.md §3.5).
+// Package scheduledworkout implements Coach-only ScheduledWorkout creation
+// (batch assignment) and the date-range list that powers the Calendar
+// frontend IA (docs/frontend-ui-spec.md,
+// docs/go-backend-api-contract-v0.1.md §3.5).
 //
-// This is a read/list endpoint only: it returns summary data (athlete,
-// workout, session status) for rendering a Calendar. Exercise prescriptions
-// and set logs stay behind GET /sessions/{id} — deliberately not duplicated
-// here.
+// Create is a write endpoint: it schedules one Workout to one or more
+// connected Athletes on one date, snapshotting the workout's current
+// prescription independently into scheduled_workout_exercises for each
+// created ScheduledWorkout so later template edits never mutate assigned
+// training. ListForCoach is a read/list endpoint only: it returns summary
+// data (athlete, workout, session status) for rendering a Calendar.
+// Exercise prescriptions and set logs stay behind GET /sessions/{id} —
+// deliberately not duplicated there.
 package scheduledworkout
 
 import (
@@ -14,11 +19,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 )
+
+const dateLayout = "2006-01-02"
 
 // Athlete is the athlete summary embedded in a ScheduledWorkout list item.
 type Athlete struct {
@@ -62,6 +70,317 @@ var ErrForbidden = errors.New("scheduledworkout: caller is not a coach")
 // still uses 403 for the analogous check — flagged as a future consistency
 // cleanup, not addressed in this change.
 var ErrAthleteNotFound = errors.New("scheduledworkout: athlete not found or not connected to caller")
+
+// ErrWorkoutNotFound indicates the requested workoutId does not exist, is
+// archived, or does not belong to caller. Handlers map this to 404
+// NOT_FOUND (docs/go-backend-api-contract-v0.1.md §3.5) — a
+// resource-scoping check, not a role check, so it does not reveal whether a
+// workout with this id exists for a different coach.
+var ErrWorkoutNotFound = errors.New("scheduledworkout: workout not found or not owned by caller")
+
+// ErrAthletesNotConnected indicates at least one requested athleteId has no
+// coach_athletes row with caller. Handlers map this to 403 FORBIDDEN. The
+// whole batch is rejected when this occurs — no partial scheduling.
+var ErrAthletesNotConnected = errors.New("scheduledworkout: one or more athletes are not connected to caller")
+
+// ValidationError indicates the request failed shape validation before any
+// DB access. Handlers should map it to 400 INVALID_ARGUMENT.
+type ValidationError struct {
+	Message string
+}
+
+func (e *ValidationError) Error() string { return e.Message }
+
+// Plan is the prescription for one exercise inside a created
+// ScheduledWorkout's snapshot. Mirrors workout.Plan's shape
+// (docs/go-backend-api-contract-v0.1.md §3.3, §7.1): always a nested
+// object, never flattened, so a future per-set prescription can grow this
+// into a slice without a contract rewrite.
+type Plan struct {
+	Sets             int      `json:"sets"`
+	Reps             *int     `json:"reps,omitempty"`
+	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
+	RPE              *float64 `json:"rpe,omitempty"`
+}
+
+// ScheduledExercise is one frozen prescription snapshot row embedded in a
+// created ScheduledWorkout response.
+type ScheduledExercise struct {
+	ScheduledWorkoutExerciseID string `json:"scheduledWorkoutExerciseId"`
+	ExerciseID                 string `json:"exerciseId"`
+	Name                       string `json:"name"`
+	Plan                       Plan   `json:"plan"`
+	Position                   int    `json:"position"`
+}
+
+// Created is one item of the POST /api/v1/scheduled-workouts response: a
+// newly created ScheduledWorkout with its frozen prescription snapshot
+// expanded, sufficient for frontend confirmation without a follow-up call.
+// Session is always null — a ScheduledWorkout has no session until training
+// starts.
+type Created struct {
+	ID            string              `json:"id"`
+	ScheduledDate string              `json:"scheduledDate"`
+	Athlete       Athlete             `json:"athlete"`
+	Workout       Workout             `json:"workout"`
+	Session       *Session            `json:"session"`
+	Exercises     []ScheduledExercise `json:"exercises"`
+}
+
+// CreateInput is the decoded, wire-format-independent request for Create.
+type CreateInput struct {
+	WorkoutID     string
+	AthleteIDs    []string
+	ScheduledDate string
+}
+
+// Create schedules workoutId to every athlete in athleteIds on
+// scheduledDate, in one transaction, snapshotting the workout's current
+// prescription independently into scheduled_workout_exercises for each
+// created ScheduledWorkout (docs/go-backend-api-contract-v0.1.md §3.5).
+//
+// Authorization, checked in order:
+//  1. caller must be a COACH -> else ErrForbidden
+//  2. request shape (non-empty/UUID workoutId and athleteIds, no duplicate
+//     athleteIds, valid scheduledDate) -> else *ValidationError
+//  3. workout must exist, be un-archived, and be owned by caller -> else
+//     ErrWorkoutNotFound
+//  4. every athleteId must have a coach_athletes row with caller -> else
+//     ErrAthletesNotConnected
+//
+// Steps 3-4 and every insert happen inside a single transaction: if any
+// athlete is unauthorized, or any row fails to insert, nothing is created
+// (all-or-nothing, no partial scheduling).
+//
+// V0.1 does not deduplicate (workoutId, athleteId, scheduledDate): the
+// domain has no time-of-day/session-slot concept yet, so the same workout
+// may legitimately be scheduled to the same athlete on the same date more
+// than once. This is an explicit product decision, not an oversight.
+func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input CreateInput) ([]Created, error) {
+	if caller.Role != "COACH" {
+		return nil, ErrForbidden
+	}
+
+	scheduledDate, err := validateCreate(input)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit succeeds
+
+	workoutName, err := lookupOwnedWorkout(ctx, tx, caller.ID, input.WorkoutID)
+	if err != nil {
+		return nil, err
+	}
+
+	athletes, err := lookupConnectedAthletes(ctx, tx, caller.ID, input.AthleteIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the prescription once: the source workout_exercises rows cannot
+	// change mid-transaction, and every created ScheduledWorkout gets its
+	// own independently-inserted copy below.
+	prescription, err := lookupPrescription(ctx, tx, input.WorkoutID)
+	if err != nil {
+		return nil, err
+	}
+
+	created := make([]Created, 0, len(athletes))
+	for _, a := range athletes {
+		scheduledWorkoutID := uuid.NewString()
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO scheduled_workouts (id, workout_id, coach_id, athlete_id, scheduled_date, created_at)
+			 VALUES ($1, $2, $3, $4, $5, now())`,
+			scheduledWorkoutID, input.WorkoutID, caller.ID, a.ID, scheduledDate,
+		); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout: %w", err)
+		}
+
+		exercises := make([]ScheduledExercise, 0, len(prescription))
+		for _, p := range prescription {
+			scheduledWorkoutExerciseID := uuid.NewString()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO scheduled_workout_exercises
+					(id, scheduled_workout_id, exercise_id, exercise_name, target_sets, target_reps, target_prescription_note, target_rpe, position)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				scheduledWorkoutExerciseID, scheduledWorkoutID, p.ExerciseID, p.ExerciseName,
+				p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRPE, p.Position,
+			); err != nil {
+				return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
+			}
+
+			exercises = append(exercises, ScheduledExercise{
+				ScheduledWorkoutExerciseID: scheduledWorkoutExerciseID,
+				ExerciseID:                 p.ExerciseID,
+				Name:                       p.ExerciseName,
+				Plan: Plan{
+					Sets:             p.TargetSets,
+					Reps:             p.TargetReps,
+					PrescriptionNote: p.TargetPrescriptionNote,
+					RPE:              p.TargetRPE,
+				},
+				Position: p.Position,
+			})
+		}
+
+		created = append(created, Created{
+			ID:            scheduledWorkoutID,
+			ScheduledDate: input.ScheduledDate,
+			Athlete:       Athlete{ID: a.ID, Name: a.Name},
+			Workout:       Workout{ID: input.WorkoutID, Name: workoutName},
+			Session:       nil,
+			Exercises:     exercises,
+		})
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: commit: %w", err)
+	}
+
+	return created, nil
+}
+
+// validateCreate checks request shape only (no DB access): a well-formed
+// UUID workoutId, a non-empty athleteIds slice of well-formed, non-duplicate
+// UUIDs, and a valid scheduledDate. Returns the parsed date on success.
+func validateCreate(input CreateInput) (time.Time, error) {
+	if _, err := uuid.Parse(input.WorkoutID); err != nil {
+		return time.Time{}, &ValidationError{Message: "workoutId must be a valid UUID"}
+	}
+	if len(input.AthleteIDs) == 0 {
+		return time.Time{}, &ValidationError{Message: "athleteIds must contain at least one entry"}
+	}
+
+	seen := make(map[string]bool, len(input.AthleteIDs))
+	for i, id := range input.AthleteIDs {
+		if _, err := uuid.Parse(id); err != nil {
+			return time.Time{}, &ValidationError{Message: fmt.Sprintf("athleteIds[%d] must be a valid UUID", i)}
+		}
+		if seen[id] {
+			return time.Time{}, &ValidationError{Message: fmt.Sprintf("athleteIds[%d] is a duplicate of an earlier entry", i)}
+		}
+		seen[id] = true
+	}
+
+	scheduledDate, err := time.Parse(dateLayout, input.ScheduledDate)
+	if err != nil {
+		return time.Time{}, &ValidationError{Message: "scheduledDate must be a valid date (YYYY-MM-DD)"}
+	}
+	return scheduledDate, nil
+}
+
+// lookupOwnedWorkout returns the workout's name if it exists, is not
+// archived, and belongs to coachID; otherwise ErrWorkoutNotFound.
+func lookupOwnedWorkout(ctx context.Context, tx pgx.Tx, coachID, workoutID string) (string, error) {
+	const query = `
+		SELECT name FROM workouts
+		WHERE id = $1 AND coach_id = $2 AND archived_at IS NULL`
+
+	var name string
+	err := tx.QueryRow(ctx, query, workoutID, coachID).Scan(&name)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrWorkoutNotFound
+		}
+		return "", fmt.Errorf("scheduledworkout: lookup workout: %w", err)
+	}
+	return name, nil
+}
+
+// connectedAthlete is an (id, name) pair returned by lookupConnectedAthletes.
+type connectedAthlete struct {
+	ID   string
+	Name string
+}
+
+// lookupConnectedAthletes resolves athleteIDs to (id, name) pairs, requiring
+// every one to have a coach_athletes row with coachID. If any requested
+// athleteId is not connected, ErrAthletesNotConnected is returned and no
+// rows are returned at all — the batch is all-or-nothing, so there is no
+// value in reporting which ones matched.
+func lookupConnectedAthletes(ctx context.Context, tx pgx.Tx, coachID string, athleteIDs []string) ([]connectedAthlete, error) {
+	const query = `
+		SELECT u.id, u.name
+		FROM coach_athletes ca
+		JOIN users u ON u.id = ca.athlete_id
+		WHERE ca.coach_id = $1 AND ca.athlete_id = ANY($2)`
+
+	rows, err := tx.Query(ctx, query, coachID, athleteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: lookup athletes: %w", err)
+	}
+	defer rows.Close()
+
+	byID := make(map[string]connectedAthlete, len(athleteIDs))
+	for rows.Next() {
+		var a connectedAthlete
+		if err := rows.Scan(&a.ID, &a.Name); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: scan athlete: %w", err)
+		}
+		byID[a.ID] = a
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: iterate athletes: %w", err)
+	}
+
+	if len(byID) != len(athleteIDs) {
+		return nil, ErrAthletesNotConnected
+	}
+
+	// Preserve request order in the response.
+	athletes := make([]connectedAthlete, len(athleteIDs))
+	for i, id := range athleteIDs {
+		athletes[i] = byID[id]
+	}
+	return athletes, nil
+}
+
+// prescriptionRow is one workout_exercises row (joined to its exercise
+// name) to be copied into scheduled_workout_exercises.
+type prescriptionRow struct {
+	ExerciseID             string
+	ExerciseName           string
+	TargetSets             int
+	TargetReps             *int
+	TargetPrescriptionNote *string
+	TargetRPE              *float64
+	Position               int
+}
+
+// lookupPrescription reads workoutID's current prescription (its
+// workout_exercises rows joined to exercise names), ordered by position.
+func lookupPrescription(ctx context.Context, tx pgx.Tx, workoutID string) ([]prescriptionRow, error) {
+	const query = `
+		SELECT we.exercise_id, e.name, we.target_sets, we.target_reps, we.target_prescription_note, we.target_rpe, we.position
+		FROM workout_exercises we
+		JOIN exercises e ON e.id = we.exercise_id
+		WHERE we.workout_id = $1
+		ORDER BY we.position`
+
+	rows, err := tx.Query(ctx, query, workoutID)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: lookup prescription: %w", err)
+	}
+	defer rows.Close()
+
+	prescription := make([]prescriptionRow, 0)
+	for rows.Next() {
+		var p prescriptionRow
+		if err := rows.Scan(&p.ExerciseID, &p.ExerciseName, &p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetRPE, &p.Position); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: scan prescription: %w", err)
+		}
+		prescription = append(prescription, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: iterate prescription: %w", err)
+	}
+	return prescription, nil
+}
 
 // ListForCoach returns the caller's scheduled workouts with a
 // scheduled_date in [from, to] (inclusive), optionally filtered to one
@@ -122,7 +441,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, fr
 		); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan: %w", err)
 		}
-		sw.ScheduledDate = scheduledDate.Format("2006-01-02")
+		sw.ScheduledDate = scheduledDate.Format(dateLayout)
 		if sessionID != nil {
 			sw.Session = &Session{ID: *sessionID, Status: *sessionStatus}
 		}

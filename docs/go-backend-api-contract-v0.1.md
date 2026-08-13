@@ -278,7 +278,32 @@ Service 層檢查（依序）：
 
 **API 是 batch，資料是 atomic**：一筆 ScheduledWorkout = 一個 athlete 的一次排程。athleteIds 陣列不落地。
 
-Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapshot）。
+Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapshot；`session` 固定為 `null`，因為排程當下尚未開始訓練）：
+
+```json
+[
+  {
+    "id": "...",
+    "scheduledDate": "2026-08-14",
+    "athlete": { "id": "...", "name": "Kevin" },
+    "workout": { "id": "...", "name": "Monday Lower" },
+    "session": null,
+    "exercises": [
+      {
+        "scheduledWorkoutExerciseId": "...",
+        "exerciseId": "...",
+        "name": "Back Squat",
+        "plan": { "sets": 4, "reps": 5, "rpe": 8 },
+        "position": 1
+      }
+    ]
+  }
+]
+```
+
+`exercises[].plan` 與 `POST /workouts` 回應同形狀（巢狀物件；`targetPrescriptionNote` 類型的處方走 `plan.prescriptionNote`，此時 `plan.reps` 省略）— 見 §3.3。
+
+**V0.1 不做 (workoutId, athleteId, scheduledDate) 去重**：同一 workout 可合法地在同一天排給同一 athlete 兩次以上（尚無 time-of-day/session slot 概念）；意外重複送出（idempotency）留待未來處理，本次不引入 unique constraint 或 409。
 
 ### GET /scheduled-workouts?from=&to=&athleteId= — Coach only
 
