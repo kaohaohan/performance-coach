@@ -51,105 +51,105 @@ The MVP follows this principle:
 
 **Mobile supports live coaching and workout execution. Desktop is for programming and review in V0.1.**
 
+### **Navigation Principle**
+
+**Calendar (`/coach/calendar`) is the Coach's primary workspace on Web/Desktop.** Workout creation, workout scheduling, and reviewing completed training all happen from the Calendar. Client management (`/coach/clients`) and the workout library (`/coach/workouts`) are secondary tools reached from it, not separate primary destinations. There is no Coach dashboard as a landing page.
+
+Route/navigation detail lives in `docs/frontend-ui-spec.md`; this document defines product behavior only.
+
 ---
 
-# **Story 1 — Coach Creates a Workout**
+## **Deferred — Not Yet Specified: Client Invite / Onboarding**
+
+> **Status: mechanism undecided. Not implemented. This section exists to make the gap explicit, not to describe a solved feature.**
+> 
+
+The Coach's first step is conceptually "invite or create a Client," but V0.1 has no signup or invite flow. `CoachAthlete` relationships and Athlete accounts are currently created by manual seed only (see `go-backend-api-contract-v0.1.md` §3.4). `/coach/clients` in V0.1 can only *list* already-connected athletes (`GET /athletes`) — it cannot create the relationship.
+
+Before this can ship, the following need a product decision (out of scope for this document to resolve):
+
+- How does a Coach add a new Client — invite link, email, manual creation, code?
+- Does the Athlete need to accept, or is the relationship coach-created unilaterally?
+- Does an Athlete account get created at invite time, or only at first login?
+
+Do not treat `/coach/clients` as feature-complete until this is resolved.
+
+---
+
+# **Story 1 — Coach Builds and Assigns a Workout from the Calendar** (`/coach/calendar`)
 
 ## **Given**
 
-A user is authenticated as a Coach and is using the web interface.
+A user is authenticated as a Coach and is using the web interface. The Coach's primary workspace is the Calendar.
 
 ## **When**
 
-The Coach creates a workout containing:
-
-- Workout name
-- Exercise
-- Target sets
-- Target reps
-- Target RPE
+The Coach selects a date on the Calendar, then either creates a new workout or selects an existing one from the workout library, and assigns it to one or more connected athletes.
 
 Example:
 
 ```
-Workout: Monday Lower
+Calendar → 2026-08-14
 
-Back Squat
-4 × 5
-Target RPE 8
+Create Workout: Monday Lower
+  Back Squat
+  4 × 5
+  Target RPE 8
+
+Assign to: Kevin
 ```
 
 ## **Then**
 
-The workout is persisted and appears in the Coach’s workout list.
+Two things are persisted, in order:
 
-Refreshing the page does not remove the workout.
+1. If a new workout was created, it is persisted as a `Workout` template and also appears in the Coach's workout library (`/coach/workouts`).
+2. The workout is scheduled to each selected athlete on the chosen date as a `ScheduledWorkout`, and appears on the Calendar for that date.
+
+Refreshing the page does not remove the workout or the schedule.
 
 ## **Acceptance Criteria**
 
-- Coach can create a workout from the web interface.
-- Coach can enter workout name.
-- Coach can add at least one exercise.
-- Exercise can contain target sets, reps, and RPE.
-- Target reps may be a number or a text prescription (e.g. `AMAP`).
-- Workout persists after page refresh.
+- Coach can reach workout creation/selection from a date on the Calendar.
+- Coach can enter workout name, at least one exercise, target sets, and target reps or a text prescription (e.g. `AMAP`), with optional target RPE.
+- Coach can select one or more connected athletes and confirm the date.
+- Workout persists in the workout library after refresh.
+- ScheduledWorkout persists on the Calendar after refresh.
 - Workout belongs to the Coach who created it.
-- Athlete cannot create or edit Coach workouts.
+- Coach cannot schedule a workout to an unrelated (unconnected) athlete.
+- Athlete cannot create, edit, or schedule Coach workouts.
+- The workout library (`/coach/workouts`) remains available as a secondary tool for reusing an existing workout without starting from the Calendar.
 - Full workout creation on mobile is not required.
+- **Backend implementation is unchanged by this framing**: workout creation (`POST /workouts`) and scheduling (`POST /scheduled-workouts`) remain two separate operations. The Calendar is a frontend flow over both — not a new domain object (see `go-backend-api-contract-v0.1.md` §7.5).
 
 ---
 
-# **Story 2 — Coach Schedules a Workout**
+# **Story 2 — Coach Runs a Live 1:1 Session** (`/session/[id]`)
 
 ## **Given**
 
-The Coach has:
-
-- An existing workout
-- An existing Coach–Athlete relationship
-
-Example:
-
-```
-Workout: Monday Lower
-Athlete: Kevin
-```
+A Coach has a ScheduledWorkout for a connected Athlete, and is physically training with that Athlete (in-person 1:1 coaching).
 
 ## **When**
 
-The Coach selects:
-
-- Workout
-- Athlete
-- Scheduled training date
-
-and presses **Schedule Workout**.
+The Coach opens the Athlete's scheduled workout — from the Calendar, or from the Athlete's Today view if viewed on the Coach's own device — and starts or resumes the WorkoutSession.
 
 ## **Then**
 
-The system creates a ScheduledWorkout record.
-
-Example:
-
-```
-Workout: Monday Lower
-Athlete: Kevin
-Scheduled Date: 2026-08-13
-```
+The Coach can log SetLogs on the Athlete's behalf for the duration of the session, using the same Training Session UI/domain the Athlete would use to log their own sets.
 
 ## **Acceptance Criteria**
 
-- Coach can select one existing workout.
-- Coach can select one or more athletes.
-- Coach can select a training date.
-- Scheduled workout persists after refresh.
-- Coach cannot schedule a workout to an unrelated athlete.
-- UI uses the wording `Schedule Workout`.
-- Backend may represent this domain object as `ScheduledWorkout`.
+- A connected Coach can start a WorkoutSession for an Athlete's ScheduledWorkout; reopening an already-`ACTIVE` session resumes it rather than erroring (idempotent, matching the backend contract).
+- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf.
+- Each SetLog records which user logged it (`loggedByUserId`) — Coach or Athlete.
+- Coach and Athlete see the same session state if both are viewing it.
+- Once the session is `COMPLETED`, it is read-only for both Coach and Athlete.
+- **No new backend endpoint is required.** This story exercises existing session/set-log authorization: a connected Coach has the same access as the Athlete themself (see the API contract's authorization matrix, §4).
 
 ---
 
-# **Story 3 — Athlete Sees Today’s Workout**
+# **Story 3 — Athlete Sees Today’s Workout** (`/today`)
 
 ## **Given**
 
@@ -190,7 +190,7 @@ Target RPE 8
 
 ---
 
-# **Story 4 — Coach or Athlete Manually Logs a Set**
+# **Story 4 — Coach or Athlete Manually Logs a Set** (`/session/[id]`)
 
 ## **Given**
 
@@ -406,7 +406,7 @@ The application identifies the most recent valid SetLog within the current worko
 
 ---
 
-# **Story 7 — Coach Reviews Completed Training**
+# **Story 7 — Coach Reviews Completed Training** (`/coach/calendar` → `/session/[id]`)
 
 ## **Given**
 
@@ -452,18 +452,19 @@ Set 4   110 × 4   RPE 9
 The MVP core loop is complete when this exact scenario works:
 
 1. Coach logs in on the web interface.
-2. Coach creates `Monday Lower`.
-3. Coach adds `Back Squat — 4 × 5 @ RPE 8`.
-4. Coach schedules the workout to Kevin for today.
-5. Kevin logs in on mobile/PWA.
-6. Kevin sees `Monday Lower` under Today’s Workout.
-7. Kevin starts the WorkoutSession.
-8. Kevin manually records at least one SetLog.
-9. Data persists after refresh.
-10. Coach opens Kevin’s completed session on the web.
-11. Coach sees Kevin’s recorded results and planned prescription.
+2. From the Calendar (`/coach/calendar`), Coach selects today's date and creates `Monday Lower` (`Back Squat — 4 × 5 @ RPE 8`).
+3. Coach assigns `Monday Lower` to Kevin for today, directly from the Calendar.
+4. Kevin logs in on mobile/PWA.
+5. Kevin sees `Monday Lower` on `/today`.
+6. Kevin starts the WorkoutSession.
+7. Kevin manually records at least one SetLog.
+8. Data persists after refresh.
+9. Coach opens Kevin's session from the Calendar.
+10. Coach sees Kevin's recorded results and planned prescription.
 
 If this core flow does not work end-to-end, V0.1 is not complete.
+
+Steps 2–3 are two backend operations (`POST /workouts`, then `POST /scheduled-workouts`) presented as one Calendar-driven flow — see Story 1. No backend behavior changes because of this framing.
 
 ## **3.2 Voice Acceptance — Optional Stretch**
 

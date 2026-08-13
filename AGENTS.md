@@ -16,7 +16,8 @@ Before implementing any feature, read only:
 2. docs/mvp-specification.md
 3. docs/go-backend-api-contract-v0.1.md when backend/API work is involved
 4. docs/database-schema-relationships.md when data/schema work is involved
-5. Files directly related to the task being modified
+5. docs/frontend-ui-spec.md when frontend/UX work is involved
+6. Files directly related to the task being modified
 
 Do not scan the whole repository unless required.
 

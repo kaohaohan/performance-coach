@@ -1,14 +1,17 @@
 # DontWorkout — Go Backend API Contract (V0.1)
 
-Status: **V0.4 — Final before implementation（凍結，開工）**
+Status: **V0.5 — Calendar-first frontend IA addendum (additive, contract not broken)**
 
 Target: 2026-08-16
 
-對應文件: MVP Specification
+對應文件: MVP Specification, Frontend UI Spec
 
 Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
+
+> V0.5 變更：`GET /scheduled-workouts` 的 `athleteId` 改為選填，省略時回傳呼叫者跨所有已連結 athlete、指定日期範圍內的排程，供 Calendar 日/週檢視使用；同時明確定義該 endpoint 的 response shape（含 `session` 欄位）。純粹是既有 endpoint 的查詢維度放寬與回應格式明確化 — **不新增 domain object、不新增 endpoint、授權規則不變**。詳見 §3.5、§7.5，對應 `docs/mvp-specification.md`「Navigation Principle」與新的 `docs/frontend-ui-spec.md`。
+> 
 
 > V0.4 變更（最後一輪 sanity check）：① 明確定義 snapshot 欄位優先於 Exercise current state ② 註明 exercise 同名衝突規則 ③ targetRepsNote → targetPrescriptionNote ④ SetLog.load/unit 改 nullable（bodyweight 動作）⑤ 「reps 永遠整數」改為 V0.1 範圍聲明
 > 
@@ -279,7 +282,39 @@ Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapsh
 
 ### GET /scheduled-workouts?athleteId=&from=&to= — Coach only
 
-列出自己排給某 athlete 的排程。
+列出呼叫者（caller）自己建立的排程，一律以 `coachId = caller.id` 為界（不因本次調整而改變）。
+
+- `athleteId`：**選填**（V0.5 起）。有值時只回傳該 athlete 的排程（原行為不變）；**省略時回傳呼叫者在 `from`–`to` 範圍內、跨所有已連結 athlete 的排程** — 供 Coach Calendar 日/週檢視使用（見 `docs/frontend-ui-spec.md`）。
+- `from`、`to`：以 `scheduled_date` 篩選的日期範圍，格式為純日期（`2026-08-14`）。
+
+> **Calendar 是前端資訊架構（information architecture），建構在既有 `ScheduledWorkout` 模型之上。** 本次調整不新增 Calendar domain object，也不新增 endpoint，只放寬既有 endpoint 的查詢維度、並明確化其回應格式。授權規則不變。詳見 §7.5。
+> 
+
+Response `200`（陣列；每筆同 POST /scheduled-workouts 的單筆 snapshot，並新增 `session` 欄位）：
+
+```json
+[
+  {
+    "id": "...",
+    "workoutId": "...",
+    "athleteId": "...",
+    "scheduledDate": "2026-08-14",
+    "workoutName": "Monday Lower",
+    "exercises": [
+      {
+        "scheduledWorkoutExerciseId": "...",
+        "exerciseId": "...",
+        "name": "Back Squat",
+        "plan": { "sets": 4, "reps": 5, "rpe": 8 },
+        "position": 1
+      }
+    ],
+    "session": null
+  }
+]
+```
+
+`session` 語意同 §3.6 Athlete Today View：`null` 代表尚未開始；非 null（`{ id, status, ... }`）代表已開始/完成。前端（Calendar 日檢視、Coach review）據此顯示每個 athlete 當日的完成狀態。
 
 ---
 
@@ -467,6 +502,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | GET/PATCH/DELETE /workouts/{id} | ✅ owner | ❌ 404 | ❌ 404 |
 | GET /athletes | ✅ | ❌ 403 | ❌ 403 |
 | POST /scheduled-workouts | ✅ 且每個 athlete 都需 connected | ❌ 403 | ❌ 403 |
+| GET /scheduled-workouts | ✅ 僅回自己建立的排程（`athleteId` 選填，見 §3.5） | ❌ 403 | ❌ 403 |
 | GET /me/scheduled-workouts | ➖ (回自己的=空) | ✅ | ✅ (空) |
 | POST .../session (start) | ✅ connected | ✅ | ❌ 404 |
 | POST /sessions/{id}/complete | ✅ connected | ✅ | ❌ 404 |
@@ -580,7 +616,10 @@ V0.1 的 name find-or-create 規則下，system exercise 名稱優先且同名�
 
 ## 7.5 Program / Calendar
 
-TeamBuildr 是 team-scale（Calendar 承載 program、athlete 訂閱 + offset）。我們的 1:1 場景用 per-athlete ScheduledWorkout 更正確。未來若加 Calendar，ScheduledWorkout 自然成為「Calendar 某天對某人的具體化實例」，snapshot 語意不變。
+TeamBuildr 是 team-scale（Calendar 承載 program、athlete 訂閱 + offset）。我們的 1:1 場景用 per-athlete ScheduledWorkout 更正確，不採用 TeamBuildr 的 enterprise Calendar/Program/Offset model。
+
+> **V0.5 更新（已確認為 V0.1 決策，非未來推測）：** Calendar 是 Coach 的 primary workspace，屬於前端 information architecture，直接建構在既有 `ScheduledWorkout` 模型之上 — 不是新的 domain object，也沒有新增 endpoint。因此唯一調整的是 §3.5 `GET /scheduled-workouts`：`athleteId` 改為選填，供 Calendar 日/週跨 athlete 檢視使用；資料語意（snapshot、授權）完全不變。路由與畫面詳見 `docs/frontend-ui-spec.md`；產品故事詳見 `docs/mvp-specification.md`「Navigation Principle」與 Story 1。
+> 
 
 ## 7.6 明確不做（V0.1 Out of Scope 對齊）
 
