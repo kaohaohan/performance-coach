@@ -20,6 +20,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 )
 
 func main() {
@@ -56,6 +57,8 @@ func run() error {
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
+	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
+	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -148,6 +151,101 @@ func handleAthletes(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(athletes)
+	}
+}
+
+// createWorkoutExerciseRequest is the wire shape for one exercise entry in
+// a POST /api/v1/workouts request body
+// (docs/go-backend-api-contract-v0.1.md §3.3).
+type createWorkoutExerciseRequest struct {
+	Name                   string   `json:"name"`
+	TargetSets             int      `json:"targetSets"`
+	TargetReps             *int     `json:"targetReps"`
+	TargetPrescriptionNote *string  `json:"targetPrescriptionNote"`
+	TargetRPE              *float64 `json:"targetRpe"`
+}
+
+// createWorkoutRequest is the wire shape for a POST /api/v1/workouts
+// request body.
+type createWorkoutRequest struct {
+	Name      string                         `json:"name"`
+	Exercises []createWorkoutExerciseRequest `json:"exercises"`
+}
+
+// handleCreateWorkout decodes the request body, delegates validation,
+// authorization, and persistence to workout.Create, and maps its result to
+// a status code. Coach only.
+func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req createWorkoutRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		input := workout.CreateInput{
+			Name:      req.Name,
+			Exercises: make([]workout.CreateExerciseInput, len(req.Exercises)),
+		}
+		for i, ex := range req.Exercises {
+			input.Exercises[i] = workout.CreateExerciseInput{
+				Name:                   ex.Name,
+				TargetSets:             ex.TargetSets,
+				TargetReps:             ex.TargetReps,
+				TargetPrescriptionNote: ex.TargetPrescriptionNote,
+				TargetRPE:              ex.TargetRPE,
+			}
+		}
+
+		created, err := workout.Create(r.Context(), pool, user, input)
+		if err != nil {
+			var validationErr *workout.ValidationError
+			switch {
+			case errors.Is(err, workout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(created)
+	}
+}
+
+// handleListWorkouts returns the caller's own, non-archived workouts.
+// Coach only.
+func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		workouts, err := workout.ListForCoach(r.Context(), pool, user)
+		if err != nil {
+			if errors.Is(err, workout.ErrForbidden) {
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+				return
+			}
+			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(workouts)
 	}
 }
 
