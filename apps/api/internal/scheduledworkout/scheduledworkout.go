@@ -139,16 +139,22 @@ type CreateInput struct {
 // prescription independently into scheduled_workout_exercises for each
 // created ScheduledWorkout (docs/go-backend-api-contract-v0.1.md §3.5).
 //
-// Authorization, checked in order:
+// Authorization, checked in order (matching §3.5's documented order —
+// workout ownership before athleteIds, so an unauthorized workoutId always
+// surfaces as 404 rather than a 400 shape error on athleteIds):
 //  1. caller must be a COACH -> else ErrForbidden
-//  2. request shape (non-empty/UUID workoutId and athleteIds, no duplicate
-//     athleteIds, valid scheduledDate) -> else *ValidationError
+//  2. workoutId must be a well-formed UUID, and scheduledDate a valid date
+//     -> else *ValidationError. This runs before any DB access purely
+//     because neither field can be evaluated against the DB without it —
+//     it is not one of §3.5's ordered business checks.
 //  3. workout must exist, be un-archived, and be owned by caller -> else
 //     ErrWorkoutNotFound
-//  4. every athleteId must have a coach_athletes row with caller -> else
+//  4. athleteIds shape (non-empty, well-formed UUIDs, no duplicates) ->
+//     else *ValidationError
+//  5. every athleteId must have a coach_athletes row with caller -> else
 //     ErrAthletesNotConnected
 //
-// Steps 3-4 and every insert happen inside a single transaction: if any
+// Steps 3-5 and every insert happen inside a single transaction: if any
 // athlete is unauthorized, or any row fails to insert, nothing is created
 // (all-or-nothing, no partial scheduling).
 //
@@ -161,7 +167,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 		return nil, ErrForbidden
 	}
 
-	scheduledDate, err := validateCreate(input)
+	scheduledDate, err := validateWorkoutIDAndDate(input)
 	if err != nil {
 		return nil, err
 	}
@@ -177,14 +183,22 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 		return nil, err
 	}
 
+	if err := validateAthleteIDs(input.AthleteIDs); err != nil {
+		return nil, err
+	}
+
 	athletes, err := lookupConnectedAthletes(ctx, tx, caller.ID, input.AthleteIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	// Read the prescription once: the source workout_exercises rows cannot
-	// change mid-transaction, and every created ScheduledWorkout gets its
-	// own independently-inserted copy below.
+	// Read the prescription once into memory, before the per-athlete loop
+	// below, so every athlete created in this batch receives this same
+	// captured prescription. That guarantee is an application-level one,
+	// not a database one: PostgreSQL's default READ COMMITTED isolation
+	// does not stop workout_exercises from being modified by another
+	// transaction while this one is open. We simply never re-query it
+	// after this point.
 	prescription, err := lookupPrescription(ctx, tx, input.WorkoutID)
 	if err != nil {
 		return nil, err
@@ -245,26 +259,14 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 	return created, nil
 }
 
-// validateCreate checks request shape only (no DB access): a well-formed
-// UUID workoutId, a non-empty athleteIds slice of well-formed, non-duplicate
-// UUIDs, and a valid scheduledDate. Returns the parsed date on success.
-func validateCreate(input CreateInput) (time.Time, error) {
+// validateWorkoutIDAndDate checks the two request fields that must be
+// well-formed before any DB access can happen at all: workoutId (needed to
+// query workouts) and scheduledDate (needed to insert scheduled_workouts).
+// Deliberately does not touch athleteIds — see validateAthleteIDs, which
+// runs later, after the workout-ownership check.
+func validateWorkoutIDAndDate(input CreateInput) (time.Time, error) {
 	if _, err := uuid.Parse(input.WorkoutID); err != nil {
 		return time.Time{}, &ValidationError{Message: "workoutId must be a valid UUID"}
-	}
-	if len(input.AthleteIDs) == 0 {
-		return time.Time{}, &ValidationError{Message: "athleteIds must contain at least one entry"}
-	}
-
-	seen := make(map[string]bool, len(input.AthleteIDs))
-	for i, id := range input.AthleteIDs {
-		if _, err := uuid.Parse(id); err != nil {
-			return time.Time{}, &ValidationError{Message: fmt.Sprintf("athleteIds[%d] must be a valid UUID", i)}
-		}
-		if seen[id] {
-			return time.Time{}, &ValidationError{Message: fmt.Sprintf("athleteIds[%d] is a duplicate of an earlier entry", i)}
-		}
-		seen[id] = true
 	}
 
 	scheduledDate, err := time.Parse(dateLayout, input.ScheduledDate)
@@ -272,6 +274,30 @@ func validateCreate(input CreateInput) (time.Time, error) {
 		return time.Time{}, &ValidationError{Message: "scheduledDate must be a valid date (YYYY-MM-DD)"}
 	}
 	return scheduledDate, nil
+}
+
+// validateAthleteIDs checks athleteIds shape only (no DB access): non-empty,
+// well-formed UUIDs, no duplicates. Called after the workout-ownership
+// check succeeds, so that a missing/archived/not-owned workoutId always
+// surfaces as ErrWorkoutNotFound (404) rather than a shape error on
+// athleteIds (400) — matching docs/go-backend-api-contract-v0.1.md §3.5's
+// documented check order.
+func validateAthleteIDs(athleteIDs []string) error {
+	if len(athleteIDs) == 0 {
+		return &ValidationError{Message: "athleteIds must contain at least one entry"}
+	}
+
+	seen := make(map[string]bool, len(athleteIDs))
+	for i, id := range athleteIDs {
+		if _, err := uuid.Parse(id); err != nil {
+			return &ValidationError{Message: fmt.Sprintf("athleteIds[%d] must be a valid UUID", i)}
+		}
+		if seen[id] {
+			return &ValidationError{Message: fmt.Sprintf("athleteIds[%d] is a duplicate of an earlier entry", i)}
+		}
+		seen[id] = true
+	}
+	return nil
 }
 
 // lookupOwnedWorkout returns the workout's name if it exists, is not
