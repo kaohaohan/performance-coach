@@ -16,7 +16,7 @@ If this document and one of the above disagree on product behavior or data, the 
 
 **Calendar-first, not dashboard-first.**
 
-The Coach's primary workspace is the Calendar. Workout creation, workout scheduling, and reviewing completed training all happen from it. There is no separate Coach dashboard as a landing page — Client management and the workout library are secondary tools reached from the Calendar, not parallel top-level destinations competing with it.
+The Coach's PRIMARY programming workspace is the Calendar. From a selected date and one-or-more selected Athletes, Coach either chooses an existing saved Workout and assigns it, or builds a Workout inline and Build & Assigns it. The Coach is not required to visit Workout Library before scheduling training. Reviewing completed training also happens from Calendar. There is no separate Coach dashboard as a landing page — Clients, Workout Library, and Exercise Library are SECONDARY tools reached from Calendar, not parallel top-level destinations competing with it.
 
 This is a frontend information-architecture decision. It introduces no new backend domain object: Calendar is a UI layer over the existing `Workout` / `ScheduledWorkout` / `WorkoutSession` / `SetLog` model (see `go-backend-api-contract-v0.1.md` §7.5).
 
@@ -28,10 +28,10 @@ This is a frontend information-architecture decision. It introduces no new backe
 
 | Route | Role | Backs onto | Purpose |
 |---|---|---|---|
-| `/coach/calendar` | **Primary** | `POST /workouts`, `POST /scheduled-workouts`, `GET /scheduled-workouts` (athleteId omitted → all connected athletes in a date range) | Default landing page after Coach login. Pick a date → create/select a Workout → assign to one or more Athletes. Shows each Athlete's completion status per day (`session` field on the scheduled-workout list). Entry point into `/session/[id]` for review or live 1:1 coaching. |
+| `/coach/calendar` | **Primary** | `GET /exercises`, `POST /workouts`, `POST /scheduled-workouts`, `GET /scheduled-workouts` (athleteId omitted → all connected athletes in a date range) | Default landing page after Coach login and the primary programming workspace. Pick a date and one-or-more Athletes, then either choose an existing saved Workout → Assign, or Build Workout inline → add existing Exercises / configure prescription → Build & Assign. Inline Build creates one normal saved Workout template, then batch-schedules it; it does not create a Workout per Athlete. Shows each Athlete's completion status per day (`session` field on the scheduled-workout list). Entry point into `/session/[id]` for review or live 1:1 coaching. |
 | `/coach/clients` | Secondary | `GET /athletes` | List of connected Athletes. **Does not yet support inviting/creating a Client** — see "Deferred" below. |
-| `/coach/workouts` | Secondary | `GET /workouts`, `POST /workouts` | Workout template library. Reuse an existing Workout without starting from the Calendar. Still the only place workout templates are edited independent of a specific date. |
-| `/coach/exercises` | Secondary | `GET /exercises`, `POST /exercises` | Coach Exercise Library. Lists SYSTEM plus the caller Coach's PRIVATE exercises, supports search and private Exercise creation, and shows relevant empty states. |
+| `/coach/workouts` | Secondary | `GET /workouts`, `POST /workouts` | Secondary reusable-template tool. Coaches can create saved Workout templates in advance, view saved templates, and later reuse them from Calendar. It is optional pre-programming, never a prerequisite for Calendar scheduling. |
+| `/coach/exercises` | Secondary | `GET /exercises`, `POST /exercises` | Secondary Exercise-management tool and the canonical V0.1 surface for creating private Exercises. Calendar's inline Workout Builder searches existing Exercises through `GET /api/v1/exercises?q=`; if a movement is unavailable, Coach opens Exercise Library rather than creating it inline. |
 
 ### Athlete
 
@@ -50,9 +50,13 @@ This is a frontend information-architecture decision. It introduces no new backe
 ## 3. Product Rules
 
 - No Coach dashboard-first UI.
-- Calendar is the Coach's primary workspace.
-- The workout library is a secondary tool, not a competing top-level destination.
-- Exercise Library is secondary programming tooling, not a competing top-level destination. It may be reached through one lightweight secondary action/link from Coach Calendar.
+- Calendar is the Coach's primary programming workspace. Its Workout section conceptually exposes `[ Choose existing workout... ]` or `[ + Build Workout ]`; this document specifies behavior and IA, not pixel styling.
+- Existing Workout path: choose a saved Workout and assign it to the selected Athlete(s).
+- Inline Build path: build one ordered Workout draft from existing Exercises, validate it, `POST /api/v1/workouts` once, retain the returned `workout.id`, then `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. Refresh Calendar assignment state and Workout choices after success.
+- Calendar-built Workouts are normal saved Workout templates in V0.1: Coach-owned, visible in Workout Library, and later selectable through Choose Existing Workout. There is no ephemeral or scheduled-only Workout domain.
+- Workout Library is the secondary reusable-template tool, not a competing top-level destination or prerequisite for Calendar scheduling.
+- Exercise Library is the secondary Exercise-management tool, not a competing top-level destination. It is the Calendar builder's fallback when `GET /api/v1/exercises?q=` cannot find a movement; V0.1 has no inline Exercise creation.
+- Each scheduled Athlete receives a frozen ScheduledWorkoutExercise prescription snapshot; later Workout-template edits do not alter previously scheduled prescriptions.
 - Coach and Athlete share the same Training Session UI/domain wherever the underlying authorization allows it (session start, set-log CRUD).
 - Voice / Video / AI are deferred — not part of any V0.1 route.
 - `/today` supports lightweight day navigation only; a full month calendar is not required in V0.1.
@@ -68,14 +72,17 @@ This is a frontend information-architecture decision. It introduces no new backe
 - **Client invite/onboarding mechanism** — undecided. `/coach/clients` can only list existing connections (`GET /athletes`); it cannot create one. `CoachAthlete` relationships are currently seed-only. See `docs/mvp-specification.md`, "Deferred — Not Yet Specified: Client Invite / Onboarding."
 - **Voice / Video / AI** — deferred per `docs/mvp-specification.md` Story 5/6 and §4/§5 (Out of Scope / Future Video Flow). No route in this document reflects them.
 - **No Calendar domain object or endpoint** — `/coach/calendar` is served entirely by existing `Workout`/`ScheduledWorkout` endpoints (extended per `go-backend-api-contract-v0.1.md` §3.5/V0.5). There is no `calendars` table and no `/calendar` API resource.
-- **Exercise Library slice boundaries** — no Exercise edit/archive, video, description, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, Workout Builder, or System exercise seed implementation.
+- **Exercise Library slice boundaries** — no Exercise edit/archive, video, description, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, standalone Exercise-Library Workout Builder, or System exercise seed implementation.
+- **Build & Assign partial failure** — `POST /api/v1/workouts` and `POST /api/v1/scheduled-workouts` are not atomic together. If Workout creation succeeds but scheduling fails, preserve the created `workout.id`, selected date, selected Athletes, and builder state; report that the Workout was created but not assigned; and offer explicit retry-assignment using only the existing `workout.id`. Do not blindly auto-retry ambiguous network failures: scheduled-workouts has no idempotency key and duplicate scheduling is possible.
+- **Future Workout modes** — one-off scheduled Workouts, a “Save as template” toggle, and ephemeral prescriptions are not V0.1.
+- **Prescription scope** — planned per-set reps/load/properties, percentages, velocity, tempo, rest, supersets, circuits, and custom properties are not V0.1. Do not introduce PlannedSet or another prescription domain.
 
 ---
 
 ## 5. Explicitly Not This
 
 - Not a dashboard-first IA (no `/coach` landing page with athlete list + workout list as parallel primary panels).
-- Not TeamBuildr's team-scale Calendar/Program/athlete-subscription/offset model.
+- Not a Calendar entity/hierarchy, Program, Parent Calendar, nested calendar, group/team hierarchy, per-set programming matrix, Superset control, or enterprise scheduling architecture. The adopted principle is only direct date-based programming in the primary Calendar workflow.
 - Not a large global Coach navigation system or enterprise toolbar; Exercise Library is a single secondary Calendar action once implemented.
 - Not unfinished Workout Library navigation.
 - Not a native mobile app (Athlete and Coach mobile experience is PWA, per `docs/mvp-specification.md` §2 Platform Boundary).

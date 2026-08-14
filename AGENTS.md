@@ -68,6 +68,7 @@ The current MVP prioritizes:
 - Coach–Athlete relationship
 - Workout creation
 - Workout scheduling
+- Calendar-first programming: Coach selects a date and one or more Athletes, then either assigns an existing Workout or builds one inline and assigns it
 - Athlete Today's Workout
 - WorkoutSession
 - Manual SetLog
@@ -85,7 +86,8 @@ The following are currently out of scope:
 - Organization management
 - Team administration
 - Advanced periodization
-- Calendar programming
+- Calendar entities or hierarchy, Programs, Parent Calendar, nested calendars, and enterprise scheduling systems
+- Per-set prescription, supersets/circuits, and TeamBuildr-style enterprise programming constructs
 - AI-generated workouts
 - Custom ML models
 - Advanced biomechanics
