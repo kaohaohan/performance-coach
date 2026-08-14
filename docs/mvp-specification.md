@@ -159,7 +159,7 @@ Kevin has a workout scheduled for today.
 
 ## **When**
 
-Kevin opens the mobile/PWA training interface.
+Kevin opens the mobile/PWA training interface. The view defaults to the Athlete's local current date, which remains the highest-priority view. Kevin may use lightweight previous/next day navigation to inspect a ScheduledWorkout that the Coach has already assigned for another nearby date, especially an upcoming workout scheduled in advance.
 
 ## **Then**
 
@@ -181,12 +181,17 @@ Target RPE 8
 
 ## **Acceptance Criteria**
 
-- Athlete sees workouts scheduled to them.
+- Athlete lands on the local current date by default.
+- Athlete can move to the previous or next date and return to Today.
+- If the Coach schedules a workout for tomorrow, the Athlete can navigate to tomorrow and see that exact ScheduledWorkout.
+- Empty-state wording reflects the selected date: Today uses "No Workout Today"; another date uses "No Workout Scheduled".
+- Athlete sees only workouts scheduled to them; date navigation does not change Athlete isolation.
 - Athlete does not see another athlete’s workouts.
 - Today’s scheduled workout appears prominently.
 - Athlete can open the workout.
 - Athlete can start the workout session.
 - Mobile UI prioritizes today’s training over secondary features.
+- No new backend endpoint or Calendar domain object is introduced for date navigation.
 
 ---
 

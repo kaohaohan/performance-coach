@@ -36,7 +36,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 
 | Route | Role | Backs onto | Purpose |
 |---|---|---|---|
-| `/today` | Primary (Athlete's only real destination in V0.1) | `GET /me/scheduled-workouts?date=` | Athlete's landing page. Shows today's (or a selected date's) Scheduled Workout and its session state. Entry point into `/session/[id]`. |
+| `/today` | Primary (Athlete's only real destination in V0.1) | `GET /me/scheduled-workouts?date=` | Athlete's primary training destination. It defaults to the Athlete's **local current date** and allows lightweight previous/next day navigation so the Athlete can view ScheduledWorkouts already assigned for nearby dates. A Today action returns to the local current date. Each selected-date change calls `GET /api/v1/me/scheduled-workouts?date={selectedDate}`. This is day navigation inside `/today`, not a new Athlete Calendar route. It remains the only primary Athlete route in V0.1. |
 
 ### Shared
 
@@ -53,6 +53,8 @@ This is a frontend information-architecture decision. It introduces no new backe
 - The workout library is a secondary tool, not a competing top-level destination.
 - Coach and Athlete share the same Training Session UI/domain wherever the underlying authorization allows it (session start, set-log CRUD).
 - Voice / Video / AI are deferred — not part of any V0.1 route.
+- `/today` supports lightweight day navigation only; a full month calendar is not required in V0.1.
+- Day navigation does not introduce a Calendar domain object or a new backend endpoint; it uses the existing `GET /me/scheduled-workouts?date=` endpoint.
 - Client invite/onboarding mechanism is explicitly undecided (see below).
 - Do not copy TeamBuildr's enterprise Calendar/Program/Offset model — Calendar here is a UI over per-athlete `ScheduledWorkout`, not a new scheduling domain.
 - Keep the UI lightweight and low-friction; this spec intentionally does not prescribe visual design, only structure.
