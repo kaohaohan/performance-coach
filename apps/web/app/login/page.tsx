@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { apiFetch, ApiError } from "@/lib/api";
 
 // Maps Firebase Auth error codes to a user-visible message. Never surfaces
 // raw Firebase error text, and does not distinguish "no such user" from
@@ -23,6 +24,8 @@ function loginErrorMessage(err: unknown): string {
   }
 }
 
+type Me = { id: string; name: string; role: "COACH" | "ATHLETE" };
+
 export default function LoginPage() {
   const router = useRouter();
   const { signIn } = useAuth();
@@ -36,10 +39,31 @@ export default function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      await signIn(email, password);
-      router.push("/coach");
+      const token = await signIn(email, password);
+
+      let me: Me;
+      try {
+        me = await apiFetch<Me>(token, "/api/v1/me");
+      } catch {
+        // Covers network failure and ApiError alike — don't expose
+        // backend/internal details, just fail sign-in visibly.
+        setError("Sign in failed. Please try again.");
+        return;
+      }
+
+      if (me.role === "COACH") {
+        router.replace("/coach/calendar");
+      } else if (me.role === "ATHLETE") {
+        router.replace("/today");
+      } else {
+        setError("Sign in failed. Please try again.");
+      }
     } catch (err) {
-      setError(loginErrorMessage(err));
+      if (err instanceof ApiError) {
+        setError("Sign in failed. Please try again.");
+      } else {
+        setError(loginErrorMessage(err));
+      }
     } finally {
       setSubmitting(false);
     }

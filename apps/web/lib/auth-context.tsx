@@ -23,7 +23,11 @@ type AuthContextValue = {
   user: User | null;
   idToken: string | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  // Returns a freshly-minted ID token directly from the sign-in credential,
+  // rather than relying on the async onIdTokenChanged state update below —
+  // callers that need a token immediately after signing in (e.g. login's
+  // role lookup) would otherwise race that state update.
+  signIn: (email: string, password: string) => Promise<string>;
   signOut: () => Promise<void>;
 };
 
@@ -59,10 +63,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  async function signIn(email: string, password: string) {
+  async function signIn(email: string, password: string): Promise<string> {
     const auth = getFirebaseAuth();
-    await signInWithEmailAndPassword(auth, email, password);
-    // onIdTokenChanged above updates user/idToken once Firebase resolves.
+    const credential = await signInWithEmailAndPassword(auth, email, password);
+    // onIdTokenChanged above still updates user/idToken (async) for the rest
+    // of the app's ongoing state. Return the token directly here so the
+    // caller doesn't have to race that update.
+    return credential.user.getIdToken();
   }
 
   async function signOut() {
