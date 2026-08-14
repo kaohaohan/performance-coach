@@ -13,6 +13,10 @@
 // share this one read model rather than a coach-only view. Both ACTIVE and
 // COMPLETED sessions are readable; a completed session is read-only, not
 // hidden.
+//
+// CreateSetLog implements POST /sessions/{id}/set-logs (§3.8) — the sole
+// SetLog write entry point in V0.1 (Story 4). Manual UI, voice, and future
+// AI commands all converge here.
 package workoutsession
 
 import (
@@ -22,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
@@ -393,4 +398,236 @@ func loadExercisesWithSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID
 		exercises = append(exercises, *byID[id])
 	}
 	return exercises, nil
+}
+
+// ErrSessionNotActive indicates the session exists and is accessible to
+// caller, but is not ACTIVE (i.e. COMPLETED). SetLog writes are only valid
+// against an ACTIVE session (docs/go-backend-api-contract-v0.1.md §3.8).
+// Handlers should map it to 409 CONFLICT.
+var ErrSessionNotActive = errors.New("workoutsession: session is not ACTIVE")
+
+// ErrExerciseNotInSession indicates the request's scheduledWorkoutExerciseId
+// does not belong to this session's scheduled_workout — either it doesn't
+// exist, or it belongs to a different ScheduledWorkout entirely. Handlers
+// should map it to 400 INVALID_ARGUMENT, not 404: this is a request-shape
+// error, not a resource-scoping privacy check (docs/
+// go-backend-api-contract-v0.1.md §3.8).
+var ErrExerciseNotInSession = errors.New("workoutsession: scheduledWorkoutExerciseId does not belong to this session")
+
+// setLogSetNumberConstraint is the exact, auto-generated name of the
+// UNIQUE (session_id, scheduled_workout_exercise_id, set_number) constraint
+// (confirmed against the live schema, not assumed from naming convention —
+// Postgres truncates it to 63 bytes). CreateSetLog retries only a 23505
+// naming this constraint; any other unique violation (e.g. an id/pkey
+// collision) is a genuine bug and must not be silently retried.
+const setLogSetNumberConstraint = "set_logs_session_id_scheduled_workout_exercise_id_set_numbe_key"
+
+// maxSetLogInsertAttempts is one initial attempt plus up to three
+// whole-transaction retries on the expected set-number 23505 (docs/
+// go-backend-api-contract-v0.1.md §3.8 setNumber concurrency handling).
+const maxSetLogInsertAttempts = 4
+
+// CreateSetLogInput is the decoded, wire-format-independent request for
+// CreateSetLog. Every field is a pointer except ScheduledWorkoutExerciseID
+// so "omitted" is distinguishable from "explicit zero" — most importantly
+// Load (0 is a valid load; nil means bodyweight/no load) and Reps (nil
+// means the required field was never sent, distinct from an invalid 0).
+type CreateSetLogInput struct {
+	ScheduledWorkoutExerciseID string
+	Load                       *float64
+	Unit                       *string
+	Reps                       *int
+	RPE                        *float64
+}
+
+// validate applies §3.8's field rules, independent of any DB access:
+//   - reps: required, integer, >= 1
+//   - load: optional; if present, >= 0 and unit is required (kg or lb)
+//   - unit: must be nil exactly when load is nil
+//   - rpe: optional; if present, 1-10
+func (in CreateSetLogInput) validate() error {
+	if in.Reps == nil {
+		return &ValidationError{Message: "reps is required"}
+	}
+	if *in.Reps < 1 {
+		return &ValidationError{Message: "reps must be >= 1"}
+	}
+	if in.Load == nil {
+		if in.Unit != nil {
+			return &ValidationError{Message: "unit must be omitted when load is omitted"}
+		}
+	} else {
+		if *in.Load < 0 {
+			return &ValidationError{Message: "load must be >= 0"}
+		}
+		if in.Unit == nil {
+			return &ValidationError{Message: "unit is required when load is present"}
+		}
+		if *in.Unit != "kg" && *in.Unit != "lb" {
+			return &ValidationError{Message: "unit must be 'kg' or 'lb'"}
+		}
+	}
+	if in.RPE != nil && (*in.RPE < 1 || *in.RPE > 10) {
+		return &ValidationError{Message: "rpe must be between 1 and 10"}
+	}
+	return nil
+}
+
+// CreateSetLog records one performed set against an ACTIVE session's
+// scheduled_workout_exercise (docs/go-backend-api-contract-v0.1.md §3.8).
+//
+// Checked in order:
+//  1. sessionID must be a well-formed UUID -> else *ValidationError
+//  2. the session must exist and caller must be its athlete, or a coach
+//     connected to that athlete -> else ErrNotFound
+//  3. the session must be ACTIVE -> else ErrSessionNotActive
+//  4. input.ScheduledWorkoutExerciseID must be a well-formed UUID -> else
+//     *ValidationError
+//  5. field validation (reps/load/unit/rpe) -> else *ValidationError
+//  6. input.ScheduledWorkoutExerciseID must belong to this session's
+//     scheduled_workout -> else ErrExerciseNotInSession
+//
+// setNumber is always server-computed, never trusted from the client;
+// loggedByUserId is always caller.ID.
+func CreateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID string, input CreateSetLogInput) (SetLog, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return SetLog{}, &ValidationError{Message: "sessionId must be a valid UUID"}
+	}
+
+	header, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return SetLog{}, err
+	}
+	if header.status != "ACTIVE" {
+		return SetLog{}, ErrSessionNotActive
+	}
+
+	if _, err := uuid.Parse(input.ScheduledWorkoutExerciseID); err != nil {
+		return SetLog{}, &ValidationError{Message: "scheduledWorkoutExerciseId must be a valid UUID"}
+	}
+	if err := input.validate(); err != nil {
+		return SetLog{}, err
+	}
+
+	belongs, err := scheduledWorkoutExerciseBelongsTo(ctx, pool, input.ScheduledWorkoutExerciseID, header.scheduledWorkoutID)
+	if err != nil {
+		return SetLog{}, fmt.Errorf("workoutsession: check exercise ownership: %w", err)
+	}
+	if !belongs {
+		return SetLog{}, ErrExerciseNotInSession
+	}
+
+	return insertSetLogWithRetry(ctx, pool, caller, sessionID, input)
+}
+
+// scheduledWorkoutExerciseBelongsTo reports whether scheduledWorkoutExerciseID
+// is a snapshot exercise of scheduledWorkoutID — the session's own
+// scheduled_workout, not some other one (docs/go-backend-api-contract-v0.1.md
+// §3.8 rule 3).
+func scheduledWorkoutExerciseBelongsTo(ctx context.Context, pool *pgxpool.Pool, scheduledWorkoutExerciseID, scheduledWorkoutID string) (bool, error) {
+	const query = `SELECT 1 FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2`
+	var exists int
+	err := pool.QueryRow(ctx, query, scheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// insertSetLogWithRetry computes setNumber and inserts the SetLog inside a
+// fresh transaction per attempt (docs/go-backend-api-contract-v0.1.md §3.8
+// setNumber concurrency handling).
+//
+// Each attempt is its own whole transaction, not a single transaction
+// retried in place: PostgreSQL aborts a transaction on any statement error,
+// including the unique violation this function expects to sometimes hit, so
+// nothing further can run on that same transaction until it is rolled back.
+// Rather than working around that with a SAVEPOINT, each retry opens a
+// brand-new transaction and recomputes MAX(set_number) — simpler to reason
+// about, and retries are the uncommon case (only genuine concurrent writes
+// to the same session+exercise).
+//
+// Every attempt re-reads workout_sessions.status FOR SHARE before computing
+// setNumber, guarding against a concurrent session-completion transition
+// mid-retry-loop (no such endpoint exists yet in V0.1, but the guard is
+// cheap and matches the contract's "session must be ACTIVE" rule holding at
+// insert time, not just at the start of the request).
+//
+// Only a 23505 on setLogSetNumberConstraint is treated as expected and
+// retried; any other error (including a 23505 on a different constraint,
+// e.g. a pkey collision) is returned immediately, not masked as a
+// setNumber race.
+func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID string, input CreateSetLogInput) (SetLog, error) {
+	const statusForShare = `SELECT status FROM workout_sessions WHERE id = $1 FOR SHARE`
+	const nextSetNumber = `
+		SELECT COALESCE(MAX(set_number), 0) + 1
+		FROM set_logs
+		WHERE session_id = $1 AND scheduled_workout_exercise_id = $2`
+	const insert = `
+		INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, set_number, load, unit, reps, rpe, logged_by_user_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		RETURNING id, set_number, load, unit, reps, rpe, logged_by_user_id`
+
+	var lastErr error
+	for attempt := 1; attempt <= maxSetLogInsertAttempts; attempt++ {
+		setLog, err := func() (SetLog, error) {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return SetLog{}, fmt.Errorf("workoutsession: begin set-log transaction: %w", err)
+			}
+			defer tx.Rollback(ctx)
+
+			var status string
+			if err := tx.QueryRow(ctx, statusForShare, sessionID).Scan(&status); err != nil {
+				return SetLog{}, fmt.Errorf("workoutsession: lock session status: %w", err)
+			}
+			if status != "ACTIVE" {
+				return SetLog{}, ErrSessionNotActive
+			}
+
+			var setNumber int
+			if err := tx.QueryRow(ctx, nextSetNumber, sessionID, input.ScheduledWorkoutExerciseID).Scan(&setNumber); err != nil {
+				return SetLog{}, fmt.Errorf("workoutsession: compute next set number: %w", err)
+			}
+
+			var s SetLog
+			err = tx.QueryRow(ctx, insert,
+				uuid.NewString(), sessionID, input.ScheduledWorkoutExerciseID, setNumber,
+				input.Load, input.Unit, *input.Reps, input.RPE, caller.ID,
+			).Scan(&s.ID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID)
+			if err != nil {
+				return SetLog{}, err
+			}
+
+			if err := tx.Commit(ctx); err != nil {
+				return SetLog{}, fmt.Errorf("workoutsession: commit set-log transaction: %w", err)
+			}
+			return s, nil
+		}()
+
+		if err == nil {
+			return setLog, nil
+		}
+		if errors.Is(err, ErrSessionNotActive) {
+			return SetLog{}, err
+		}
+		if isSetNumberConflict(err) {
+			lastErr = err
+			continue
+		}
+		return SetLog{}, fmt.Errorf("workoutsession: insert set log: %w", err)
+	}
+
+	return SetLog{}, fmt.Errorf("workoutsession: exhausted %d set-log insert attempts, last error: %w", maxSetLogInsertAttempts, lastErr)
+}
+
+// isSetNumberConflict reports whether err is exactly the expected
+// UNIQUE (session_id, scheduled_workout_exercise_id, set_number) violation
+// — the only conflict CreateSetLog's retry loop should ever swallow.
+func isSetNumberConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == setLogSetNumberConstraint
 }

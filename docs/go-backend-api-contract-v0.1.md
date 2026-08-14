@@ -466,7 +466,21 @@ Service 層規則：
 5. `setNumber` 由 server 計算（見下），不信任 client
 6. `loggedByUserId = caller.id`
 
-Response `201`：完整 SetLog。
+Response `201`：完整 SetLog，欄位固定為：
+
+```json
+{
+  "id": "...",
+  "setNumber": 1,
+  "load": 100,
+  "unit": "kg",
+  "reps": 5,
+  "rpe": 7,
+  "loggedByUserId": "..."
+}
+```
+
+僅此七欄（`load`/`unit`/`rpe` 為選填，省略時不出現）。不回傳 `createdAt`、`sessionId`、`scheduledWorkoutExerciseId` — 呼叫端已知道這三者（分別來自 URL 與 request body），不重複於 response。
 
 ### setNumber 併發處理
 
@@ -476,7 +490,13 @@ DB 端：
 UNIQUE (session_id, scheduled_workout_exercise_id, set_number)
 ```
 
-Application 端：於 transaction 內取 `MAX(set_number) + 1` 後 insert；撞上 unique violation（SQLSTATE `23505`）則 retry，上限 3 次。unique constraint 是正確性底線，不能只靠應用層計數。
+Application 端：於 transaction 內取 `MAX(set_number) + 1` 後 insert；撞上 unique violation（SQLSTATE `23505`，且限定命中 `set_logs_session_id_scheduled_workout_exercise_id_set_numbe_key` 這個 constraint）則 retry。
+
+**Retry 語意：**一次初始嘗試 + 最多三次額外的整筆 transaction 重試（共至多四次 insert 嘗試）。每次重試都是全新的 transaction，不是同一個 transaction 內迴圈——PostgreSQL 的 transaction 在任何 statement 出錯（含這裡預期的 unique violation）後即進入 aborted 狀態，之後的 statement 都會被拒絕，必須 rollback 才能繼續；因此每次重試皆為 `BEGIN` → 重新計算 `MAX(set_number) + 1` → `INSERT` → `COMMIT`/`ROLLBACK` 的完整循環,不使用 SAVEPOINT。只有命中上述 constraint 名稱的 23505 才視為預期的 setNumber 競爭而重試；任何其他錯誤（含撞到其他 unique constraint，例如 id/pkey 碰撞）一律直接回傳，不可被重試邏輯吞掉。
+
+每次重試的 transaction 內，於計算 `MAX(set_number) + 1` 之前，先以 `SELECT status FROM workout_sessions WHERE id = $1 FOR SHARE` 重新確認 session 仍為 `ACTIVE`；若併發轉為 `COMPLETED`（即使 V0.1 尚未實作 Complete Session），本次 insert 需中止並回傳 `409 CONFLICT`，而不是寫入一筆屬於已完成 session 的 SetLog。
+
+unique constraint 是正確性底線，不能只靠應用層計數。
 
 ### PATCH /set-logs/{setLogId}
 

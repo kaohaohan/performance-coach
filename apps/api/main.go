@@ -67,6 +67,7 @@ func run() error {
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
+	mux.Handle("POST /api/v1/sessions/{sessionId}/set-logs", authMiddleware(handleCreateSetLog(pool)))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -484,6 +485,76 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(detail)
+	}
+}
+
+// createSetLogRequest is the wire shape for a POST
+// /api/v1/sessions/{sessionId}/set-logs request body
+// (docs/go-backend-api-contract-v0.1.md §3.8). Every optional field is a
+// pointer so "omitted" is distinguishable from "explicit zero" — most
+// importantly Load (0 is a valid load) and Reps (required, but nil means
+// "never sent" rather than an invalid 0). id/setNumber/loggedByUserId/
+// createdAt are deliberately absent: the server controls all of them, and
+// any of those fields sent by the client are simply ignored by decoding
+// into this struct.
+type createSetLogRequest struct {
+	ScheduledWorkoutExerciseID string   `json:"scheduledWorkoutExerciseId"`
+	Load                       *float64 `json:"load"`
+	Unit                       *string  `json:"unit"`
+	Reps                       *int     `json:"reps"`
+	RPE                        *float64 `json:"rpe"`
+}
+
+// handleCreateSetLog decodes the request body, delegates validation,
+// authorization, and persistence to workoutsession.CreateSetLog, and maps
+// its result to a status code. This is V0.1's sole SetLog write entry point
+// (docs/go-backend-api-contract-v0.1.md §3.8) — the same path manual UI,
+// voice, and future AI commands all converge on.
+func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		sessionID := r.PathValue("sessionId")
+
+		var req createSetLogRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		input := workoutsession.CreateSetLogInput{
+			ScheduledWorkoutExerciseID: req.ScheduledWorkoutExerciseID,
+			Load:                       req.Load,
+			Unit:                       req.Unit,
+			Reps:                       req.Reps,
+			RPE:                        req.RPE,
+		}
+
+		setLog, err := workoutsession.CreateSetLog(r.Context(), pool, user, sessionID, input)
+		if err != nil {
+			var validationErr *workoutsession.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, workoutsession.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
+			case errors.Is(err, workoutsession.ErrSessionNotActive):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session is not active")
+			case errors.Is(err, workoutsession.ErrExerciseNotInSession):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "scheduledWorkoutExerciseId does not belong to this session")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(setLog)
 	}
 }
 
