@@ -53,7 +53,7 @@ The MVP follows this principle:
 
 ### **Navigation Principle**
 
-**Calendar (`/coach/calendar`) is the Coach's primary workspace on Web/Desktop.** Workout creation, workout scheduling, and reviewing completed training all happen from the Calendar. Client management (`/coach/clients`) and the workout library (`/coach/workouts`) are secondary tools reached from it, not separate primary destinations. There is no Coach dashboard as a landing page.
+**Calendar (`/coach/calendar`) is the Coach's primary workspace on Web/Desktop.** Workout creation, workout scheduling, and reviewing completed training all happen from the Calendar. Client management (`/coach/clients`), the workout library (`/coach/workouts`), and the Exercise Library (`/coach/exercises`) are secondary tools reached from it, not separate primary destinations. There is no Coach dashboard as a landing page.
 
 Route/navigation detail lives in `docs/frontend-ui-spec.md`; this document defines product behavior only.
 
@@ -73,6 +73,22 @@ Before this can ship, the following need a product decision (out of scope for th
 - Does an Athlete account get created at invite time, or only at first login?
 
 Do not treat `/coach/clients` as feature-complete until this is resolved.
+
+---
+
+# **Exercise Library — Coach Programming Support** (`/coach/exercises`)
+
+The Coach may maintain a small Exercise Library used by future workout programming. This is secondary tooling around the existing `Exercise` domain; it does not change the primary MVP loop or introduce a new domain object.
+
+## **Acceptance Criteria**
+
+- Coach can open the Exercise Library and see SYSTEM exercises plus MY EXERCISES (the caller Coach's private exercises).
+- Coach can search visible exercises by name and create one private Exercise by name.
+- A newly created private Exercise becomes available for future workout creation.
+- Zero SYSTEM exercises does not block listing or creating private Exercises.
+- Another Coach's private Exercise is invisible.
+- Athlete cannot manage the Exercise Library.
+- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, Workout Builder, and System exercise seed implementation remain out of scope for this slice.
 
 ---
 

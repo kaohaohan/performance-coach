@@ -148,13 +148,65 @@ Workout ──1:N──> WorkoutExercise ──N:1──> Exercise (公用或私
 
 ## 3.2 Exercises（動作目錄）
 
-### GET /exercises?q=squat — Coach only
+### GET /api/v1/exercises?q=squat — Coach only
 
-回傳「系統公用 + 呼叫者私有」的動作，供課表編輯 autocomplete。V0.1 先 seed 20–30 個常見動作為公用目錄。
+回傳「系統公用 + 呼叫者私有」的動作，供課表編輯 autocomplete 與 Exercise Library 使用。Athlete 呼叫時回 `403 FORBIDDEN`；永不回傳其他 Coach 的私有動作。
+
+- SYSTEM exercise：`ownerCoachId = null`
+- PRIVATE exercise：`ownerCoachId = caller.id`
+- `q` 選填，先做 `strings.TrimSpace` 等價處理
+- `q` 缺省、空字串、或只含空白時，回傳所有可見動作
+- 非空 `q` 時，以名稱做 case-insensitive substring search
+- 排序固定為：SYSTEM 優先、`lower(name)` 升冪、`id` 升冪
+
+Response `200`：
+
+```json
+[
+  { "id": "...", "name": "Back Squat", "scope": "SYSTEM" },
+  { "id": "...", "name": "Tempo Back Squat", "scope": "PRIVATE" }
+]
+```
+
+`scope` 是由 API 依 `ownerCoachId` 衍生的 presentation metadata，不是新的資料庫欄位。
+
+V0.1 的 System exercise seed implementation 另列 follow-up；零筆 SYSTEM exercise 不得阻擋 private Exercise 的 list 或 creation。
+
+### POST /api/v1/exercises — Coach only
+
+Request：
+
+```json
+{ "name": "Tempo Back Squat" }
+```
+
+名稱正規化採 `strings.TrimSpace` 等價處理：去除首尾空白、保留內部空白、保留 trim 後的提交大小寫；名稱比較為 case-insensitive。成功時一律建立 `ownerCoachId = caller.id` 的 PRIVATE exercise。
+
+Response `201`：
+
+```json
+{ "id": "...", "name": "Tempo Back Squat", "scope": "PRIVATE" }
+```
+
+**重名規則：**
+
+- 若 SYSTEM 已有任一 trim/case-equivalent 名稱（例如 `Back Squat`、`back squat`、`  Back Squat  `），回 `409 CONFLICT`：`an exercise named "Back Squat" already exists in the system library`。不得建立 private duplicate。
+- 若 caller 已有 trim/case-equivalent PRIVATE exercise，回 `409 CONFLICT`：`you already have a private exercise named "Tempo Back Squat"`。
+- 不同 Coach 可各自擁有同名 PRIVATE exercise，因為 private uniqueness 以 owner Coach 為界。
+- 不得暴露 PostgreSQL constraint name 或 raw database error。
+
+**錯誤：**
+
+| 情況 | Status | Code |
+| --- | --- | --- |
+| malformed JSON、缺少 `name`、或 `name` 為空/只含空白 | 400 | `INVALID_ARGUMENT` |
+| Athlete 呼叫 GET 或 POST exercises | 403 | `FORBIDDEN` |
+| SYSTEM 或 caller-private duplicate | 409 | `CONFLICT` |
+| 未預期 query/persistence failure | 500 | `INTERNAL` |
 
 ### 建立規則（find-or-create）
 
-`POST /workouts` 時以 `lower(trim(name))` 在（公用 ∪ 呼叫者私有）中比對；命中則沿用，未命中則**建為該教練的私有動作**。不開獨立 create endpoint。
+`POST /workouts` 保持既有 find-or-create 行為：以 trim/case-insensitive matching 在（SYSTEM ∪ caller Coach 的 PRIVATE exercises）中搜尋；命中則沿用，未命中則**建為該教練的 private Exercise**。先前透過 `POST /exercises` 建立的 caller-private Exercise 必須被重用，而非重複建立。
 
 > **同名衝突規則（V0.1）：**比對命中時 system exercise 優先，**不支援**建立與 system 同名的 private exercise（同名即同 identity）。教練要做變化版就取不同名稱（如 "Tempo Back Squat"）。未來若需「同名不同 identity」，將以 explicit `exerciseId` 傳入取代 name 比對，屬 future extension。
 > 
@@ -555,7 +607,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 
 | Endpoint | Coach (owner/connected) | Athlete (本人) | 無關使用者 |
 | --- | --- | --- | --- |
-| GET /exercises | ✅ (公用+自己的) | ❌ 403 | ❌ 403 |
+| GET/POST /exercises | ✅ (公用+自己的；POST 僅建自己的 private Exercise) | ❌ 403 | ❌ 403 |
 | POST /workouts | ✅ | ❌ 403 | ❌ 403 |
 | GET/PATCH/DELETE /workouts/{id} | ✅ owner | ❌ 404 | ❌ 404 |
 | GET /athletes | ✅ | ❌ 403 | ❌ 403 |

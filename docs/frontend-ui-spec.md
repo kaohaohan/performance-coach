@@ -31,6 +31,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 | `/coach/calendar` | **Primary** | `POST /workouts`, `POST /scheduled-workouts`, `GET /scheduled-workouts` (athleteId omitted → all connected athletes in a date range) | Default landing page after Coach login. Pick a date → create/select a Workout → assign to one or more Athletes. Shows each Athlete's completion status per day (`session` field on the scheduled-workout list). Entry point into `/session/[id]` for review or live 1:1 coaching. |
 | `/coach/clients` | Secondary | `GET /athletes` | List of connected Athletes. **Does not yet support inviting/creating a Client** — see "Deferred" below. |
 | `/coach/workouts` | Secondary | `GET /workouts`, `POST /workouts` | Workout template library. Reuse an existing Workout without starting from the Calendar. Still the only place workout templates are edited independent of a specific date. |
+| `/coach/exercises` | Secondary | `GET /exercises`, `POST /exercises` | Coach Exercise Library. Lists SYSTEM plus the caller Coach's PRIVATE exercises, supports search and private Exercise creation, and shows relevant empty states. |
 
 ### Athlete
 
@@ -51,6 +52,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 - No Coach dashboard-first UI.
 - Calendar is the Coach's primary workspace.
 - The workout library is a secondary tool, not a competing top-level destination.
+- Exercise Library is secondary programming tooling, not a competing top-level destination. It may be reached through one lightweight secondary action/link from Coach Calendar.
 - Coach and Athlete share the same Training Session UI/domain wherever the underlying authorization allows it (session start, set-log CRUD).
 - Voice / Video / AI are deferred — not part of any V0.1 route.
 - `/today` supports lightweight day navigation only; a full month calendar is not required in V0.1.
@@ -66,6 +68,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 - **Client invite/onboarding mechanism** — undecided. `/coach/clients` can only list existing connections (`GET /athletes`); it cannot create one. `CoachAthlete` relationships are currently seed-only. See `docs/mvp-specification.md`, "Deferred — Not Yet Specified: Client Invite / Onboarding."
 - **Voice / Video / AI** — deferred per `docs/mvp-specification.md` Story 5/6 and §4/§5 (Out of Scope / Future Video Flow). No route in this document reflects them.
 - **No Calendar domain object or endpoint** — `/coach/calendar` is served entirely by existing `Workout`/`ScheduledWorkout` endpoints (extended per `go-backend-api-contract-v0.1.md` §3.5/V0.5). There is no `calendars` table and no `/calendar` API resource.
+- **Exercise Library slice boundaries** — no Exercise edit/archive, video, description, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, Workout Builder, or System exercise seed implementation.
 
 ---
 
@@ -73,4 +76,6 @@ This is a frontend information-architecture decision. It introduces no new backe
 
 - Not a dashboard-first IA (no `/coach` landing page with athlete list + workout list as parallel primary panels).
 - Not TeamBuildr's team-scale Calendar/Program/athlete-subscription/offset model.
+- Not a large global Coach navigation system or enterprise toolbar; Exercise Library is a single secondary Calendar action once implemented.
+- Not unfinished Workout Library navigation.
 - Not a native mobile app (Athlete and Coach mobile experience is PWA, per `docs/mvp-specification.md` §2 Platform Boundary).
