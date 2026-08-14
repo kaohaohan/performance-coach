@@ -390,7 +390,16 @@ Response body 固定為（不含 `athleteId`、`scheduledWorkoutId`、`startedAt
 
 ### POST /sessions/{sessionId}/complete
 
-結束訓練。授權同上。COMPLETED 後 session 唯讀（SetLog 不可再增刪改）。
+結束訓練。授權同上。COMPLETED 後 session 唯讀（SetLog 不可再增刪改），且不可再轉回 ACTIVE。
+
+Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含 `completedAt` — 理由同上，完整 detail 屬於 `GET /sessions/{sessionId}`）：
+
+```json
+{ "id": "...", "status": "COMPLETED" }
+```
+
+- ACTIVE → COMPLETED 成功 → HTTP `200`
+- 已 COMPLETED → 不重複轉換、不修改 `completed_at` → `409 CONFLICT`
 
 ### GET /sessions/{sessionId}
 

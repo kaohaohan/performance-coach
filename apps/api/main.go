@@ -67,6 +67,7 @@ func run() error {
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
+	mux.Handle("POST /api/v1/sessions/{sessionId}/complete", authMiddleware(handleCompleteSession(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/set-logs", authMiddleware(handleCreateSetLog(pool)))
 
 	srv := &http.Server{
@@ -485,6 +486,43 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(detail)
+	}
+}
+
+// handleCompleteSession transitions a WorkoutSession from ACTIVE to
+// COMPLETED, making it permanently read-only (docs/
+// go-backend-api-contract-v0.1.md §3.7). Authorization matches Start/Get:
+// the session's athlete, or a connected coach; any other caller (or a
+// nonexistent id) gets 404, not 403 — resource-scoping, not a role check.
+func handleCompleteSession(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		sessionID := r.PathValue("sessionId")
+
+		session, err := workoutsession.Complete(r.Context(), pool, user, sessionID)
+		if err != nil {
+			var validationErr *workoutsession.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, workoutsession.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
+			case errors.Is(err, workoutsession.ErrCompleted):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session already completed")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(session)
 	}
 }
 

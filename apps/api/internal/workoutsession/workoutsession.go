@@ -14,6 +14,9 @@
 // COMPLETED sessions are readable; a completed session is read-only, not
 // hidden.
 //
+// Complete implements POST /sessions/{id}/complete (§3.7): the ACTIVE ->
+// COMPLETED transition that makes a session permanently read-only.
+//
 // CreateSetLog implements POST /sessions/{id}/set-logs (§3.8) — the sole
 // SetLog write entry point in V0.1 (Story 4). Manual UI, voice, and future
 // AI commands all converge here.
@@ -49,8 +52,10 @@ type Session struct {
 // inaccessible ScheduledWorkout exists.
 var ErrNotFound = errors.New("workoutsession: scheduled workout not found or not accessible to caller")
 
-// ErrCompleted indicates the ScheduledWorkout's session already exists and
-// is COMPLETED. Start does not reactivate or mutate it.
+// ErrCompleted indicates the session is already COMPLETED: either Start
+// found an existing COMPLETED session for the ScheduledWorkout, or
+// Complete was called on a session that is already COMPLETED. Neither
+// case reactivates or mutates it. Handlers should map it to 409 CONFLICT.
 var ErrCompleted = errors.New("workoutsession: session already completed")
 
 // ValidationError indicates the request failed shape validation before any
@@ -157,6 +162,62 @@ func lookupAccessibleScheduledWorkout(ctx context.Context, pool *pgxpool.Pool, c
 	}
 
 	return "", ErrNotFound
+}
+
+// Complete transitions sessionID from ACTIVE to COMPLETED
+// (docs/go-backend-api-contract-v0.1.md §3.7). A completed session is
+// permanently read-only: Complete never transitions COMPLETED back to
+// ACTIVE, and does not touch completed_at on a session that is already
+// COMPLETED.
+//
+// Authorization, checked in order:
+//  1. sessionID must be a well-formed UUID -> else *ValidationError
+//  2. the WorkoutSession must exist -> else ErrNotFound
+//  3. caller must be that session's athlete, or a coach connected to that
+//     athlete via coach_athletes -> else ErrNotFound
+//
+// The ACTIVE -> COMPLETED transition and the "already COMPLETED" check
+// share one atomic UPDATE ... WHERE status = 'ACTIVE' statement rather
+// than a separate read-then-write: whichever caller's UPDATE actually
+// matches the row (status still ACTIVE at the time Postgres evaluates the
+// WHERE clause) performs the transition; RETURNING producing no row means
+// the session was already COMPLETED, mapped to ErrCompleted (the same
+// sentinel Start uses for "session already completed" — both represent
+// the same underlying session state).
+//
+// No explicit transaction, FOR UPDATE, or extra locking is needed: a
+// single UPDATE statement takes Postgres's implicit row-level write lock
+// for its own duration, which is exactly what CreateSetLog's per-attempt
+// `SELECT status ... FOR SHARE` already waits on (or is waited on by) —
+// see insertSetLogWithRetry. Two concurrent Complete calls on the same
+// session serialize on that same row lock: the second one's WHERE clause
+// is evaluated after the first commits, sees status is no longer ACTIVE,
+// and matches zero rows.
+func Complete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID string) (Session, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return Session{}, &ValidationError{Message: "sessionId must be a valid UUID"}
+	}
+
+	if _, err := lookupAccessibleSession(ctx, pool, caller, sessionID); err != nil {
+		return Session{}, err
+	}
+
+	const complete = `
+		UPDATE workout_sessions
+		SET status = 'COMPLETED', completed_at = now()
+		WHERE id = $1 AND status = 'ACTIVE'
+		RETURNING id, status`
+
+	var session Session
+	err := pool.QueryRow(ctx, complete, sessionID).Scan(&session.ID, &session.Status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, ErrCompleted
+		}
+		return Session{}, fmt.Errorf("workoutsession: complete session: %w", err)
+	}
+
+	return session, nil
 }
 
 // Athlete is the athlete summary embedded in a GET /sessions/{id} response
