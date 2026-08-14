@@ -198,9 +198,14 @@ export default function CoachCalendarPage() {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">Coach Workspace</h1>
           <p className="mt-2 text-sm text-slate-300">{displayDate(date)}</p>
-          <button type="button" onClick={() => router.push("/coach/exercises")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
-            Exercise Library
-          </button>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" onClick={() => router.push("/coach/workouts")} className="min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
+              Workout Library
+            </button>
+            <button type="button" onClick={() => router.push("/coach/exercises")} className="min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
+              Exercise Library
+            </button>
+          </div>
         </div>
       </header>
 
