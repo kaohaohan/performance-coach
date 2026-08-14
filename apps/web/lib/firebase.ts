@@ -8,8 +8,7 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getAuth, connectAuthEmulator, type Auth } from "firebase/auth";
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
+function requireEnv(value: string | undefined, name: string): string {
   if (!value) {
     throw new Error(`firebase: missing required env var ${name}`);
   }
@@ -18,8 +17,14 @@ function requireEnv(name: string): string {
 
 function createApp(): FirebaseApp {
   const config = {
-    apiKey: requireEnv("NEXT_PUBLIC_FIREBASE_API_KEY"),
-    projectId: requireEnv("NEXT_PUBLIC_FIREBASE_PROJECT_ID"),
+    apiKey: requireEnv(
+      process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+      "NEXT_PUBLIC_FIREBASE_API_KEY",
+    ),
+    projectId: requireEnv(
+      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+      "NEXT_PUBLIC_FIREBASE_PROJECT_ID",
+    ),
   };
 
   const existing = getApps();

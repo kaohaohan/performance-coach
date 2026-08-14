@@ -6,10 +6,13 @@ const nextConfig: NextConfig = {
   // phase — see AGENTS.md §13/Phase 1 approved decisions). Backend base URL
   // is local-only for now; revisit before any real deployment.
   async rewrites() {
+    const backendBaseUrl =
+      process.env.BACKEND_BASE_URL ?? "http://localhost:8080";
+
     return [
       {
         source: "/backend/:path*",
-        destination: "http://localhost:8080/:path*",
+        destination: `${backendBaseUrl}/:path*`,
       },
     ];
   },
