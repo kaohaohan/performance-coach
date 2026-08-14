@@ -59,6 +59,8 @@ export default function CoachCalendarPage() {
   const [workouts, setWorkouts] = useState<Workout[] | null>(null);
   const [assignments, setAssignments] = useState<ScheduledWorkoutSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const athleteLoadId = useRef(0);
+  const assignmentLoadId = useRef(0);
   const [selectedWorkoutId, setSelectedWorkoutId] = useState("");
   const [selectedAthleteIds, setSelectedAthleteIds] = useState<string[]>([]);
   const [assigning, setAssigning] = useState(false);
@@ -74,19 +76,22 @@ export default function CoachCalendarPage() {
 
   useEffect(() => {
     if (!idToken) return;
+    const requestId = ++athleteLoadId.current;
     let cancelled = false;
     (async () => {
+      setLoadError(null);
       try {
         const [athletesRes, workoutsRes] = await Promise.all([
           apiFetch<Athlete[]>(idToken, "/api/v1/athletes"),
           apiFetch<Workout[]>(idToken, "/api/v1/workouts"),
         ]);
-        if (!cancelled) {
+        if (!cancelled && requestId === athleteLoadId.current) {
           setAthletes(athletesRes);
           setWorkouts(workoutsRes);
+          setLoadError(null);
         }
       } catch (err) {
-        if (!cancelled) setLoadError(errorMessage(err));
+        if (!cancelled && requestId === athleteLoadId.current) setLoadError(errorMessage(err));
       }
     })();
     return () => {
@@ -96,16 +101,21 @@ export default function CoachCalendarPage() {
 
   useEffect(() => {
     if (!idToken) return;
+    const requestId = ++assignmentLoadId.current;
     let cancelled = false;
     (async () => {
+      setLoadError(null);
       try {
         const res = await apiFetch<ScheduledWorkoutSummary[]>(
           idToken,
           `/api/v1/scheduled-workouts?from=${date}&to=${date}`,
         );
-        if (!cancelled) setAssignments(res);
+        if (!cancelled && requestId === assignmentLoadId.current) {
+          setAssignments(res);
+          setLoadError(null);
+        }
       } catch (err) {
-        if (!cancelled) setLoadError(errorMessage(err));
+        if (!cancelled && requestId === assignmentLoadId.current) setLoadError(errorMessage(err));
       }
     })();
     return () => {
@@ -115,15 +125,19 @@ export default function CoachCalendarPage() {
 
   async function refetchAssignments() {
     if (!idToken) return;
+    const requestId = ++assignmentLoadId.current;
+    setLoadError(null);
     try {
-      setAssignments(
-        await apiFetch<ScheduledWorkoutSummary[]>(
-          idToken,
-          `/api/v1/scheduled-workouts?from=${date}&to=${date}`,
-        ),
+      const res = await apiFetch<ScheduledWorkoutSummary[]>(
+        idToken,
+        `/api/v1/scheduled-workouts?from=${date}&to=${date}`,
       );
+      if (requestId === assignmentLoadId.current) {
+        setAssignments(res);
+        setLoadError(null);
+      }
     } catch (err) {
-      setLoadError(errorMessage(err));
+      if (requestId === assignmentLoadId.current) setLoadError(errorMessage(err));
     }
   }
 
