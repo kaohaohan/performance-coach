@@ -14,10 +14,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
 )
 
 // Plan is the prescription for one exercise inside a workout. It is always
@@ -107,7 +107,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 
 	exercises := make([]Exercise, 0, len(input.Exercises))
 	for i, ex := range input.Exercises {
-		exerciseID, exerciseName, err := findOrCreateExercise(ctx, tx, caller.ID, ex.Name)
+		exerciseID, exerciseName, err := exercise.FindOrCreateVisible(ctx, tx, caller.ID, ex.Name)
 		if err != nil {
 			return Workout{}, fmt.Errorf("workout: resolve exercise %q: %w", ex.Name, err)
 		}
@@ -172,39 +172,6 @@ func validate(input CreateInput) error {
 		}
 	}
 	return nil
-}
-
-// findOrCreateExercise resolves rawName to an exercise id, preferring an
-// existing system exercise (owner_coach_id IS NULL) over the caller's own
-// private exercise of the same name; if neither exists it creates a new
-// private exercise owned by caller. Returns the canonical stored name,
-// which may differ in whitespace from the caller's input.
-func findOrCreateExercise(ctx context.Context, tx pgx.Tx, coachID, rawName string) (id string, name string, err error) {
-	trimmed := strings.TrimSpace(rawName)
-
-	const selectQuery = `
-		SELECT id, name FROM exercises
-		WHERE (owner_coach_id IS NULL OR owner_coach_id = $1)
-		  AND lower(name) = lower($2)
-		ORDER BY owner_coach_id NULLS FIRST
-		LIMIT 1`
-
-	err = tx.QueryRow(ctx, selectQuery, coachID, trimmed).Scan(&id, &name)
-	if err == nil {
-		return id, name, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", "", err
-	}
-
-	newID := uuid.NewString()
-	const insertQuery = `
-		INSERT INTO exercises (id, name, owner_coach_id, created_at)
-		VALUES ($1, $2, $3, now())`
-	if _, err := tx.Exec(ctx, insertQuery, newID, trimmed, coachID); err != nil {
-		return "", "", err
-	}
-	return newID, trimmed, nil
 }
 
 // ListForCoach returns the caller's own, non-archived workouts, most

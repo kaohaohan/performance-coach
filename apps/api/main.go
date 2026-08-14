@@ -21,6 +21,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workoutsession"
@@ -60,6 +61,8 @@ func run() error {
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
+	mux.Handle("GET /api/v1/exercises", authMiddleware(handleListExercises(pool)))
+	mux.Handle("POST /api/v1/exercises", authMiddleware(handleCreateExercise(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
@@ -161,6 +164,77 @@ func handleAthletes(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(athletes)
+	}
+}
+
+// createExerciseRequest is the wire shape for POST /api/v1/exercises.
+type createExerciseRequest struct {
+	Name string `json:"name"`
+}
+
+// handleListExercises returns system Exercises plus the caller Coach's private
+// Exercises. Authorization and query semantics belong to exercise.ListForCoach.
+func handleListExercises(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		exercises, err := exercise.ListForCoach(r.Context(), pool, user, r.URL.Query().Get("q"))
+		if err != nil {
+			if errors.Is(err, exercise.ErrForbidden) {
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+				return
+			}
+			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(exercises)
+	}
+}
+
+// handleCreateExercise creates one private Exercise for the authenticated
+// Coach. Validation, authorization, and duplicate semantics belong to the
+// exercise service.
+func handleCreateExercise(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req createExerciseRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		created, err := exercise.CreatePrivate(r.Context(), pool, user, req.Name)
+		if err != nil {
+			var validationErr *exercise.ValidationError
+			var conflictErr *exercise.ConflictError
+			switch {
+			case errors.Is(err, exercise.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.As(err, &conflictErr):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", conflictErr.Error())
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(created)
 	}
 }
 
