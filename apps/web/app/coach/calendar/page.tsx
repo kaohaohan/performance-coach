@@ -205,6 +205,9 @@ export default function CoachCalendarPage() {
             <button type="button" onClick={() => router.push("/coach/exercises")} className="min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
               Exercise Library
             </button>
+            <button type="button" onClick={() => router.push("/coach/clients")} className="min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
+              Clients
+            </button>
           </div>
         </div>
       </header>
