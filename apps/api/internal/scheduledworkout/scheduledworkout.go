@@ -101,26 +101,14 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string { return e.Message }
 
-// Plan is the prescription for one exercise inside a created
-// ScheduledWorkout's snapshot. Mirrors workout.Plan's shape
-// (docs/go-backend-api-contract-v0.1.md §3.3, §7.1): always a nested
-// object, never flattened, so a future per-set prescription can grow this
-// into a slice without a contract rewrite.
-type Plan struct {
-	Sets             int      `json:"sets"`
-	Reps             *int     `json:"reps,omitempty"`
-	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
-	RPE              *float64 `json:"rpe,omitempty"`
-}
-
-// ScheduledExercise is one frozen prescription snapshot row embedded in a
-// created ScheduledWorkout response.
+// ScheduledExercise is one frozen prescription snapshot exercise embedded in
+// the Athlete Today response.
 type ScheduledExercise struct {
-	ScheduledWorkoutExerciseID string `json:"scheduledWorkoutExerciseId"`
-	ExerciseID                 string `json:"exerciseId"`
-	Name                       string `json:"name"`
-	Plan                       Plan   `json:"plan"`
-	Position                   int    `json:"position"`
+	ScheduledWorkoutExerciseID string      `json:"scheduledWorkoutExerciseId"`
+	ExerciseID                 string      `json:"exerciseId"`
+	Name                       string      `json:"name"`
+	Plan                       CreatedPlan `json:"plan"`
+	Position                   int         `json:"position"`
 }
 
 // PlannedSet is one resolved, frozen planned position returned by POST
@@ -136,9 +124,8 @@ type PlannedSet struct {
 	RPE                          *float64 `json:"rpe,omitempty"`
 }
 
-// CreatedPlan is the resolved snapshot plan returned only from the POST
-// response. Scalar Plan remains in use by the intentionally deferred Athlete
-// and Session read paths.
+// CreatedPlan is the resolved snapshot plan returned by scheduling and
+// Athlete Today responses.
 type CreatedPlan struct {
 	Sets []PlannedSet `json:"sets"`
 }
@@ -633,12 +620,12 @@ type TodayScheduledWorkout struct {
 }
 
 // ListForAthlete returns the caller's own ScheduledWorkouts on exactly one
-// date, exercises expanded from the frozen scheduled_workout_exercises
+// date, with exercises and resolved positions expanded from the frozen
 // snapshot (docs/go-backend-api-contract-v0.1.md §3.6, §2 snapshot
-// precedence rule). Display fields (exercise name, target sets/reps/note/
-// rpe) always come from the snapshot row, never from the current exercises
-// or workout_exercises tables, so a later rename/edit of the template does
-// not change what the athlete already saw scheduled.
+// precedence rule). Exercise identity/display name and frozen unit come from
+// scheduled_workout_exercises; prescription values come only from
+// scheduled_workout_planned_sets. It never reads a live Workout template's
+// prescription, so later template edits cannot change the athlete's plan.
 //
 // Authorization: only an ATHLETE may call this; results are always scoped
 // to caller.ID — an athlete can never see another athlete's schedule. There
@@ -646,34 +633,29 @@ type TodayScheduledWorkout struct {
 // identity comes solely from the caller, so "no rows" is a legitimate empty
 // result, not a hidden-resource case.
 //
-// scheduled_workouts joins 1:N to scheduled_workout_exercises (every
-// ScheduledWorkout has at least one snapshot exercise by construction — see
-// Create), so the query produces one SQL row per exercise. Rows are grouped
-// in Go, keyed by scheduled_workout id and in first-seen order, so each
-// ScheduledWorkout appears exactly once in the response with its exercises
-// appended in snapshot position order; multiple ScheduledWorkouts on the
-// same date (the schedule intentionally allows this — see §3.5) remain
-// separate entries, never merged or deduplicated.
+// The header, snapshot-exercise, and planned-set reads are deliberately
+// separate: joining both 1:N relationships would multiply planned rows.
+// Rows are grouped in Go, preserving scheduled-workout, exercise, and
+// planned-position order. Multiple ScheduledWorkouts on the same date (the
+// schedule intentionally allows this — see §3.5) remain separate entries,
+// never merged or deduplicated.
 func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, date time.Time) ([]TodayScheduledWorkout, error) {
 	if caller.Role != "ATHLETE" {
 		return nil, ErrForbidden
 	}
 
-	const query = `
+	const headersQuery = `
 		SELECT sw.id, sw.scheduled_date, w.name,
-		       swe.id, swe.exercise_id, swe.exercise_name,
-		       swe.target_sets, swe.target_reps, swe.target_prescription_note, swe.target_rpe, swe.position,
 		       ws.id, ws.status
 		FROM scheduled_workouts sw
 		JOIN workouts w ON w.id = sw.workout_id
-		JOIN scheduled_workout_exercises swe ON swe.scheduled_workout_id = sw.id
 		LEFT JOIN workout_sessions ws ON ws.scheduled_workout_id = sw.id
 		WHERE sw.athlete_id = $1 AND sw.scheduled_date = $2
-		ORDER BY sw.id, swe.position`
+		ORDER BY sw.id`
 
-	rows, err := pool.Query(ctx, query, caller.ID, date)
+	rows, err := pool.Query(ctx, headersQuery, caller.ID, date)
 	if err != nil {
-		return nil, fmt.Errorf("scheduledworkout: list for athlete: %w", err)
+		return nil, fmt.Errorf("scheduledworkout: list athlete headers: %w", err)
 	}
 	defer rows.Close()
 
@@ -683,53 +665,110 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 		var (
 			id, workoutName      string
 			scheduledDate        time.Time
-			swExerciseID, exID   string
-			exName               string
-			targetSets, position int
-			targetReps           *int
-			targetPrescriptNote  *string
-			targetRPE            *float64
 			sessionID, sessionSt *string
 		)
 		if err := rows.Scan(
 			&id, &scheduledDate, &workoutName,
-			&swExerciseID, &exID, &exName,
-			&targetSets, &targetReps, &targetPrescriptNote, &targetRPE, &position,
 			&sessionID, &sessionSt,
 		); err != nil {
-			return nil, fmt.Errorf("scheduledworkout: scan today row: %w", err)
+			return nil, fmt.Errorf("scheduledworkout: scan today header: %w", err)
 		}
 
-		sw, ok := byID[id]
-		if !ok {
-			sw = &TodayScheduledWorkout{
-				ID:            id,
-				ScheduledDate: scheduledDate.Format(dateLayout),
-				WorkoutName:   workoutName,
-				Exercises:     make([]ScheduledExercise, 0, 1),
-			}
-			if sessionID != nil {
-				sw.Session = &Session{ID: *sessionID, Status: *sessionSt}
-			}
-			byID[id] = sw
-			order = append(order, id)
+		sw := &TodayScheduledWorkout{
+			ID:            id,
+			ScheduledDate: scheduledDate.Format(dateLayout),
+			WorkoutName:   workoutName,
+			Exercises:     make([]ScheduledExercise, 0),
 		}
-
-		sw.Exercises = append(sw.Exercises, ScheduledExercise{
-			ScheduledWorkoutExerciseID: swExerciseID,
-			ExerciseID:                 exID,
-			Name:                       exName,
-			Plan: Plan{
-				Sets:             targetSets,
-				Reps:             targetReps,
-				PrescriptionNote: targetPrescriptNote,
-				RPE:              targetRPE,
-			},
-			Position: position,
-		})
+		if sessionID != nil {
+			sw.Session = &Session{ID: *sessionID, Status: *sessionSt}
+		}
+		byID[id] = sw
+		order = append(order, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("scheduledworkout: iterate today rows: %w", err)
+		return nil, fmt.Errorf("scheduledworkout: iterate today headers: %w", err)
+	}
+	if len(order) == 0 {
+		return make([]TodayScheduledWorkout, 0), nil
+	}
+
+	const exercisesQuery = `
+		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.position
+		FROM scheduled_workout_exercises swe
+		WHERE swe.scheduled_workout_id = ANY($1)
+		ORDER BY swe.scheduled_workout_id, swe.position`
+
+	rows, err = pool.Query(ctx, exercisesQuery, order)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: list athlete snapshot exercises: %w", err)
+	}
+	defer rows.Close()
+
+	type exerciseReference struct {
+		scheduledWorkoutID string
+		index              int
+	}
+	exerciseByID := make(map[string]exerciseReference)
+	exerciseOrder := make([]string, 0)
+	for rows.Next() {
+		var (
+			exerciseID, scheduledWorkoutID, exerciseDefinitionID, exerciseName string
+			position                                                           int
+		)
+		if err := rows.Scan(&exerciseID, &scheduledWorkoutID, &exerciseDefinitionID, &exerciseName, &position); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: scan today snapshot exercise: %w", err)
+		}
+
+		sw := byID[scheduledWorkoutID]
+		index := len(sw.Exercises)
+		sw.Exercises = append(sw.Exercises, ScheduledExercise{
+			ScheduledWorkoutExerciseID: exerciseID,
+			ExerciseID:                 exerciseDefinitionID,
+			Name:                       exerciseName,
+			Plan:                       CreatedPlan{Sets: make([]PlannedSet, 0)},
+			Position:                   position,
+		})
+		exerciseByID[exerciseID] = exerciseReference{scheduledWorkoutID: scheduledWorkoutID, index: index}
+		exerciseOrder = append(exerciseOrder, exerciseID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: iterate today snapshot exercises: %w", err)
+	}
+
+	const plannedSetsQuery = `
+		SELECT p.scheduled_workout_exercise_id,
+		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
+		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
+		       p.target_rpe
+		FROM scheduled_workout_planned_sets p
+		JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
+		WHERE p.scheduled_workout_exercise_id = ANY($1)
+		ORDER BY p.scheduled_workout_exercise_id, p.planned_position`
+
+	rows, err = pool.Query(ctx, plannedSetsQuery, exerciseOrder)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: list athlete planned sets: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			exerciseID string
+			plannedSet PlannedSet
+		)
+		if err := rows.Scan(
+			&exerciseID,
+			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
+		); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: scan today planned set: %w", err)
+		}
+
+		ref := exerciseByID[exerciseID]
+		byID[ref.scheduledWorkoutID].Exercises[ref.index].Plan.Sets = append(byID[ref.scheduledWorkoutID].Exercises[ref.index].Plan.Sets, plannedSet)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: iterate today planned sets: %w", err)
 	}
 
 	scheduled := make([]TodayScheduledWorkout, 0, len(order))

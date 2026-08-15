@@ -151,6 +151,115 @@ func TestCreateSnapshotIsImmutableAfterTemplateMutation(t *testing.T) {
 	assertStoredSets(t, created[0].Exercises[0].ScheduledWorkoutExerciseID, []expectedSet{{position: 1, reps: intPtr(10)}, {position: 2, reps: intPtr(8)}})
 }
 
+func TestListForAthleteReadsCanonicalFrozenPlannedSets(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	athlete, otherAthlete := user(t, "ATHLETE"), user(t, "ATHLETE")
+	connect(t, coach, athlete)
+	connect(t, coach, otherAthlete)
+
+	reps10, reps8 := 10, 8
+	load80, load85 := 80.0, 85.0
+	rpe8, rpe9 := 8.0, 9.0
+	kg := "kg"
+	seconds, repRange := "30 sec", "10–12"
+	w := createWorkout(t, coach, []workout.CreateExerciseInput{
+		{Name: prefix + " today varied", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RPE: &rpe8}, Overrides: []prescription.SetOverride{{Position: 3, Reps: &reps8, Load: &load85, RPE: &rpe9}}}},
+		{Name: prefix + " today text", Plan: prescription.Plan{SetCount: 2, Defaults: prescription.Defaults{PrescriptionNote: &seconds}, Overrides: []prescription.SetOverride{{Position: 2, PrescriptionNote: &repRange}}}},
+	})
+	created, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
+		WorkoutID: w.ID, AthleteIDs: []string{athlete.ID, otherAthlete.ID}, ScheduledDate: "2026-08-16",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	athleteScheduled, otherScheduled := created[0], created[1]
+
+	// Deliberately poison compatibility-only scalar columns and the live
+	// template. Today must still return the immutable planned-set rows above.
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_workout_exercises SET target_sets = 1, target_reps = 1, target_prescription_note = NULL, target_rpe = 1 WHERE scheduled_workout_id = $1`, athleteScheduled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE workout_exercises SET target_reps = 1, target_prescription_note = NULL, target_rpe = 1 WHERE workout_id = $1`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := scheduledworkout.ListForAthlete(ctx, pool, athlete, time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != athleteScheduled.ID || got[0].WorkoutName != w.Name || got[0].Session != nil {
+		t.Fatalf("today result = %#v", got)
+	}
+	if len(got[0].Exercises) != 2 || got[0].Exercises[0].Position != 1 || got[0].Exercises[1].Position != 2 {
+		t.Fatalf("today exercise ordering = %#v", got[0].Exercises)
+	}
+
+	varied := got[0].Exercises[0]
+	if varied.ScheduledWorkoutExerciseID != athleteScheduled.Exercises[0].ScheduledWorkoutExerciseID || varied.ExerciseID != athleteScheduled.Exercises[0].ExerciseID || varied.Name != athleteScheduled.Exercises[0].Name {
+		t.Fatalf("today varied exercise identity = %#v", varied)
+	}
+	assertResolvedSets(t, varied.Plan.Sets, []expectedSet{
+		{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
+		{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
+		{position: 3, reps: intPtr(8), load: floatPtr(85), unit: stringPtr("kg"), rpe: floatPtr(9)},
+	})
+	for i, planned := range varied.Plan.Sets {
+		if planned.ScheduledWorkoutPlannedSetID != athleteScheduled.Exercises[0].Plan.Sets[i].ScheduledWorkoutPlannedSetID {
+			t.Fatalf("today planned-set ID %d = %q, want %q", i, planned.ScheduledWorkoutPlannedSetID, athleteScheduled.Exercises[0].Plan.Sets[i].ScheduledWorkoutPlannedSetID)
+		}
+	}
+
+	text := got[0].Exercises[1]
+	assertResolvedSets(t, text.Plan.Sets, []expectedSet{
+		{position: 1, note: stringPtr("30 sec")},
+		{position: 2, note: stringPtr("10–12")},
+	})
+
+	otherGot, err := scheduledworkout.ListForAthlete(ctx, pool, otherAthlete, time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(otherGot) != 1 || otherGot[0].ID != otherScheduled.ID {
+		t.Fatalf("other athlete today result = %#v", otherGot)
+	}
+	if _, err := scheduledworkout.ListForAthlete(ctx, pool, coach, time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC)); !errors.Is(err, scheduledworkout.ErrForbidden) {
+		t.Fatalf("coach ListForAthlete error = %v", err)
+	}
+}
+
+func TestListForAthletePreservesSessionSummary(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach, athlete := user(t, "COACH"), user(t, "ATHLETE")
+	connect(t, coach, athlete)
+	reps := 5
+	w := createWorkout(t, coach, []workout.CreateExerciseInput{{
+		Name: prefix + " today session", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}},
+	}})
+	created, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
+		WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-16",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	date := time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC)
+	assertTodaySession(t, athlete, date, nil)
+
+	activeID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO workout_sessions (id, scheduled_workout_id, athlete_id, status, started_at) VALUES ($1, $2, $3, 'ACTIVE', now())`, activeID, created[0].ID, athlete.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertTodaySession(t, athlete, date, &scheduledworkout.Session{ID: activeID, Status: "ACTIVE"})
+
+	if _, err := pool.Exec(ctx, `UPDATE workout_sessions SET status = 'COMPLETED', completed_at = now() WHERE id = $1`, activeID); err != nil {
+		t.Fatal(err)
+	}
+	assertTodaySession(t, athlete, date, &scheduledworkout.Session{ID: activeID, Status: "COMPLETED"})
+}
+
 func TestCreateRollsBackBatchWhenPlannedSetInsertFails(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()
@@ -301,6 +410,26 @@ func assertNoExecutionRows(t *testing.T, scheduledWorkoutIDs []string) {
 	t.Helper()
 	assertCount(t, `SELECT count(*) FROM workout_sessions WHERE scheduled_workout_id = ANY($1)`, scheduledWorkoutIDs, 0)
 	assertCount(t, `SELECT count(*) FROM set_logs sl JOIN scheduled_workout_exercises swe ON swe.id = sl.scheduled_workout_exercise_id WHERE swe.scheduled_workout_id = ANY($1)`, scheduledWorkoutIDs, 0)
+}
+
+func assertTodaySession(t *testing.T, athlete authn.User, date time.Time, want *scheduledworkout.Session) {
+	t.Helper()
+	got, err := scheduledworkout.ListForAthlete(context.Background(), pool, athlete, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("today scheduled workout count = %d, want 1", len(got))
+	}
+	if want == nil {
+		if got[0].Session != nil {
+			t.Fatalf("today session = %#v, want nil", got[0].Session)
+		}
+		return
+	}
+	if got[0].Session == nil || got[0].Session.ID != want.ID || got[0].Session.Status != want.Status {
+		t.Fatalf("today session = %#v, want %#v", got[0].Session, want)
+	}
 }
 
 func assertCount(t *testing.T, query string, arg any, want int) {
