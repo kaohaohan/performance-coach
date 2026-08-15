@@ -15,6 +15,7 @@ import (
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 )
 
@@ -203,9 +204,8 @@ func TestWorkoutCreationReusesPrivateExercise(t *testing.T) {
 	createdWorkout, err := workout.Create(ctx, testPool, coach, workout.CreateInput{
 		Name: testPrefix + " Workout",
 		Exercises: []workout.CreateExerciseInput{{
-			Name:       "  " + strings.ToLower(name) + "  ",
-			TargetSets: 3,
-			TargetReps: &reps,
+			Name: "  " + strings.ToLower(name) + "  ",
+			Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}},
 		}},
 	})
 	if err != nil {

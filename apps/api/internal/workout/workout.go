@@ -18,16 +18,31 @@ import (
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 )
 
-// Plan is the prescription for one exercise inside a workout. It is always
-// a nested object, never flattened into the parent, so a future per-set
-// prescription can grow this into a slice without a contract rewrite
-// (docs/go-backend-api-contract-v0.1.md §3.3, §7.1).
+// Plan is the editable, uniform-first prescription for one exercise inside a
+// workout template. Defaults and overrides deliberately remain authoring
+// metadata; resolved positions belong to scheduling snapshots.
 type Plan struct {
-	Sets             int      `json:"sets"`
+	SetCount  int           `json:"setCount"`
+	Defaults  Defaults      `json:"defaults"`
+	Overrides []SetOverride `json:"overrides"`
+}
+
+type Defaults struct {
 	Reps             *int     `json:"reps,omitempty"`
 	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
+	Load             *float64 `json:"load,omitempty"`
+	Unit             *string  `json:"unit,omitempty"`
+	RPE              *float64 `json:"rpe,omitempty"`
+}
+
+type SetOverride struct {
+	Position         int      `json:"position"`
+	Reps             *int     `json:"reps,omitempty"`
+	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
+	Load             *float64 `json:"load,omitempty"`
 	RPE              *float64 `json:"rpe,omitempty"`
 }
 
@@ -61,11 +76,8 @@ func (e *ValidationError) Error() string { return e.Message }
 
 // CreateExerciseInput is one exercise entry in a CreateInput.
 type CreateExerciseInput struct {
-	Name                   string
-	TargetSets             int
-	TargetReps             *int
-	TargetPrescriptionNote *string
-	TargetRPE              *float64
+	Name string
+	Plan prescription.Plan
 }
 
 // CreateInput is the decoded, wire-format-independent request for Create.
@@ -88,6 +100,15 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 	}
 	if err := validate(input); err != nil {
 		return Workout{}, err
+	}
+	for i, ex := range input.Exercises {
+		if _, err := prescription.Resolve(ex.Plan); err != nil {
+			var validationErr *prescription.ValidationError
+			if errors.As(err, &validationErr) {
+				return Workout{}, &ValidationError{Message: fmt.Sprintf("exercises[%d].plan: %s", i, validationErr.Message)}
+			}
+			return Workout{}, fmt.Errorf("workout: resolve plan: %w", err)
+		}
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -116,24 +137,30 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 		workoutExerciseID := uuid.NewString()
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO workout_exercises
-				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_rpe, position)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			workoutExerciseID, workoutID, exerciseID, ex.TargetSets, ex.TargetReps, ex.TargetPrescriptionNote, ex.TargetRPE, position,
+				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rpe, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			workoutExerciseID, workoutID, exerciseID, ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote,
+			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RPE, position,
 		); err != nil {
 			return Workout{}, fmt.Errorf("workout: insert workout_exercise: %w", err)
+		}
+		for _, override := range ex.Plan.Overrides {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO workout_exercise_set_overrides
+					(id, workout_exercise_id, planned_position, reps_override, prescription_note_override, load_override, rpe_override)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				uuid.NewString(), workoutExerciseID, override.Position, override.Reps, override.PrescriptionNote, override.Load, override.RPE,
+			); err != nil {
+				return Workout{}, fmt.Errorf("workout: insert set override: %w", err)
+			}
 		}
 
 		exercises = append(exercises, Exercise{
 			WorkoutExerciseID: workoutExerciseID,
 			ExerciseID:        exerciseID,
 			Name:              exerciseName,
-			Plan: Plan{
-				Sets:             ex.TargetSets,
-				Reps:             ex.TargetReps,
-				PrescriptionNote: ex.TargetPrescriptionNote,
-				RPE:              ex.TargetRPE,
-			},
-			Position: position,
+			Plan:              planFromPrescription(ex.Plan),
+			Position:          position,
 		})
 	}
 
@@ -156,19 +183,6 @@ func validate(input CreateInput) error {
 	for i, ex := range input.Exercises {
 		if strings.TrimSpace(ex.Name) == "" {
 			return &ValidationError{Message: fmt.Sprintf("exercises[%d].name is required", i)}
-		}
-		if ex.TargetSets <= 0 {
-			return &ValidationError{Message: fmt.Sprintf("exercises[%d].targetSets must be a positive integer", i)}
-		}
-		hasNote := ex.TargetPrescriptionNote != nil && strings.TrimSpace(*ex.TargetPrescriptionNote) != ""
-		if ex.TargetReps == nil && !hasNote {
-			return &ValidationError{Message: fmt.Sprintf("exercises[%d] requires targetReps or targetPrescriptionNote", i)}
-		}
-		if ex.TargetReps != nil && *ex.TargetReps <= 0 {
-			return &ValidationError{Message: fmt.Sprintf("exercises[%d].targetReps must be a positive integer", i)}
-		}
-		if ex.TargetRPE != nil && (*ex.TargetRPE < 1 || *ex.TargetRPE > 10) {
-			return &ValidationError{Message: fmt.Sprintf("exercises[%d].targetRpe must be between 1 and 10", i)}
 		}
 	}
 	return nil
@@ -221,7 +235,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 
 	const exercisesQuery = `
 		SELECT we.workout_id, we.id, we.exercise_id, e.name,
-		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_rpe, we.position
+		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.position
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
 		WHERE we.workout_id = ANY($1)
@@ -238,9 +252,10 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 		var ex Exercise
 		var plan Plan
 		if err := exRows.Scan(&workoutID, &ex.WorkoutExerciseID, &ex.ExerciseID, &ex.Name,
-			&plan.Sets, &plan.Reps, &plan.PrescriptionNote, &plan.RPE, &ex.Position); err != nil {
+			&plan.SetCount, &plan.Defaults.Reps, &plan.Defaults.PrescriptionNote, &plan.Defaults.Load, &plan.Defaults.Unit, &plan.Defaults.RPE, &ex.Position); err != nil {
 			return nil, fmt.Errorf("workout: scan workout_exercise: %w", err)
 		}
+		plan.Overrides = []SetOverride{}
 		ex.Plan = plan
 		idx, ok := indexByID[workoutID]
 		if !ok {
@@ -252,5 +267,45 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 		return nil, fmt.Errorf("workout: iterate workout_exercises: %w", err)
 	}
 
+	const overridesQuery = `
+		SELECT o.workout_exercise_id, o.planned_position, o.reps_override,
+		       o.prescription_note_override, o.load_override, o.rpe_override
+		FROM workout_exercise_set_overrides o
+		JOIN workout_exercises we ON we.id = o.workout_exercise_id
+		WHERE we.workout_id = ANY($1)
+		ORDER BY o.workout_exercise_id, o.planned_position`
+	overrideRows, err := pool.Query(ctx, overridesQuery, ids)
+	if err != nil {
+		return nil, fmt.Errorf("workout: list set overrides: %w", err)
+	}
+	defer overrideRows.Close()
+	exerciseIndexes := make(map[string]struct{ workout, exercise int })
+	for wi := range workouts {
+		for ei := range workouts[wi].Exercises {
+			exerciseIndexes[workouts[wi].Exercises[ei].WorkoutExerciseID] = struct{ workout, exercise int }{wi, ei}
+		}
+	}
+	for overrideRows.Next() {
+		var workoutExerciseID string
+		var override SetOverride
+		if err := overrideRows.Scan(&workoutExerciseID, &override.Position, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RPE); err != nil {
+			return nil, fmt.Errorf("workout: scan set override: %w", err)
+		}
+		if index, ok := exerciseIndexes[workoutExerciseID]; ok {
+			workouts[index.workout].Exercises[index.exercise].Plan.Overrides = append(workouts[index.workout].Exercises[index.exercise].Plan.Overrides, override)
+		}
+	}
+	if err := overrideRows.Err(); err != nil {
+		return nil, fmt.Errorf("workout: iterate set overrides: %w", err)
+	}
+
 	return workouts, nil
+}
+
+func planFromPrescription(plan prescription.Plan) Plan {
+	overrides := make([]SetOverride, len(plan.Overrides))
+	for i, override := range plan.Overrides {
+		overrides[i] = SetOverride{Position: override.Position, Reps: override.Reps, PrescriptionNote: override.PrescriptionNote, Load: override.Load, RPE: override.RPE}
+	}
+	return Plan{SetCount: plan.SetCount, Defaults: Defaults{Reps: plan.Defaults.Reps, PrescriptionNote: plan.Defaults.PrescriptionNote, Load: plan.Defaults.Load, Unit: plan.Defaults.Unit, RPE: plan.Defaults.RPE}, Overrides: overrides}
 }

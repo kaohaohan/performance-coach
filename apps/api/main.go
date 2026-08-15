@@ -22,6 +22,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workoutsession"
@@ -242,11 +243,44 @@ func handleCreateExercise(pool *pgxpool.Pool) http.HandlerFunc {
 // a POST /api/v1/workouts request body
 // (docs/go-backend-api-contract-v0.1.md §3.3).
 type createWorkoutExerciseRequest struct {
-	Name                   string   `json:"name"`
-	TargetSets             int      `json:"targetSets"`
-	TargetReps             *int     `json:"targetReps"`
-	TargetPrescriptionNote *string  `json:"targetPrescriptionNote"`
-	TargetRPE              *float64 `json:"targetRpe"`
+	Name string                   `json:"name"`
+	Plan createWorkoutPlanRequest `json:"plan"`
+}
+
+type createWorkoutPlanRequest struct {
+	SetCount  int                            `json:"setCount"`
+	Defaults  createWorkoutDefaultsRequest   `json:"defaults"`
+	Overrides []createWorkoutOverrideRequest `json:"overrides"`
+}
+
+type createWorkoutDefaultsRequest struct {
+	Reps             *int     `json:"reps"`
+	PrescriptionNote *string  `json:"prescriptionNote"`
+	Load             *float64 `json:"load"`
+	Unit             *string  `json:"unit"`
+	RPE              *float64 `json:"rpe"`
+}
+
+type createWorkoutOverrideRequest struct {
+	Position         int      `json:"position"`
+	Reps             *int     `json:"reps"`
+	PrescriptionNote *string  `json:"prescriptionNote"`
+	Load             *float64 `json:"load"`
+	RPE              *float64 `json:"rpe"`
+}
+
+func mapWorkoutOverrides(overrides []createWorkoutOverrideRequest) []prescription.SetOverride {
+	mapped := make([]prescription.SetOverride, len(overrides))
+	for i, override := range overrides {
+		mapped[i] = prescription.SetOverride{
+			Position:         override.Position,
+			Reps:             override.Reps,
+			PrescriptionNote: override.PrescriptionNote,
+			Load:             override.Load,
+			RPE:              override.RPE,
+		}
+	}
+	return mapped
 }
 
 // createWorkoutRequest is the wire shape for a POST /api/v1/workouts
@@ -279,11 +313,12 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 		for i, ex := range req.Exercises {
 			input.Exercises[i] = workout.CreateExerciseInput{
-				Name:                   ex.Name,
-				TargetSets:             ex.TargetSets,
-				TargetReps:             ex.TargetReps,
-				TargetPrescriptionNote: ex.TargetPrescriptionNote,
-				TargetRPE:              ex.TargetRPE,
+				Name: ex.Name,
+				Plan: prescription.Plan{
+					SetCount:  ex.Plan.SetCount,
+					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RPE: ex.Plan.Defaults.RPE},
+					Overrides: mapWorkoutOverrides(ex.Plan.Overrides),
+				},
 			}
 		}
 
