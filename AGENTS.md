@@ -69,7 +69,7 @@ The current MVP prioritizes:
 - Workout creation
 - Workout scheduling
 - Calendar-first programming: Coach selects a date and one or more Athletes, then either assigns an existing Workout or builds one inline and assigns it
-- Uniform-first planned-set prescription: sets establish ordered planned positions; exercise-level defaults apply per property, positions inherit any property without an explicit override, and the Coach may independently override or clear a position's property when needed
+- Uniform-first planned-set prescription: sets establish ordered planned positions; exercise-level defaults apply per property, positions inherit any property without an explicit override, and the Coach may independently override a property or clear that override to resume inheritance
 - Athlete Today's Workout
 - WorkoutSession
 - Manual SetLog
@@ -205,17 +205,23 @@ WorkoutSession
 SetLog
 ```
 
+Approved but not yet implemented V0.1 planned-set entities:
+
+```
+WorkoutExerciseSetOverride
+ScheduledWorkoutPlannedSet
+```
+
 Future entities may include:
 
 ```
 VideoAsset
 AIReview
-PlannedSet (or another storage representation for the approved planned-set semantics)
 WorkoutItem
 Organization
 ```
 
-Future entities must not be implemented until required by an approved task.
+The planned-set architecture is approved in the canonical docs, but its entities must not be implemented until an approved implementation phase. Other future entities must not be implemented until required by an approved task.
 
 **Relationship Principle**
 

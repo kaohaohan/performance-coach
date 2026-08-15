@@ -1,6 +1,6 @@
 # DontWorkout — Go Backend API Contract (V0.1)
 
-Status: **V0.6 — current scalar contract + approved planned-set semantic addendum**
+Status: **V0.7 — approved planned-set contract; implementation pending coordinated migration**
 
 Target: 2026-08-16
 
@@ -10,7 +10,9 @@ Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
 
-> V0.6 documentation decision: V0.1 now requires uniform-first, ordered planned-set prescription semantics. `Sets = N` means N effective planned positions; defaults may apply to all positions and individual positions may be overridden. Planned reps or text prescription, load with unit, and RPE are separate from actual SetLogs. **This is not yet an API or storage design.** The concrete request/response representation, migration path, and SetLog-to-planned-position reference remain pending a separate architecture session. The endpoint examples below continue to describe the currently implemented scalar contract until that work is approved.
+> V0.7 architecture decision: V0.1 uses a hybrid planned-set model. Workout templates author exercise defaults plus sparse per-position overrides; scheduling resolves them into fully expanded, immutable planned-set snapshot rows; normal SetLogs explicitly reference one snapshot planned set while `setNumber` remains actual chronology. Extra SetLogs are allowed without a planned-set reference; incomplete planned positions have no SetLog and no persisted skipped row.
+
+> V0.7 scope decision: this controlled pilot revises the existing `/api/v1` contract through one coordinated frontend/backend migration. Do not add `/api/v2`, dual-read, dual-write, or legacy deprecation machinery. The code and initial migration remain scalar until an implementation phase is separately approved; this document defines the target contract for that phase.
 
 > V0.5 變更：`GET /scheduled-workouts` 實作為 Coach-only summary/list endpoint，`from`/`to` 必填、`athleteId` 選填。省略 `athleteId` 時回傳呼叫者跨所有已連結 athlete、指定日期範圍內的排程，供 Calendar 日/週檢視使用；提供 `athleteId` 但未連結時回 `404 NOT_FOUND`（刻意與 POST /scheduled-workouts 的 403 不一致，屬已知待清理項目）。Response 為 nested 摘要（`athlete{id,name}`、`workout{id,name}`、`session`），不含 exercises — 詳細處方與 SetLog 仍走 `GET /sessions/{id}`。純粹是既有 endpoint 的查詢維度放寬與回應格式明確化 — **不新增 domain object、不新增 endpoint**。詳見 §3.5、§7.5，對應 `docs/mvp-specification.md`「Navigation Principle」與 `docs/frontend-ui-spec.md`。
 > 
@@ -94,27 +96,29 @@ User                      { id, firebaseUid, name, role: COACH|ATHLETE }
 CoachAthlete              { coachId, athleteId }              // N:N
 Exercise                  { id, name, ownerCoachId? }         // null = 系統公用動作
 Workout                   { id, coachId, name }                // 課表模板
-WorkoutExercise           { id, workoutId, exerciseId, targetSets, targetReps?, targetPrescriptionNote?, targetRpe?, position }
+WorkoutExercise           { id, workoutId, exerciseId, setCount, defaults, loadUnit?, position }
+WorkoutExerciseSetOverride { id, workoutExerciseId, plannedPosition, reps?|prescriptionNote?|load?|rpe? }
 ScheduledWorkout          { id, workoutId, coachId, athleteId, scheduledDate }
-ScheduledWorkoutExercise  { id, scheduledWorkoutId, exerciseId, exerciseName, targetSets, targetReps?, targetPrescriptionNote?, targetRpe?, position }  // snapshot
+ScheduledWorkoutExercise  { id, scheduledWorkoutId, exerciseId, exerciseName, targetLoadUnit?, position }  // snapshot parent
+ScheduledWorkoutPlannedSet { id, scheduledWorkoutExerciseId, plannedPosition, reps?|prescriptionNote?, load?, rpe? } // resolved snapshot
 WorkoutSession            { id, scheduledWorkoutId, athleteId, status: ACTIVE|COMPLETED, startedAt, completedAt }
-SetLog                    { id, sessionId, scheduledWorkoutExerciseId, setNumber, load?, unit?, reps, rpe, loggedByUserId, createdAt }
+SetLog                    { id, sessionId, scheduledWorkoutExerciseId, scheduledWorkoutPlannedSetId?, setNumber, load?, unit?, reps, rpe, loggedByUserId, createdAt }
 ```
 
-### 2.1 Approved planned-set semantics; representation pending
-
-The current model above is the implemented scalar model, not the final representation of the approved V0.1 programming behavior.
+### 2.1 Approved planned-set semantics and representation
 
 - For an exercise with `N` sets, its **effective** plan contains exactly `N` ordered planned positions, numbered `1..N`.
 - The **authoring model** has exercise-level property defaults plus sparse, property-specific per-position overrides. A position with no override for a property inherits that default. Builder defaults are uniform shorthand: one reps value or text prescription, one load plus unit, and one RPE may apply to every position. The Coach must not be required to enter N repeated values for uniform work.
 - An individual position may override one or more inherited default values without becoming an all-or-nothing override object. For example, it can override reps while inheriting load and RPE. Planned-set position is separate from `WorkoutExercise.position`, which orders exercises within a Workout.
-- Entering individual-set editing for an inherited property starts from that position's current effective value; changing it creates an explicit override. Changing a default updates only positions inheriting that property. Clearing an override restores inheritance from the current default. Exact controls and persistence are pending.
-- An effective planned position can express numeric reps **or** the existing text prescription capability, optional planned load paired with its unit (`kg` or `lb`), and optional planned RPE. A default text note such as `AMAP` can be inherited by all positions and individually overridden by note; this does not add duration/time actual metrics. Load overrides must preserve a valid load/unit pair; mixed-unit behavior remains pending design.
-- The **effective planned prescription** is the deterministic result of resolving defaults and overrides for every planned position at save/build and scheduling time. Whether persistence keeps defaults plus sparse overrides, expands positions, or uses another representation remains undecided.
+- Entering individual-set editing for an inherited property starts from that position's current effective value; changing it creates an explicit override. Changing a default updates only positions inheriting that property. Clearing an override restores inheritance from the current default.
+- V0.1 supports only inherited or explicit-value override states. It has no explicit-none override. An omitted override property inherits; an override property with a value replaces only that property.
+- An effective planned position expresses numeric reps **or** text prescription, optional numeric planned load, and optional planned RPE. One optional `kg`/`lb` planned load unit belongs to the WorkoutExercise and is shared by its default load and every load override. Per-position unit overrides and mixed planned units are not supported. Changing the exercise unit changes the unit of every effective planned load without numeric conversion. Actual SetLog unit remains independent.
+- Template persistence keeps defaults plus sparse overrides. Scheduling resolves all `1..N` positions and persists normalized `ScheduledWorkoutPlannedSet` snapshot rows; Athlete-facing reads use these rows and do not expose authoring provenance.
 - Scheduling freezes the **effective** planned positions for every athlete snapshot. A later Workout-template default or override edit must not change an existing ScheduledWorkout.
-- Actual SetLogs remain actual performance. Session execution must be able to associate an actual set with the corresponding frozen effective planned position, without overwriting its planned values. Athlete-facing targets need not expose whether a value was defaulted, inherited, or overridden.
+- A normal SetLog explicitly references one frozen `ScheduledWorkoutPlannedSet`. `setNumber` is still generated by the server as actual logging chronology and is not inferred to equal planned position. At most one SetLog in a session may reference a given planned set.
+- An extra actual SetLog has no planned-set reference and is reported as EXTRA. A planned position with no SetLog remains incomplete; V0.1 does not create skipped rows.
 
-This section does not select normalized rows, JSON/arrays, or any other persistence representation. It also does not select a final wire shape or resolve handling of skipped, extra, or repeated actual sets.
+The target wire shapes are defined below. No migration or code change is authorized merely by this contract update.
 
 ## 核心概念
 
@@ -132,7 +136,7 @@ This section does not select normalized rows, JSON/arrays, or any other persiste
 
 排程當下把 WorkoutExercise 複製成 ScheduledWorkoutExercise。之後教練改課表模板，**不會污染已發生的訓練歷史**。
 
-> **Snapshot 欄位優先於 Exercise current state。**所有歷史顯示（Today view、session 詳情、plan vs actual）一律讀 snapshot 的 `exercise_name` 與 target 欄位，**永不 join 回現行 `exercises` 表取名稱或處方**。保留的 `exercise_id` 唯一用途是 analytics / 跨課表動作歷史關聯（例如「Back Squat 的負荷趨勢」）。動作事後改名，歷史顯示不變，這是 by design。
+> **Snapshot 欄位優先於 Exercise current state。**所有歷史顯示（Today view、session 詳情、plan vs actual）一律讀 `scheduled_workout_exercises.exercise_name/target_load_unit` 與其 `scheduled_workout_planned_sets` resolved targets，**永不 join 回現行 `exercises` 或 `workout_exercises` 取名稱或處方**。保留的 `exercise_id` 唯一用途是 analytics / 跨課表動作歷史關聯（例如「Back Squat 的負荷趨勢」）。動作事後改名，歷史顯示不變，這是 by design。
 > 
 
 ```
@@ -143,17 +147,17 @@ Workout ──1:N──> WorkoutExercise ──N:1──> Exercise (公用或私
                 └──> WorkoutSession ──1:N──> SetLog          ← actual
 ```
 
-`SetLog` 掛在 `ScheduledWorkoutExercise` 而非 `Exercise`，因此目前可在 exercise level 做 plan vs actual 對齊。V0.6 已核准的 planned-set semantics 進一步要求每筆 actual 能對應 frozen planned position；其資料表示法仍待設計。
+`SetLog` 仍掛在 `ScheduledWorkoutExercise` 的 session context 下；normal SetLog 另外以 `scheduledWorkoutPlannedSetId` 明確連到 frozen planned position。Extra SetLog 保留 exercise context，但 planned-set reference 為 null。
 
 **Prescription 的模糊性**
 
-`targetReps` 可為 null，此時 `targetPrescriptionNote` 存文字處方（"AMAP"、"30 sec"、"10–12"）— 命名刻意不叫 repsNote，因為 time/distance 處方不是 reps。SetLog 的驗證見 3.8。
+Authoring defaults and each effective snapshot position contain exactly one of numeric `reps` or `prescriptionNote`（"AMAP"、"30 sec"、"10–12"）— naming deliberately stays broader than reps because a text prescription is not an actual metric. SetLog validation remains reps-based in §3.8.
 
 ---
 
 # 3. Endpoints
 
-> **Current implemented wire contract:** the request/response shapes in this section are scalar exercise-level prescriptions. They remain authoritative for the running application until the planned-set architecture is separately designed and approved. The V0.6 semantic decision above must not be implemented by silently changing `plan.sets` from a number to another type or otherwise breaking existing consumers.
+> **Coordinated breaking migration:** the shapes in this section are the approved target `/api/v1` contract. The current code still implements the older scalar shapes and must not be called compliant until migration, backend, and frontend phases land together. There is no parallel V2 contract.
 
 ## 3.1 Me
 
@@ -258,8 +262,25 @@ Request：
 {
   "name": "Monday Lower",
   "exercises": [
-    { "name": "Back Squat", "targetSets": 4, "targetReps": 5, "targetRpe": 8 },
-    { "name": "Push Up", "targetSets": 1, "targetPrescriptionNote": "AMAP" }
+    {
+      "name": "Back Squat",
+      "plan": {
+        "setCount": 5,
+        "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+        "overrides": [
+          { "position": 3, "reps": 8 },
+          { "position": 5, "load": 90, "rpe": 9 }
+        ]
+      }
+    },
+    {
+      "name": "Push Up",
+      "plan": {
+        "setCount": 1,
+        "defaults": { "prescriptionNote": "AMAP" },
+        "overrides": []
+      }
+    }
   ]
 }
 ```
@@ -267,9 +288,14 @@ Request：
 驗證：
 
 - `name` 非空；`exercises` 至少 1 筆
-- `targetSets` 正整數
-- `targetReps` 與 `targetPrescriptionNote` **至少一個存在**；`targetReps` 若有值需為正整數
-- `targetRpe` 選填，1–10
+- `plan.setCount` 為正整數；建立 exactly `1..setCount` 個 effective planned positions
+- `plan.defaults.reps` 與 `plan.defaults.prescriptionNote` **恰好一個存在**；reps 為正整數，note trim 後非空
+- `plan.defaults.load` 選填且需 `>= 0`；任何 default/override load 存在時，`plan.defaults.unit` 必填且只能是 `kg` 或 `lb`
+- `plan.defaults.unit` 是整個 WorkoutExercise 的 planned unit；override 不接受 `unit`
+- default/override `rpe` 選填，範圍 1–10
+- `overrides[].position` 必須唯一且介於 `1..setCount`
+- 一筆 override 至少包含 `reps`、`prescriptionNote`、`load`、`rpe` 之一；若覆寫 prescription，`reps` 與 `prescriptionNote` 恰好一個存在
+- override 欄位省略或為 null 都代表 inheritance/clear-override；null **不**代表 explicit no-target。Response 省略 inherited properties，空 override row 必須移除
 
 Service 於單一 transaction 內：find-or-create exercises → 建 workouts → 依陣列順序建 workout_exercises（`position` 由 server 給定）。
 
@@ -284,21 +310,32 @@ Response `201`：
       "workoutExerciseId": "...",
       "exerciseId": "...",
       "name": "Back Squat",
-      "plan": { "sets": 4, "reps": 5, "rpe": 8 },
+      "plan": {
+        "setCount": 5,
+        "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+        "overrides": [
+          { "position": 3, "reps": 8 },
+          { "position": 5, "load": 90, "rpe": 9 }
+        ]
+      },
       "position": 1
     },
     {
       "workoutExerciseId": "...",
       "exerciseId": "...",
       "name": "Push Up",
-      "plan": { "sets": 1, "prescriptionNote": "AMAP" },
+      "plan": {
+        "setCount": 1,
+        "defaults": { "prescriptionNote": "AMAP" },
+        "overrides": []
+      },
       "position": 2
     }
   ]
 }
 ```
 
-**`plan` 一律是巢狀物件**，不攤平成 target* 欄位。這有助於未來做 additive evolution，但不保證 planned-set 支援可以在不改變 contract 的情況下完成；最終相容策略待 architecture session 決定。
+Coach-facing Workout responses return authoring metadata (`defaults + overrides`) so future template editing can preserve inheritance. They do not replace this with expanded rows. Array order still determines exercise `position`; planned `overrides[].position` is a different ordinal inside that exercise.
 
 ### GET /workouts — Coach only
 
@@ -345,7 +382,7 @@ Service 層檢查（依序）：
 1. workout 存在、未封存、且 `workout.coachId == caller.id` → 否則 404
 2. `athleteIds` 非空、無重複；**每一個** athleteId 都有 `CoachAthlete(caller, athleteId)` 關係 → 任一不符回 `403 FORBIDDEN`（全有全無，不做部分成功）
 
-通過後於 **同一 transaction** 內，對每個 athlete：建立一筆 `scheduled_workouts` → 複製 snapshot exercises（含 `exercise_name` 與所有 target 欄位）。
+通過後先 deterministic resolve 每個 template exercise 的 defaults + sparse overrides，得到 exactly `1..setCount` effective positions。於 **同一 transaction** 內，對每個 athlete：建立一筆 `scheduled_workouts` → 建立 snapshot exercise（含 frozen `exercise_name` 與 planned unit）→ 建立完整 resolved `ScheduledWorkoutPlannedSet` rows。每位 athlete 都有自己的 snapshot row IDs。
 
 **API 是 batch，資料是 atomic**：一筆 ScheduledWorkout = 一個 athlete 的一次排程。athleteIds 陣列不落地。
 
@@ -364,7 +401,15 @@ Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapsh
         "scheduledWorkoutExerciseId": "...",
         "exerciseId": "...",
         "name": "Back Squat",
-        "plan": { "sets": 4, "reps": 5, "rpe": 8 },
+        "plan": {
+          "sets": [
+            { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 2, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 3, "reps": 8, "load": 80, "unit": "kg", "rpe": 8 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 4, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 5, "reps": 10, "load": 90, "unit": "kg", "rpe": 9 }
+          ]
+        },
         "position": 1
       }
     ]
@@ -372,7 +417,7 @@ Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapsh
 ]
 ```
 
-`exercises[].plan` 與 `POST /workouts` 回應同形狀（巢狀物件；`targetPrescriptionNote` 類型的處方走 `plan.prescriptionNote`，此時 `plan.reps` 省略）— 見 §3.3。
+Coach template responses use numeric `plan.setCount`; scheduled responses use `exercises[].plan.sets` as the ordered frozen effective array. Every planned set has exactly one of `reps` or `prescriptionNote`; `load` and `unit` are both present or both omitted.
 
 **V0.1 不做 (workoutId, athleteId, scheduledDate) 去重**：同一 workout 可合法地在同一天排給同一 athlete 兩次以上（尚無 time-of-day/session slot 概念）；意外重複送出（idempotency）留待未來處理，本次不引入 unique constraint 或 409。
 
@@ -428,7 +473,13 @@ Response `200`（陣列，每筆為一個 ScheduledWorkout 摘要）：
         "scheduledWorkoutExerciseId": "...",
         "exerciseId": "...",
         "name": "Back Squat",
-        "plan": { "sets": 4, "reps": 5, "rpe": 8 },
+        "plan": {
+          "sets": [
+            { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 2, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 3, "reps": 8, "load": 80, "unit": "kg", "rpe": 8 }
+          ]
+        },
         "position": 1
       }
     ],
@@ -439,7 +490,7 @@ Response `200`（陣列，每筆為一個 ScheduledWorkout 摘要）：
 
 `session` 非 null 時代表已開始/完成，前端據此顯示 Start / Resume / Done。
 
-**注意：**行動端記錄 SetLog 用的是 `scheduledWorkoutExerciseId`，不是 `exerciseId`。
+**注意：**行動端記錄 normal SetLog 同時送 active `scheduledWorkoutExerciseId` 與該 target 的 `scheduledWorkoutPlannedSetId`，不是 `exerciseId`。Extra SetLog 沒有 planned-set ID。
 
 ---
 
@@ -485,16 +536,23 @@ Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含
     {
       "scheduledWorkoutExerciseId": "...",
       "name": "Back Squat",
-      "plan": { "sets": 4, "reps": 5, "rpe": 8 },
+      "plan": {
+        "sets": [
+          { "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "position": 1, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 },
+          { "scheduledWorkoutPlannedSetId": "22222222-2222-4222-8222-222222222222", "position": 2, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 },
+          { "scheduledWorkoutPlannedSetId": "33333333-3333-4333-8333-333333333333", "position": 3, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 }
+        ]
+      },
       "setLogs": [
-        { "id": "...", "setNumber": 1, "load": 100, "unit": "kg", "reps": 5, "rpe": 7, "loggedByUserId": "..." }
+        { "id": "...", "kind": "PLANNED", "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "plannedPosition": 1, "setNumber": 1, "load": 100, "unit": "kg", "reps": 5, "rpe": 7, "loggedByUserId": "..." },
+        { "id": "...", "kind": "EXTRA", "setNumber": 4, "load": 90, "unit": "kg", "reps": 5, "rpe": 8, "loggedByUserId": "..." }
       ]
     }
   ]
 }
 ```
 
-`plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。
+`plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
 
 授權：athlete 本人或 connected coach，其他人 `404`。
 
@@ -517,6 +575,8 @@ Request（有負重）：
 ```json
 {
   "scheduledWorkoutExerciseId": "...",
+  "kind": "PLANNED",
+  "scheduledWorkoutPlannedSetId": "...",
   "load": 100,
   "unit": "kg",
   "reps": 5,
@@ -529,7 +589,22 @@ Request（bodyweight，如 push-up）：
 ```json
 {
   "scheduledWorkoutExerciseId": "...",
+  "kind": "PLANNED",
+  "scheduledWorkoutPlannedSetId": "...",
   "reps": 12,
+  "rpe": 8
+}
+```
+
+Request（extra actual set）：
+
+```json
+{
+  "scheduledWorkoutExerciseId": "...",
+  "kind": "EXTRA",
+  "load": 90,
+  "unit": "kg",
+  "reps": 5,
   "rpe": 8
 }
 ```
@@ -539,18 +614,24 @@ Service 層規則：
 1. session 存在且 ACTIVE → 否則 404 / 409
 2. caller 是該 session 的 athlete 或 connected coach → 否則 404
 3. `scheduledWorkoutExerciseId` 屬於該 session 的 scheduled_workout → 否則 `400 INVALID_ARGUMENT`
-4. 驗證：
+4. `kind` 必須為 `PLANNED` 或 `EXTRA`：
+    - `PLANNED` 必須提供 `scheduledWorkoutPlannedSetId`，且該 planned set 屬於同一個 `scheduledWorkoutExerciseId`；同一 session 不得已有 SetLog 指向該 planned set
+    - `EXTRA` 必須省略 `scheduledWorkoutPlannedSetId`；extra 不受 prescribed set count 限制
+5. 驗證 actual fields：
     - `reps >= 1` 整數，**必填**（V0.1 僅支援 reps-based logging）
     - `load` **選填**；有值時 `load >= 0` 且 `unit` 必填 ∈ {kg, lb}；`load` 為 null 時 `unit` 必須也是 null
     - `rpe` 選填，1–10
-5. `setNumber` 由 server 計算（見下），不信任 client
-6. `loggedByUserId = caller.id`
+6. `setNumber` 由 server 計算（見下），只代表同 session + exercise 的 actual logging chronology，不信任 client，也不等同 planned position
+7. `loggedByUserId = caller.id`
 
 Response `201`：完整 SetLog，欄位固定為：
 
 ```json
 {
   "id": "...",
+  "kind": "PLANNED",
+  "scheduledWorkoutPlannedSetId": "...",
+  "plannedPosition": 1,
   "setNumber": 1,
   "load": 100,
   "unit": "kg",
@@ -560,7 +641,7 @@ Response `201`：完整 SetLog，欄位固定為：
 }
 ```
 
-僅此七欄（`load`/`unit`/`rpe` 為選填，省略時不出現）。不回傳 `createdAt`、`sessionId`、`scheduledWorkoutExerciseId` — 呼叫端已知道這三者（分別來自 URL 與 request body），不重複於 response。
+EXTRA response 回傳 `kind: "EXTRA"`，省略 `scheduledWorkoutPlannedSetId` 與 `plannedPosition`。`load`/`unit`/`rpe` 仍為選填。不回傳 `createdAt`、`sessionId`、`scheduledWorkoutExerciseId` — 呼叫端已知道這三者（分別來自 URL 與 request body），不重複於 response。
 
 ### setNumber 併發處理
 
@@ -578,13 +659,15 @@ Application 端：於 transaction 內取 `MAX(set_number) + 1` 後 insert；撞�
 
 unique constraint 是正確性底線，不能只靠應用層計數。
 
+Normal SetLog insert 另外受 partial unique `(session_id, scheduled_workout_planned_set_id) WHERE ... IS NOT NULL` 保護。兩個 request 同時 claim 同一 planned set 時，這不是 setNumber race，不做上述 retry；回 `409 CONFLICT`。不同 planned sets 同時 logging 若只撞 setNumber unique，保留同一 planned-set ID 重新計算 chronology 後 retry。EXTRA 的 planned-set ID 為 null，不受 partial unique 限制。
+
 ### PATCH /set-logs/{setLogId}
 
-部分更新。只允許出現的欄位被更新；未提及欄位不動。更新後仍須滿足 load/unit 配對規則。授權同上，且 session 必須 ACTIVE。
+部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rpe`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上，且 session 必須 ACTIVE。
 
 ### DELETE /set-logs/{setLogId}
 
-對應「刪掉上一組」。授權同上，session 必須 ACTIVE。
+對應「刪掉上一組」。授權同上，session 必須 ACTIVE。刪除 normal log 後該 planned set 可再被 logging；新 SetLog 取得新的 server chronology `setNumber`，不重用被刪除的 number。
 
 ---
 
@@ -611,7 +694,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 
 映射規則（在 Next.js 層做，再轉打 Go）：
 
-- **LLM 輸出不含任何 ID**（它不可能知道 DB 的 UUID，要求它輸出只會得到幻覺）。Next.js 層注入 client 端「目前 active exercise」的 `scheduledWorkoutExerciseId` 後才打 Go
+- **LLM 輸出不含任何 ID**（它不可能知道 DB 的 UUID，要求它輸出只會得到幻覺）。Next.js 層注入 client 端目前 active exercise 的 `scheduledWorkoutExerciseId`，以及選中的 `scheduledWorkoutPlannedSetId` 或 explicit EXTRA kind，才打 Go
 - **語音永遠只作用於當前 active session + active exercise**。語句中出現的動作名稱或人名（「Kevin 深蹲…」）視為自然冗餘，一律忽略、不做 name→entity 匹配；名稱解析屬 future extension
 - `CREATE_SET_LOG` → 注入 ID 後 `POST /sessions/{id}/set-logs`
 - `UPDATE_PREVIOUS_SET` → 前端持有「最近一筆 setLogId」→ `PATCH /set-logs/{id}`
@@ -643,9 +726,9 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 
 ---
 
-# 5. 資料表
+# 5. Target conceptual tables
 
-> 下列為目前已實作的 schema shape，不是 V0.6 planned-set semantics 的最終 storage design。不得僅因這份文件的產品決策而修改 migration 或推定欄位/關聯。
+> 下列為 approved target schema shape；目前 `0001_init_schema` 仍是 scalar implementation。必須等獨立 migration phase 核准後，以 additive migration + backfill 實作，不得修改既有 migration。
 
 ```sql
 users(id, firebase_uid unique, name, role, created_at)
@@ -659,27 +742,49 @@ exercises(id, name, owner_coach_id null, created_at)
 workouts(id, coach_id, name, archived_at null, created_at)
 
 workout_exercises(id, workout_id, exercise_id,
-                  target_sets, target_reps null, target_prescription_note null,
+                  target_sets,
+                  target_reps null, target_prescription_note null,
+                  target_load null, target_load_unit null,
                   target_rpe null, position)
-  -- CHECK (target_reps IS NOT NULL OR target_prescription_note IS NOT NULL)
+  -- existing scalar target fields are the authoring defaults
+  -- CHECK exactly one of target_reps/target_prescription_note is present
+  -- target_load_unit in ('kg','lb'); required when any default/override load exists
   -- UNIQUE (workout_id, position)
+
+workout_exercise_set_overrides(id, workout_exercise_id, planned_position,
+                               reps_override null, prescription_note_override null,
+                               load_override null, rpe_override null)
+  -- sparse authoring rows; nullable column means inherit, never explicit-none
+  -- at least one override value must be non-null
+  -- reps_override/prescription_note_override cannot both be non-null
+  -- UNIQUE (workout_exercise_id, planned_position)
+  -- service validates planned_position in 1..workout_exercises.target_sets
 
 scheduled_workouts(id, workout_id, coach_id, athlete_id, scheduled_date, created_at)
 
 scheduled_workout_exercises(id, scheduled_workout_id, exercise_id,
-                            exercise_name, target_sets,
-                            target_reps null, target_prescription_note null,
-                            target_rpe null, position)
-  -- prescription snapshot；顯示一律讀本表，exercise_id 僅供 analytics 關聯
+                            exercise_name, target_load_unit null, position)
+  -- frozen exercise snapshot parent; exercise_id 僅供 analytics 關聯
   -- UNIQUE (scheduled_workout_id, position)
+
+scheduled_workout_planned_sets(id, scheduled_workout_exercise_id, planned_position,
+                               target_reps null, target_prescription_note null,
+                               target_load null, target_rpe null)
+  -- fully resolved frozen values; no inheritance/override metadata
+  -- exactly one of target_reps/target_prescription_note is present
+  -- UNIQUE (scheduled_workout_exercise_id, planned_position)
 
 workout_sessions(id, scheduled_workout_id unique, athlete_id,
                  status, started_at, completed_at)
 
-set_logs(id, session_id, scheduled_workout_exercise_id, set_number,
+set_logs(id, session_id, scheduled_workout_exercise_id,
+         scheduled_workout_planned_set_id null, set_number,
          load numeric null, unit text null, reps integer not null, rpe numeric null,
          logged_by_user_id, created_at)
   -- UNIQUE (session_id, scheduled_workout_exercise_id, set_number)
+  -- UNIQUE (session_id, scheduled_workout_planned_set_id)
+  --   WHERE scheduled_workout_planned_set_id IS NOT NULL
+  -- planned-set FK null means EXTRA; non-null means PLANNED
   -- CHECK ((load IS NULL) = (unit IS NULL))   -- load 與 unit 同進退
   -- reps not null：V0.1 僅支援 reps-based logging
 ```
@@ -688,7 +793,11 @@ set_logs(id, session_id, scheduled_workout_exercise_id, set_number,
 
 - `workout_sessions.scheduled_workout_id` unique → 一個排程一個 session，start 冪等靠 constraint 兜底
 - `set_logs` 三欄 unique 是 setNumber 正確性底線
+- planned-set partial unique 保證同一 session 不能對同一 frozen target 建兩筆 normal actual logs；extra logs 因 reference 為 null 不受此限制
+- service 必須驗證 `scheduled_workout_planned_set_id` 屬於同一個 `scheduled_workout_exercise_id` 與 session snapshot
 - `set_logs` 的 CHECK 保證不會出現「有重量沒單位」或「有單位沒重量」的紀錄
+
+Migration 前必須先查現有 `workout_exercises` 與 `scheduled_workout_exercises` 是否有 `target_reps IS NOT NULL AND target_prescription_note IS NOT NULL`。若結果非 0，停止 backfill 並人工檢查；不得建立 `reps wins` 或其他永久 precedence rule。
 
 ---
 
@@ -710,16 +819,16 @@ set_logs(id, session_id, scheduled_workout_exercise_id, set_number,
 
 ---
 
-# 7. Future Architecture（只記錄，V0.1 不實作）
+# 7. Approved architecture and future extensions
 
 > 原則：V0.1 schema 要做到的是「未來不會卡死」，不是「現在就支援所有未來功能」。
 > 
 
-## 7.1 Planned-set prescription — approved semantics, design pending
+## 7.1 Planned-set prescription — approved design, implementation pending
 
-V0.1 product behavior now requires ordered planned-set positions, uniform defaults, individual overrides, prescribed load/unit, and planned-versus-actual alignment. For example, `100×5@7 / 105×5@8 / 110×3@9` must be representable as three distinct effective planned positions.
+V0.1 uses the hybrid design defined in §2 and §5: template authoring stores exercise defaults plus sparse overrides; scheduling persists fully resolved frozen planned-set rows; normal SetLogs explicitly reference one frozen row and extra SetLogs have a null reference. Skipped rows and explicit-none overrides are not part of V0.1. One planned load unit belongs to each WorkoutExercise.
 
-Possible implementations include normalized planned-set rows, structured values, or another relational representation. This contract deliberately does **not** choose one. In particular, do not assume `plan.sets` will become an array or that a future SetLog must use a particular foreign key before the architecture session defines compatibility, migration, and execution rules.
+This contract deliberately revises the existing `/api/v1` scalar shapes rather than adding `/api/v2`. Frontend, backend, and migration must land as a coordinated controlled-pilot change. The implementation must not introduce dual-read or dual-write compatibility branches.
 
 ## 7.2 Time/distance-based actual metrics
 

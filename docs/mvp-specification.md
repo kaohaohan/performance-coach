@@ -180,12 +180,12 @@ Refreshing the page does not remove the workout or the schedule.
 - Workout Library (`/coach/workouts`) remains the secondary reusable-template tool for creating templates in advance, viewing saved templates, and later reusing them from Calendar; it is not a prerequisite for Calendar scheduling.
 - Full workout creation on mobile is not required.
 - **Partial failure / retry:** `POST /api/v1/workouts` and `POST /api/v1/scheduled-workouts` are separate operations and are not atomic together. If Workout creation succeeds but scheduling fails, frontend preserves the created `workout.id`, selected date, selected Athletes, and builder state; reports “Workout was created, but it was not assigned”; and offers an explicit retry-assignment action. Retry calls only `POST /api/v1/scheduled-workouts` with the existing `workout.id`, never `POST /api/v1/workouts` again. Frontend must not blindly auto-retry after an ambiguous network failure: scheduled-workouts has no idempotency key and duplicate scheduling is structurally possible, so Coach explicitly retries after reviewing current Calendar state.
-- **Prescription and programming scope:** V0.1 supports the planned-set semantics defined below: ordered planned positions, a uniform shorthand/default, individual overrides, planned reps or text prescription, planned load with unit where present, and planned RPE. Percentages, velocity, tempo, rest prescription, supersets, circuits, arbitrary custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture remain deferred. The storage and API representation for planned sets remains an architecture-design decision; do not infer one from this product specification.
+- **Prescription and programming scope:** V0.1 supports the planned-set semantics defined below: ordered planned positions, a uniform shorthand/default, individual overrides, planned reps or text prescription, planned load with one unit per WorkoutExercise, and planned RPE. Template authoring stores defaults plus sparse overrides; scheduling stores fully resolved frozen planned-set rows; normal SetLogs explicitly associate with a frozen planned set. Percentages, velocity, tempo, rest prescription, supersets, circuits, arbitrary custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture remain deferred.
 - **Backend implementation is unchanged by this framing**: the Calendar composes existing `GET /api/v1/exercises?q=`, `POST /api/v1/workouts`, and `POST /api/v1/scheduled-workouts`; it is not a new domain object or transactional endpoint (see `go-backend-api-contract-v0.1.md` §7.5). Future one-off scheduled Workouts, a “Save as template” toggle, and ephemeral prescriptions are explicitly deferred.
 
 ### **V0.1 planned-set prescription and Builder behavior**
 
-This is a product/domain decision, not a commitment to a particular database table, JSON shape, desktop matrix, or mobile card layout.
+The product semantics and architecture are approved. Exact physical migration code remains pending implementation; canonical wire and conceptual schema shapes live in the API and database documents. No desktop matrix or mobile card layout is required.
 
 The Calendar remains the primary Coach programming workspace:
 
@@ -208,7 +208,7 @@ For each prescribed exercise:
 2. `Sets = N` establishes exactly `N` effective planned set positions, ordered `1..N`.
 3. The default editing mode is **FAST / UNIFORM**: one reps value, one load plus unit, and one RPE value may each apply to all `N` positions. The Coach is not required to type `N` repeated values for a uniform prescription.
 4. Each uniform value is an exercise-level **default** for its own property. A planned position without an explicit override for that property **inherits** the current default.
-5. The Coach may then enter a per-set customization mode and override an individual property for an individual planned position. Overrides are property-specific, not an all-or-nothing set object.
+5. The Coach may then enter a per-set customization mode and override an individual property for an individual planned position. Overrides are property-specific, not an all-or-nothing set object. V0.1 has only two states for an overrideable property: inherited or explicit value; it does not support an explicit "no target" override.
 6. When the Coach begins editing an inherited property on a position, the control is prefilled with that position's current **effective** value, not left blank. Changing that value creates an explicit override.
 7. Changing a default updates every position still inheriting that property; existing explicit overrides remain unchanged. Clearing an individual override returns that property to inheriting the current default. The exact clear-control UI is not specified.
 
@@ -289,15 +289,16 @@ Effective Set 3 reps: 12 inherited
 - **Cardinality and ordering:** an exercise prescribed for `N` sets has exactly `N` effective planned positions, each with a stable ordinal `1..N`. Planned-set position is distinct from exercise order inside a Workout.
 - **Authoring model:** a Coach authors exercise-level defaults plus sparse, property-specific overrides. A default, inherited value, and explicit override are distinct authoring states even when they currently resolve to the same visible value.
 - **Uniform shorthand and inheritance:** defaults are semantically applied to every planned position that has no override for that property. Uniform work therefore needs one entry per default, not N repeated entries.
-- **Per-set override:** an individual position may independently override its reps or text instruction, load and unit, and/or RPE. Changing default reps must not affect a position with a reps override; it may still inherit load and RPE.
+- **Per-set override:** an individual position may independently override its reps or text instruction, numeric load, and/or RPE. Changing default reps must not affect a position with a reps override; it may still inherit load and RPE. V0.1 does not support an explicit-none override: clearing an override always resumes inheritance.
 - **Edit prefill and clear:** opening an inherited property for editing begins with its effective value. Editing creates an override; clearing that override restores inheritance from the current default.
 - **Effective prescription:** at save/build and at scheduling, every planned position has a deterministic resolved effective value where applicable. Defaults and sparse overrides are authoring semantics; the effective plan is the resolved prescription used for snapshot and execution.
 - **Text prescriptions:** an effective position may use the existing text/non-numeric prescription capability (for example `AMAP`, `30 sec`, or `10–12`) instead of numeric reps. For example, a default note of `AMAP` produces `N` positions that inherit `AMAP` until a position explicitly overrides its note. This preserves current prescription expressiveness; it does not by itself add time/distance actual logging.
-- **Load:** prescribed load is planned data, separate from actual load. When a planned load is present, its unit travels with it; V0.1 units follow the existing `kg` / `lb` model. A load override must preserve a valid load/unit pair; mixed-unit behavior inside one exercise remains an architecture decision.
-- **Planned versus actual:** an actual SetLog records what happened and never overwrites its plan. Session execution and review must be able to associate actual performance with the corresponding frozen planned-set position.
+- **Load:** prescribed load is planned data, separate from actual load. Each WorkoutExercise has at most one planned load unit (`kg` or `lb`), shared by its default load and all numeric per-position load overrides. Mixed planned units inside one WorkoutExercise are not supported in V0.1. Changing the planned unit changes the unit for every effective planned load in that template exercise; the system performs no numeric conversion. Actual SetLog load/unit remain independent actual facts.
+- **Planned versus actual:** an actual SetLog records what happened and never overwrites its plan. A normal SetLog explicitly associates with the corresponding frozen planned-set row; `setNumber` remains the server-assigned actual logging chronology and is not the association key.
 - **Snapshot:** scheduling freezes the fully effective planned prescription for every position. Later edits to a reusable Workout template must not alter an already ScheduledWorkout.
 - **Multi-athlete snapshot:** one Workout template and one batch scheduling request still create independent frozen ScheduledWorkout snapshots for every selected Athlete.
 - **Athlete execution:** Athlete-facing execution shows the frozen effective target for each planned position. Whether a value originated as a default, inheritance, or override is a Coach authoring concern and is not required in the Athlete view.
+- **Extra and incomplete work:** V0.1 allows extra actual SetLogs with no planned-set association. Review identifies them as EXTRA and shows no planned target. Planned positions with no SetLog remain incomplete; V0.1 does not persist explicit skipped rows.
 
 Example — planned versus actual:
 
@@ -308,7 +309,7 @@ Actual Set 4:  7 reps / 85 kg / RPE 9
 
 Both values must remain independently representable and understandable during execution and review.
 
-The later schema/API architecture session must decide the storage representation, API compatibility strategy, exact SetLog-to-planned-position reference, and behavior for skipped or extra actual sets. Those decisions are intentionally not made here.
+V0.1 uses a hybrid representation: Workout templates store exercise defaults plus sparse position overrides, while ScheduledWorkout snapshots store fully resolved planned-set rows. The controlled pilot updates the existing `/api/v1` contract and frontend/backend together; it does not introduce `/api/v2`, dual-read, or dual-write compatibility layers.
 
 ---
 
@@ -419,12 +420,16 @@ The system creates a SetLog associated with:
 - Correct athlete
 - Correct WorkoutSession
 - Correct exercise
+- The selected frozen planned-set position for normal work, or the explicit EXTRA concept
 - User who recorded the set
 
 Example:
 
 ```json
 {
+  "kind": "PLANNED",
+  "scheduledWorkoutPlannedSetId": "...",
+  "plannedPosition": 1,
   "setNumber": 1,
   "load": 100,
   "unit": "kg",
@@ -440,6 +445,8 @@ Example:
 - Coach can manually record a set for a connected athlete.
 - SetLog belongs to the correct WorkoutSession.
 - SetLog belongs to the correct exercise.
+- A normal SetLog belongs to the selected frozen planned set; an EXTRA SetLog has no planned target.
+- `setNumber` is server-assigned actual chronology, not the planned-set association.
 - `loggedByUserId` is recorded.
 - Set persists after refresh.
 - Invalid values are rejected.
@@ -666,7 +673,7 @@ Voice is an optional MVP experiment and must not block shipment of the core loop
 Stretch acceptance:
 
 1. During an active session and active exercise, the user records a SetLog by voice.
-2. The parsed command contains training data only; application context supplies the active `scheduledWorkoutExerciseId` before calling the backend SetLog endpoint.
+2. The parsed command contains training data only; application context supplies the active `scheduledWorkoutExerciseId` and selected `scheduledWorkoutPlannedSetId`, or explicitly chooses EXTRA, before calling the backend SetLog endpoint.
 3. The user can correct the most recent SetLog by voice.
 4. Invalid or ambiguous voice output does not mutate persistent data.
 

@@ -1,6 +1,6 @@
 # DontWorkout — Database Schema & Relationships
 
-Status: **Current V0.1 schema + approved planned-set semantics pending architecture design**
+Status: **Current scalar schema + approved V0.1 planned-set target schema; migration pending**
 
 Purpose: Define the PostgreSQL data model, table responsibilities, foreign keys, cardinality, and integrity constraints for the MVP. Endpoint behavior stays in the Go Backend API Contract.
 
@@ -12,10 +12,11 @@ User (Coach) ──< Workout ──< WorkoutExercise >── Exercise
       └──< CoachAthlete >── User (Athlete)
 
 Workout
+  ├──< WorkoutExercise ──< WorkoutExerciseSetOverride
   │
-  └──< ScheduledWorkout ──< ScheduledWorkoutExercise
-                                  │
-                                  └──< SetLog
+  └──< ScheduledWorkout ──< ScheduledWorkoutExercise ──< ScheduledWorkoutPlannedSet
+                                  │                           │
+                                  └──────────────< SetLog >────┘
                            │
                            └──1:1── WorkoutSession
 ```
@@ -31,6 +32,7 @@ users
 
 workouts
   └──< workout_exercises >── exercises
+         └──< workout_exercise_set_overrides
   └──< scheduled_workouts
 
 scheduled_workouts
@@ -41,7 +43,11 @@ workout_sessions
   └──< set_logs
 
 scheduled_workout_exercises
+  └──< scheduled_workout_planned_sets
   └──< set_logs
+
+scheduled_workout_planned_sets
+  └──< set_logs (nullable reference; null = EXTRA)
 ```
 
 ## 2. Table Summary
@@ -52,15 +58,17 @@ scheduled_workout_exercises
 | `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Defines which coaches may access and operate on which athletes. |
 | `exercises` | `id`, `name`, `owner_coach_id` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
-| `workout_exercises` | `workout_id`, `exercise_id`, target fields, `position` | Workout N:N Exercise through junction entity | Prescription of an exercise inside a workout template. |
+| `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults for one template exercise. |
+| `workout_exercise_set_overrides` | `workout_exercise_id`, `planned_position`, nullable override values | WorkoutExercise 1:N | Sparse, property-specific explicit values; absent property means inherit. |
 | `scheduled_workouts` | `workout_id`, `coach_id`, `athlete_id`, `scheduled_date` | Workout 1:N; Athlete 1:N | One concrete workout occurrence scheduled to one athlete on one date. |
-| `scheduled_workout_exercises` | `scheduled_workout_id`, `exercise_id`, `exercise_name`, target fields, `position` | ScheduledWorkout 1:N | Frozen prescription snapshot created at scheduling time. |
+| `scheduled_workout_exercises` | `scheduled_workout_id`, `exercise_id`, `exercise_name`, planned load unit, `position` | ScheduledWorkout 1:N | Frozen exercise identity/name/unit snapshot parent. |
+| `scheduled_workout_planned_sets` | `scheduled_workout_exercise_id`, `planned_position`, resolved target fields | ScheduledWorkoutExercise 1:N | Fully resolved immutable planned positions used by Athlete execution. |
 | `workout_sessions` | `scheduled_workout_id`, `athlete_id`, `status`, timestamps | ScheduledWorkout 1:0..1 | Actual training occurrence. One scheduled workout can create at most one session. |
-| `set_logs` | `session_id`, `scheduled_workout_exercise_id`, `set_number`, `load`, `unit`, `reps`, `rpe`, `logged_by_user_id` | Session 1:N; ScheduledWorkoutExercise 1:N | Actual performance facts recorded during the session. |
+| `set_logs` | `session_id`, `scheduled_workout_exercise_id`, optional `scheduled_workout_planned_set_id`, `set_number`, actual fields | Session 1:N; ScheduledWorkoutExercise 1:N; optional PlannedSet link | Actual performance. Non-null planned-set link = PLANNED; null link = EXTRA. |
 
-The target-field rows above describe the current scalar schema. They do not yet represent the approved uniform-first planned-set behavior defined in §5.1.
+The rows above describe the approved target responsibilities. The checked-in `0001_init_schema` remains scalar; §3 records that current shape and §3.1 records the target shape for a future approved migration.
 
-## 3. PostgreSQL Schema Shape
+## 3. Current implemented PostgreSQL shape
 
 ```sql
 users(
@@ -152,6 +160,88 @@ set_logs(
 )
 ```
 
+### 3.1 Approved target planned-set shape
+
+The implementation migration must be additive and must not rewrite `0001_init_schema`. Exact migration names may differ, but these entities and semantics are canonical:
+
+```sql
+workout_exercises(
+  id uuid primary key,
+  workout_id uuid not null references workouts(id),
+  exercise_id uuid not null references exercises(id),
+  target_sets integer not null,
+  target_reps integer null,
+  target_prescription_note text null,
+  target_load numeric null,
+  target_load_unit text null,
+  target_rpe numeric null,
+  position integer not null,
+  unique (workout_id, position),
+  check (exactly one of target_reps/target_prescription_note is non-null),
+  check (target_load is null or target_load_unit is non-null),
+  check (target_load_unit is null or target_load_unit in ('kg', 'lb'))
+)
+
+workout_exercise_set_overrides(
+  id uuid primary key,
+  workout_exercise_id uuid not null references workout_exercises(id),
+  planned_position integer not null,
+  reps_override integer null,
+  prescription_note_override text null,
+  load_override numeric null,
+  rpe_override numeric null,
+  unique (workout_exercise_id, planned_position),
+  check (planned_position > 0),
+  check (reps_override and prescription_note_override are not both non-null),
+  check (at least one override value is non-null)
+)
+
+scheduled_workout_exercises(
+  id uuid primary key,
+  scheduled_workout_id uuid not null references scheduled_workouts(id),
+  exercise_id uuid not null references exercises(id),
+  exercise_name text not null,
+  target_load_unit text null,
+  position integer not null,
+  unique (scheduled_workout_id, position)
+)
+
+scheduled_workout_planned_sets(
+  id uuid primary key,
+  scheduled_workout_exercise_id uuid not null references scheduled_workout_exercises(id),
+  planned_position integer not null,
+  target_reps integer null,
+  target_prescription_note text null,
+  target_load numeric null,
+  target_rpe numeric null,
+  unique (scheduled_workout_exercise_id, planned_position),
+  check (exactly one of target_reps/target_prescription_note is non-null)
+)
+
+set_logs(
+  ...existing actual fields...,
+  scheduled_workout_planned_set_id uuid null references scheduled_workout_planned_sets(id),
+  unique (session_id, scheduled_workout_exercise_id, set_number)
+)
+
+create unique index one_actual_per_planned_set
+  on set_logs(session_id, scheduled_workout_planned_set_id)
+  where scheduled_workout_planned_set_id is not null;
+```
+
+Existing `workout_exercises.target_reps`, `target_prescription_note`, and `target_rpe` become authoring defaults; they do not need duplicate `default_*` columns. V0.1 override storage has only two states: a null override column means inherit; a non-null override column means explicit value. It does not encode explicit-none. The service validates override position `<= target_sets`, requires the parent `target_load_unit` when any load override exists, and validates that a SetLog's planned-set reference belongs to the same snapshot exercise and session. A null SetLog planned-set reference is the formal EXTRA representation.
+
+### 3.2 Approved conceptual migration/backfill
+
+1. Before schema mutation, query both current template and scheduled snapshot tables for rows where `target_reps IS NOT NULL AND target_prescription_note IS NOT NULL`.
+2. If either query returns any row, stop and inspect those rows manually. There is no `reps wins` or text-wins precedence rule.
+3. Add new columns/tables/FKs without rewriting `0001_init_schema`.
+4. Treat every existing template scalar prescription as WorkoutExercise defaults with no override rows. Existing `target_sets`, reps-or-text, and RPE remain in place; add planned load/unit as absent.
+5. For each existing `scheduled_workout_exercises` row, generate exactly `target_sets` frozen planned rows numbered `1..target_sets`, copying the current scalar reps-or-text/RPE into every row.
+6. For each existing SetLog, link it to the frozen planned row whose position equals `set_number` when that position exists. Existing logs beyond the prescribed count remain null-linked EXTRA rows.
+7. Validate cardinality, ordering, association, and uniqueness before adding final constraints.
+8. Deploy the revised `/api/v1` backend and frontend as one controlled coordinated change. Do not maintain dual reads/writes. Removing deprecated scalar columns is a later cleanup only after the new path is verified.
+
 ## 4. Exercise Library Uniqueness
 
 System exercises and private coach exercises use separate partial unique indexes:
@@ -173,13 +263,13 @@ V0.1 rule: if a system exercise and requested name match after `lower(trim(name)
 > **Prescription can be ambiguous; actual performance must be structured.**
 > 
 
-`WorkoutExercise` is the template prescription.
+`WorkoutExercise` plus sparse `WorkoutExerciseSetOverride` rows is the editable template prescription.
 
-`ScheduledWorkoutExercise` is the frozen prescription snapshot for one athlete/date.
+`ScheduledWorkoutExercise` plus fully resolved `ScheduledWorkoutPlannedSet` rows is the frozen prescription snapshot for one athlete/date.
 
 `SetLog` is what actually happened during training.
 
-The current relationship aligns plan and actual at exercise level. The approved planned-set semantics in §5.1 require a later representation that can also align them by planned-set position.
+The current checked-in relationship aligns plan and actual only at exercise level. The approved target relationship aligns normal actuals by explicit frozen planned-set reference while preserving exercise context for both normal and extra SetLogs.
 
 Example:
 
@@ -202,20 +292,20 @@ SetLog #3: 105 kg × 5 @8
 SetLog #4: 110 kg × 4 @9
 ```
 
-Historical display always reads `exercise_name` and target fields from `scheduled_workout_exercises`. `exercise_id` remains only for analytics/cross-session exercise history. Renaming an Exercise later must not rewrite historical display.
+Historical display reads `exercise_name` and `target_load_unit` from `scheduled_workout_exercises`, and resolved targets from `scheduled_workout_planned_sets`. It never reads the live template for historical display. `exercise_id` remains only for analytics/cross-session exercise history. Renaming an Exercise later must not rewrite historical display.
 
-### 5.1 Approved planned-set semantics; storage representation pending
+### 5.1 Approved hybrid planned-set architecture
 
-The product now requires the following behavior, even though the current scalar schema above cannot yet persist it:
+The current scalar schema cannot yet persist these approved V0.1 rules:
 
 - `target sets = N` yields exactly `N` effective planned set positions, ordered `1..N`.
 - The **authoring model** contains exercise-level defaults plus sparse, property-specific per-position overrides. The Coach starts in a **uniform-first** editing mode: one reps value or text prescription, one load plus unit, and one RPE may apply to all `N` positions; uniform work must not require N repeated entries.
 - A position with no explicit override for a property inherits that property's current default. An individual position can override reps while still inheriting load and RPE; it is not an all-or-nothing override object. Planned-set position is distinct from the `position` field that orders exercises in a Workout.
-- Editing an inherited property begins with that position's current effective value. Changing it creates an override. Changing a default updates every position still inheriting that property, while explicit overrides remain unchanged. Clearing an override restores inheritance from the current default.
-- Every effective planned position can express numeric reps or an existing text prescription, optional planned load with `kg`/`lb` unit, and optional planned RPE. A default note such as `AMAP` can be inherited across positions and individually overridden; this does not add duration/time actual metrics. A load override must preserve a valid load/unit pair; mixed-unit behavior remains pending design.
+- Editing an inherited property begins with that position's current effective value. Changing it creates an override. Changing a default updates every position still inheriting that property, while explicit overrides remain unchanged. Clearing an override restores inheritance from the current default. There is no explicit-none override state in V0.1.
+- Every effective planned position can express numeric reps or an existing text prescription, optional planned load, and optional planned RPE. One `kg`/`lb` planned unit belongs to the entire WorkoutExercise; per-position rows override only numeric load. Mixed planned units inside one exercise and automatic conversion are not supported. Actual SetLog units remain independent actual facts.
 - The **effective planned prescription** resolves defaults and overrides deterministically for every planned position at save/build and scheduling time. The authoring model is distinct from this resolved plan.
-- Scheduling freezes each athlete's fully effective planned positions. Later template default or override edits never mutate a ScheduledWorkout snapshot.
-- SetLogs remain actual facts. Session execution and review must be able to relate actual performance to the corresponding frozen planned position without overwriting planned values. Athlete-facing targets show the effective frozen value and need not expose its authoring provenance.
+- Authoring persistence uses defaults on WorkoutExercise plus sparse override rows. Scheduling freezes each athlete's fully effective values into one normalized row per planned position. Later template edits never mutate a ScheduledWorkout snapshot.
+- Normal SetLogs explicitly reference the corresponding frozen planned row; `set_number` remains actual chronology. Extra SetLogs have a null reference and no target. Planned positions without SetLogs are incomplete; no explicit skipped rows are stored.
 
 Example:
 
@@ -224,15 +314,18 @@ Planned Set 4: 8 reps / 85 kg / RPE 8
 Actual Set 4:  7 reps / 85 kg / RPE 9
 ```
 
-This is a domain invariant, not a schema prescription. A later architecture session must choose whether storage uses normalized rows, structured values, or another relational design; it must also define migration/backfill, API compatibility, and skipped/extra actual-set behavior.
+The target representation is the normalized hybrid shape in §3.1. Because this is a controlled pilot, implementation revises the existing `/api/v1` contract and coordinates migration/backend/frontend; no V2, dual-read, or dual-write layer is approved.
 
 ## 6. Important Integrity Rules
 
 - `coach_athletes` prevents duplicate coach-athlete relationships through its composite primary key.
 - `workout_exercises (workout_id, position)` is unique so item order cannot collide inside one template.
 - `scheduled_workout_exercises (scheduled_workout_id, position)` is unique for the same reason in the frozen snapshot.
+- `workout_exercise_set_overrides (workout_exercise_id, planned_position)` is unique; service validation keeps positions within `1..target_sets`.
+- `scheduled_workout_planned_sets (scheduled_workout_exercise_id, planned_position)` is unique and represents the frozen ordered target.
 - `workout_sessions.scheduled_workout_id` is unique: one ScheduledWorkout creates at most one WorkoutSession.
 - `set_logs (session_id, scheduled_workout_exercise_id, set_number)` is unique: the database is the final correctness boundary for set numbering.
+- A partial unique index on `(session_id, scheduled_workout_planned_set_id)` prevents two normal actual logs from claiming one planned target; null references allow multiple extras.
 - Workout deletion is soft delete only in V0.1. Do not use `ON DELETE CASCADE` from `scheduled_workouts.workout_id` to Workout.
 - Authorization is enforced in the service layer; foreign keys and constraints enforce structural integrity, not application permissions.
 
@@ -251,13 +344,13 @@ Coach
 
 V0.1 SetLog is currently reps-based. Actual `load` and `unit` are nullable for bodyweight movements. Time/distance actual metrics remain future extensions; preserving a planned text prescription such as `30 sec` does not itself make duration an actual SetLog metric.
 
-Not implemented in the current schema: a representation of the approved planned-set semantics, polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
+Approved but not yet implemented in the current scalar schema: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association. Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
 
 ## 8. Future Extension Points
 
-### Planned-set storage representation
+### Deferred planned-set extensions
 
-The approved semantics require `100×5@7 / 105×5@8 / 110×3@9` to remain three ordered effective plans and to survive scheduling as a frozen athlete snapshot. `PlannedSet` rows are one possible implementation, but are not a decision in this document. Do not add a table, JSON column, array, foreign key, or migration until the architecture session selects the representation and SetLog alignment behavior.
+Explicit-none overrides, mixed planned units inside one WorkoutExercise, persisted skipped states/reasons, multiple replacement actuals for one planned target, and automatic unit conversion are deferred. They must not be added to the approved V0.1 migration without a new product decision.
 
 ### WorkoutItem
 
