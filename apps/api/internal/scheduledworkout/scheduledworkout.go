@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 )
 
 const dateLayout = "2006-01-02"
@@ -86,6 +87,12 @@ var ErrWorkoutNotFound = errors.New("scheduledworkout: workout not found or not 
 // whole batch is rejected when this occurs — no partial scheduling.
 var ErrAthletesNotConnected = errors.New("scheduledworkout: one or more athletes are not connected to caller")
 
+// ErrInvalidStoredPrescription indicates that a persisted Workout template no
+// longer satisfies the prescription domain rules. It is deliberately distinct
+// from ValidationError: the client did not submit this data, so handlers must
+// retain their generic 500 INTERNAL behavior rather than report 400.
+var ErrInvalidStoredPrescription = errors.New("scheduledworkout: stored workout prescription is invalid")
+
 // ValidationError indicates the request failed shape validation before any
 // DB access. Handlers should map it to 400 INVALID_ARGUMENT.
 type ValidationError struct {
@@ -116,18 +123,48 @@ type ScheduledExercise struct {
 	Position                   int    `json:"position"`
 }
 
+// PlannedSet is one resolved, frozen planned position returned by POST
+// /api/v1/scheduled-workouts. Unit is derived from the snapshot parent; it is
+// intentionally not stored per planned-set row.
+type PlannedSet struct {
+	ScheduledWorkoutPlannedSetID string   `json:"scheduledWorkoutPlannedSetId"`
+	Position                     int      `json:"position"`
+	Reps                         *int     `json:"reps,omitempty"`
+	PrescriptionNote             *string  `json:"prescriptionNote,omitempty"`
+	Load                         *float64 `json:"load,omitempty"`
+	Unit                         *string  `json:"unit,omitempty"`
+	RPE                          *float64 `json:"rpe,omitempty"`
+}
+
+// CreatedPlan is the resolved snapshot plan returned only from the POST
+// response. Scalar Plan remains in use by the intentionally deferred Athlete
+// and Session read paths.
+type CreatedPlan struct {
+	Sets []PlannedSet `json:"sets"`
+}
+
+// CreatedScheduledExercise is a POST-specific representation so the current
+// scalar GET response shapes are not migrated by this write phase.
+type CreatedScheduledExercise struct {
+	ScheduledWorkoutExerciseID string      `json:"scheduledWorkoutExerciseId"`
+	ExerciseID                 string      `json:"exerciseId"`
+	Name                       string      `json:"name"`
+	Plan                       CreatedPlan `json:"plan"`
+	Position                   int         `json:"position"`
+}
+
 // Created is one item of the POST /api/v1/scheduled-workouts response: a
 // newly created ScheduledWorkout with its frozen prescription snapshot
 // expanded, sufficient for frontend confirmation without a follow-up call.
 // Session is always null — a ScheduledWorkout has no session until training
 // starts.
 type Created struct {
-	ID            string              `json:"id"`
-	ScheduledDate string              `json:"scheduledDate"`
-	Athlete       Athlete             `json:"athlete"`
-	Workout       Workout             `json:"workout"`
-	Session       *Session            `json:"session"`
-	Exercises     []ScheduledExercise `json:"exercises"`
+	ID            string                     `json:"id"`
+	ScheduledDate string                     `json:"scheduledDate"`
+	Athlete       Athlete                    `json:"athlete"`
+	Workout       Workout                    `json:"workout"`
+	Session       *Session                   `json:"session"`
+	Exercises     []CreatedScheduledExercise `json:"exercises"`
 }
 
 // CreateInput is the decoded, wire-format-independent request for Create.
@@ -202,7 +239,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 	// does not stop workout_exercises from being modified by another
 	// transaction while this one is open. We simply never re-query it
 	// after this point.
-	prescription, err := lookupPrescription(ctx, tx, input.WorkoutID)
+	prescription, err := lookupResolvedPrescription(ctx, tx, input.WorkoutID)
 	if err != nil {
 		return nil, err
 	}
@@ -218,30 +255,52 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 			return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout: %w", err)
 		}
 
-		exercises := make([]ScheduledExercise, 0, len(prescription))
+		exercises := make([]CreatedScheduledExercise, 0, len(prescription))
 		for _, p := range prescription {
 			scheduledWorkoutExerciseID := uuid.NewString()
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO scheduled_workout_exercises
-					(id, scheduled_workout_id, exercise_id, exercise_name, target_sets, target_reps, target_prescription_note, target_rpe, position)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+					(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, position)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 				scheduledWorkoutExerciseID, scheduledWorkoutID, p.ExerciseID, p.ExerciseName,
-				p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRPE, p.Position,
+				p.TargetLoadUnit, p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRPE, p.Position,
 			); err != nil {
 				return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
 			}
 
-			exercises = append(exercises, ScheduledExercise{
+			plannedSets := make([]PlannedSet, 0, len(p.ResolvedSets))
+			for _, set := range p.ResolvedSets {
+				plannedSetID := uuid.NewString()
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO scheduled_workout_planned_sets
+						(id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rpe)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+					plannedSetID, scheduledWorkoutExerciseID, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RPE,
+				); err != nil {
+					return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout_planned_set: %w", err)
+				}
+
+				var unit *string
+				if set.Load != nil {
+					unit = p.TargetLoadUnit
+				}
+				plannedSets = append(plannedSets, PlannedSet{
+					ScheduledWorkoutPlannedSetID: plannedSetID,
+					Position:                     set.Position,
+					Reps:                         set.Reps,
+					PrescriptionNote:             set.PrescriptionNote,
+					Load:                         set.Load,
+					Unit:                         unit,
+					RPE:                          set.RPE,
+				})
+			}
+
+			exercises = append(exercises, CreatedScheduledExercise{
 				ScheduledWorkoutExerciseID: scheduledWorkoutExerciseID,
 				ExerciseID:                 p.ExerciseID,
 				Name:                       p.ExerciseName,
-				Plan: Plan{
-					Sets:             p.TargetSets,
-					Reps:             p.TargetReps,
-					PrescriptionNote: p.TargetPrescriptionNote,
-					RPE:              p.TargetRPE,
-				},
-				Position: p.Position,
+				Plan:                       CreatedPlan{Sets: plannedSets},
+				Position:                   p.Position,
 			})
 		}
 
@@ -369,27 +428,38 @@ func lookupConnectedAthletes(ctx context.Context, tx pgx.Tx, coachID string, ath
 	return athletes, nil
 }
 
-// prescriptionRow is one workout_exercises row (joined to its exercise
-// name) to be copied into scheduled_workout_exercises.
-type prescriptionRow struct {
+// resolvedPrescription is one template exercise with its authoring defaults
+// and effective resolved planned positions. The scalar default fields are
+// copied only into retained compatibility columns on the snapshot parent;
+// ResolvedSets is the canonical prescription being frozen.
+type resolvedPrescription struct {
 	ExerciseID             string
 	ExerciseName           string
 	TargetSets             int
 	TargetReps             *int
 	TargetPrescriptionNote *string
+	TargetLoad             *float64
+	TargetLoadUnit         *string
 	TargetRPE              *float64
 	Position               int
+	Overrides              []prescription.SetOverride
+	ResolvedSets           []prescription.ResolvedPlannedSet
 }
 
-// lookupPrescription reads workoutID's current prescription (its
-// workout_exercises rows joined to exercise names), ordered by position.
-func lookupPrescription(ctx context.Context, tx pgx.Tx, workoutID string) ([]prescriptionRow, error) {
+// lookupResolvedPrescription reads each template exercise and its sparse
+// overrides in one ordered query, groups by workout_exercise id, and resolves
+// every exercise once. The joined query gives defaults and overrides the same
+// statement snapshot before any athlete-specific inserts begin.
+func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string) ([]resolvedPrescription, error) {
 	const query = `
-		SELECT we.exercise_id, e.name, we.target_sets, we.target_reps, we.target_prescription_note, we.target_rpe, we.position
+		SELECT we.id, we.exercise_id, e.name,
+		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.position,
+		       o.planned_position, o.reps_override, o.prescription_note_override, o.load_override, o.rpe_override
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
+		LEFT JOIN workout_exercise_set_overrides o ON o.workout_exercise_id = we.id
 		WHERE we.workout_id = $1
-		ORDER BY we.position`
+		ORDER BY we.position, o.planned_position`
 
 	rows, err := tx.Query(ctx, query, workoutID)
 	if err != nil {
@@ -397,18 +467,65 @@ func lookupPrescription(ctx context.Context, tx pgx.Tx, workoutID string) ([]pre
 	}
 	defer rows.Close()
 
-	prescription := make([]prescriptionRow, 0)
+	prescriptions := make([]resolvedPrescription, 0)
+	byWorkoutExerciseID := make(map[string]int)
 	for rows.Next() {
-		var p prescriptionRow
-		if err := rows.Scan(&p.ExerciseID, &p.ExerciseName, &p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetRPE, &p.Position); err != nil {
+		var (
+			workoutExerciseID string
+			plannedPosition   *int
+			override          prescription.SetOverride
+		)
+		var p resolvedPrescription
+		if err := rows.Scan(
+			&workoutExerciseID, &p.ExerciseID, &p.ExerciseName,
+			&p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetLoad, &p.TargetLoadUnit, &p.TargetRPE, &p.Position,
+			&plannedPosition, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RPE,
+		); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan prescription: %w", err)
 		}
-		prescription = append(prescription, p)
+
+		idx, ok := byWorkoutExerciseID[workoutExerciseID]
+		if !ok {
+			idx = len(prescriptions)
+			byWorkoutExerciseID[workoutExerciseID] = idx
+			prescriptions = append(prescriptions, p)
+		}
+		if plannedPosition != nil {
+			override.Position = *plannedPosition
+			prescriptions[idx].Overrides = append(prescriptions[idx].Overrides, override)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("scheduledworkout: iterate prescription: %w", err)
 	}
-	return prescription, nil
+	if len(prescriptions) == 0 {
+		return nil, ErrInvalidStoredPrescription
+	}
+
+	for i := range prescriptions {
+		p := &prescriptions[i]
+		resolved, err := prescription.Resolve(prescription.Plan{
+			SetCount: p.TargetSets,
+			Defaults: prescription.Defaults{
+				Reps:             p.TargetReps,
+				PrescriptionNote: p.TargetPrescriptionNote,
+				Load:             p.TargetLoad,
+				Unit:             p.TargetLoadUnit,
+				RPE:              p.TargetRPE,
+			},
+			Overrides: p.Overrides,
+		})
+		if err != nil {
+			var validationErr *prescription.ValidationError
+			if errors.As(err, &validationErr) {
+				return nil, fmt.Errorf("%w: workout exercise %s", ErrInvalidStoredPrescription, p.ExerciseID)
+			}
+			return nil, fmt.Errorf("scheduledworkout: resolve prescription: %w", err)
+		}
+		p.ResolvedSets = resolved
+	}
+
+	return prescriptions, nil
 }
 
 // ListForCoach returns the caller's scheduled workouts with a
