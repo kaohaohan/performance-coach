@@ -69,6 +69,7 @@ The current MVP prioritizes:
 - Workout creation
 - Workout scheduling
 - Calendar-first programming: Coach selects a date and one or more Athletes, then either assigns an existing Workout or builds one inline and assigns it
+- Uniform-first planned-set prescription: sets establish ordered planned positions; exercise-level defaults apply per property, positions inherit any property without an explicit override, and the Coach may independently override or clear a position's property when needed
 - Athlete Today's Workout
 - WorkoutSession
 - Manual SetLog
@@ -87,7 +88,7 @@ The following are currently out of scope:
 - Team administration
 - Advanced periodization
 - Calendar entities or hierarchy, Programs, Parent Calendar, nested calendars, and enterprise scheduling systems
-- Per-set prescription, supersets/circuits, and TeamBuildr-style enterprise programming constructs
+- Supersets/circuits, arbitrary programming-property systems, and TeamBuildr-style enterprise programming constructs
 - AI-generated workouts
 - Custom ML models
 - Advanced biomechanics
@@ -209,7 +210,7 @@ Future entities may include:
 ```
 VideoAsset
 AIReview
-PlannedSet
+PlannedSet (or another storage representation for the approved planned-set semantics)
 WorkoutItem
 Organization
 ```
@@ -233,8 +234,8 @@ CoachAthleteRelationship
 Keep planned training separate from completed training.
 
 ```
-WorkoutExercise  = prescription
-SetLog           = actual performance
+WorkoutExercise / ScheduledWorkoutExercise = planned prescription
+SetLog                                    = actual performance
 ```
 
 Actual training history must never be silently changed because a workout template was later edited.

@@ -1,6 +1,6 @@
 # DontWorkout — Go Backend API Contract (V0.1)
 
-Status: **V0.5 — Calendar-first frontend IA addendum (additive, contract not broken)**
+Status: **V0.6 — current scalar contract + approved planned-set semantic addendum**
 
 Target: 2026-08-16
 
@@ -9,6 +9,8 @@ Target: 2026-08-16
 Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
+
+> V0.6 documentation decision: V0.1 now requires uniform-first, ordered planned-set prescription semantics. `Sets = N` means N effective planned positions; defaults may apply to all positions and individual positions may be overridden. Planned reps or text prescription, load with unit, and RPE are separate from actual SetLogs. **This is not yet an API or storage design.** The concrete request/response representation, migration path, and SetLog-to-planned-position reference remain pending a separate architecture session. The endpoint examples below continue to describe the currently implemented scalar contract until that work is approved.
 
 > V0.5 變更：`GET /scheduled-workouts` 實作為 Coach-only summary/list endpoint，`from`/`to` 必填、`athleteId` 選填。省略 `athleteId` 時回傳呼叫者跨所有已連結 athlete、指定日期範圍內的排程，供 Calendar 日/週檢視使用；提供 `athleteId` 但未連結時回 `404 NOT_FOUND`（刻意與 POST /scheduled-workouts 的 403 不一致，屬已知待清理項目）。Response 為 nested 摘要（`athlete{id,name}`、`workout{id,name}`、`session`），不含 exercises — 詳細處方與 SetLog 仍走 `GET /sessions/{id}`。純粹是既有 endpoint 的查詢維度放寬與回應格式明確化 — **不新增 domain object、不新增 endpoint**。詳見 §3.5、§7.5，對應 `docs/mvp-specification.md`「Navigation Principle」與 `docs/frontend-ui-spec.md`。
 > 
@@ -99,6 +101,21 @@ WorkoutSession            { id, scheduledWorkoutId, athleteId, status: ACTIVE|CO
 SetLog                    { id, sessionId, scheduledWorkoutExerciseId, setNumber, load?, unit?, reps, rpe, loggedByUserId, createdAt }
 ```
 
+### 2.1 Approved planned-set semantics; representation pending
+
+The current model above is the implemented scalar model, not the final representation of the approved V0.1 programming behavior.
+
+- For an exercise with `N` sets, its **effective** plan contains exactly `N` ordered planned positions, numbered `1..N`.
+- The **authoring model** has exercise-level property defaults plus sparse, property-specific per-position overrides. A position with no override for a property inherits that default. Builder defaults are uniform shorthand: one reps value or text prescription, one load plus unit, and one RPE may apply to every position. The Coach must not be required to enter N repeated values for uniform work.
+- An individual position may override one or more inherited default values without becoming an all-or-nothing override object. For example, it can override reps while inheriting load and RPE. Planned-set position is separate from `WorkoutExercise.position`, which orders exercises within a Workout.
+- Entering individual-set editing for an inherited property starts from that position's current effective value; changing it creates an explicit override. Changing a default updates only positions inheriting that property. Clearing an override restores inheritance from the current default. Exact controls and persistence are pending.
+- An effective planned position can express numeric reps **or** the existing text prescription capability, optional planned load paired with its unit (`kg` or `lb`), and optional planned RPE. A default text note such as `AMAP` can be inherited by all positions and individually overridden by note; this does not add duration/time actual metrics. Load overrides must preserve a valid load/unit pair; mixed-unit behavior remains pending design.
+- The **effective planned prescription** is the deterministic result of resolving defaults and overrides for every planned position at save/build and scheduling time. Whether persistence keeps defaults plus sparse overrides, expands positions, or uses another representation remains undecided.
+- Scheduling freezes the **effective** planned positions for every athlete snapshot. A later Workout-template default or override edit must not change an existing ScheduledWorkout.
+- Actual SetLogs remain actual performance. Session execution must be able to associate an actual set with the corresponding frozen effective planned position, without overwriting its planned values. Athlete-facing targets need not expose whether a value was defaulted, inherited, or overridden.
+
+This section does not select normalized rows, JSON/arrays, or any other persistence representation. It also does not select a final wire shape or resolve handling of skipped, extra, or repeated actual sets.
+
 ## 核心概念
 
 **Exercise vs WorkoutExercise**
@@ -126,7 +143,7 @@ Workout ──1:N──> WorkoutExercise ──N:1──> Exercise (公用或私
                 └──> WorkoutSession ──1:N──> SetLog          ← actual
 ```
 
-`SetLog` 掛在 `ScheduledWorkoutExercise` 而非 `Exercise`，plan vs actual 天然對齊。
+`SetLog` 掛在 `ScheduledWorkoutExercise` 而非 `Exercise`，因此目前可在 exercise level 做 plan vs actual 對齊。V0.6 已核准的 planned-set semantics 進一步要求每筆 actual 能對應 frozen planned position；其資料表示法仍待設計。
 
 **Prescription 的模糊性**
 
@@ -135,6 +152,8 @@ Workout ──1:N──> WorkoutExercise ──N:1──> Exercise (公用或私
 ---
 
 # 3. Endpoints
+
+> **Current implemented wire contract:** the request/response shapes in this section are scalar exercise-level prescriptions. They remain authoritative for the running application until the planned-set architecture is separately designed and approved. The V0.6 semantic decision above must not be implemented by silently changing `plan.sets` from a number to another type or otherwise breaking existing consumers.
 
 ## 3.1 Me
 
@@ -279,7 +298,7 @@ Response `201`：
 }
 ```
 
-**`plan` 一律是巢狀物件**，不攤平成 target* 欄位 — 為未來 per-set prescription（見第 7 節）預留，API contract 屆時不需翻修。
+**`plan` 一律是巢狀物件**，不攤平成 target* 欄位。這有助於未來做 additive evolution，但不保證 planned-set 支援可以在不改變 contract 的情況下完成；最終相容策略待 architecture session 決定。
 
 ### GET /workouts — Coach only
 
@@ -626,6 +645,8 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 
 # 5. 資料表
 
+> 下列為目前已實作的 schema shape，不是 V0.6 planned-set semantics 的最終 storage design。不得僅因這份文件的產品決策而修改 migration 或推定欄位/關聯。
+
 ```sql
 users(id, firebase_uid unique, name, role, created_at)
 
@@ -694,17 +715,11 @@ set_logs(id, session_id, scheduled_workout_exercise_id, set_number,
 > 原則：V0.1 schema 要做到的是「未來不會卡死」，不是「現在就支援所有未來功能」。
 > 
 
-## 7.1 Per-set prescription（PlannedSet）
+## 7.1 Planned-set prescription — approved semantics, design pending
 
-真實 programming 會需要逐組處方（`100×5@7 / 105×5@8 / 110×3@9`）。未來：
+V0.1 product behavior now requires ordered planned-set positions, uniform defaults, individual overrides, prescribed load/unit, and planned-versus-actual alignment. For example, `100×5@7 / 105×5@8 / 110×3@9` must be representable as three distinct effective planned positions.
 
-```
-ScheduledWorkoutExercise ──1:N──> PlannedSet (setNumber, targetReps, targetLoad, targetRpe)
-                                        ↓
-                                     SetLog
-```
-
-API 已預留：`plan` 是巢狀物件，屆時從 `{ "sets": 4, "reps": 5 }` 演進為 `{ "sets": [ {...} ] }`，contract 不需翻修。
+Possible implementations include normalized planned-set rows, structured values, or another relational representation. This contract deliberately does **not** choose one. In particular, do not assume `plan.sets` will become an array or that a future SetLog must use a particular foreign key before the architecture session defines compatibility, migration, and execution rules.
 
 ## 7.2 Time/distance-based actual metrics
 

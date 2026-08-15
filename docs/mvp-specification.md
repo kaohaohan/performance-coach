@@ -4,7 +4,7 @@ Status: V0.1
 
 Target: 2026-08-16
 
-Source of truth: `docs/PRODUCT.md`
+Source of truth: this document for product behavior; companion canonical documents define UI/IA, API contracts, and schema relationships.
 
 ## **1. Goal**
 
@@ -169,7 +169,7 @@ Refreshing the page does not remove the workout or the schedule.
 
 - Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout Library.
 - Existing Workout path: Coach can choose a saved Workout and assign it to all selected Athletes.
-- Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`; and configure ordered WorkoutExercise-level prescriptions with target sets, target reps or a text prescription (for example, `AMAP`), and optional target RPE. If an Exercise is unavailable, Coach opens Exercise Library; V0.1 does not create Exercises inline from Calendar.
+- Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions. If an Exercise is unavailable, Coach opens Exercise Library; V0.1 does not create Exercises inline from Calendar.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
 - Workout persists in the workout library after refresh.
 - ScheduledWorkout persists on the Calendar after refresh.
@@ -180,8 +180,135 @@ Refreshing the page does not remove the workout or the schedule.
 - Workout Library (`/coach/workouts`) remains the secondary reusable-template tool for creating templates in advance, viewing saved templates, and later reusing them from Calendar; it is not a prerequisite for Calendar scheduling.
 - Full workout creation on mobile is not required.
 - **Partial failure / retry:** `POST /api/v1/workouts` and `POST /api/v1/scheduled-workouts` are separate operations and are not atomic together. If Workout creation succeeds but scheduling fails, frontend preserves the created `workout.id`, selected date, selected Athletes, and builder state; reports “Workout was created, but it was not assigned”; and offers an explicit retry-assignment action. Retry calls only `POST /api/v1/scheduled-workouts` with the existing `workout.id`, never `POST /api/v1/workouts` again. Frontend must not blindly auto-retry after an ambiguous network failure: scheduled-workouts has no idempotency key and duplicate scheduling is structurally possible, so Coach explicitly retries after reviewing current Calendar state.
-- **Prescription and programming scope:** V0.1 supports WorkoutExercise-level prescriptions only (`3 × 5 @ RPE 8` or `1 set · AMAP`). Planned per-set reps/load/properties, percentages, velocity, tempo, rest, supersets, circuits, custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture are deferred. Do not introduce PlannedSet or another prescription domain.
+- **Prescription and programming scope:** V0.1 supports the planned-set semantics defined below: ordered planned positions, a uniform shorthand/default, individual overrides, planned reps or text prescription, planned load with unit where present, and planned RPE. Percentages, velocity, tempo, rest prescription, supersets, circuits, arbitrary custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture remain deferred. The storage and API representation for planned sets remains an architecture-design decision; do not infer one from this product specification.
 - **Backend implementation is unchanged by this framing**: the Calendar composes existing `GET /api/v1/exercises?q=`, `POST /api/v1/workouts`, and `POST /api/v1/scheduled-workouts`; it is not a new domain object or transactional endpoint (see `go-backend-api-contract-v0.1.md` §7.5). Future one-off scheduled Workouts, a “Save as template” toggle, and ephemeral prescriptions are explicitly deferred.
+
+### **V0.1 planned-set prescription and Builder behavior**
+
+This is a product/domain decision, not a commitment to a particular database table, JSON shape, desktop matrix, or mobile card layout.
+
+The Calendar remains the primary Coach programming workspace:
+
+```
+Calendar
+→ select date
+→ select Athlete(s)
+→ Build Workout
+→ add Exercises
+→ define Sets
+→ define uniform prescription and optional per-set overrides
+→ Build & Assign
+```
+
+Workout Library remains the secondary reusable-template workflow. This behavior must not be moved out of Calendar.
+
+For each prescribed exercise:
+
+1. The Coach chooses the number of sets first.
+2. `Sets = N` establishes exactly `N` effective planned set positions, ordered `1..N`.
+3. The default editing mode is **FAST / UNIFORM**: one reps value, one load plus unit, and one RPE value may each apply to all `N` positions. The Coach is not required to type `N` repeated values for a uniform prescription.
+4. Each uniform value is an exercise-level **default** for its own property. A planned position without an explicit override for that property **inherits** the current default.
+5. The Coach may then enter a per-set customization mode and override an individual property for an individual planned position. Overrides are property-specific, not an all-or-nothing set object.
+6. When the Coach begins editing an inherited property on a position, the control is prefilled with that position's current **effective** value, not left blank. Changing that value creates an explicit override.
+7. Changing a default updates every position still inheriting that property; existing explicit overrides remain unchanged. Clearing an individual override returns that property to inheriting the current default. The exact clear-control UI is not specified.
+
+Case 1 — fully uniform:
+
+```
+Back Squat
+Sets: 5
+Reps: 10
+Load: 80 kg
+RPE: 8
+```
+
+is semantically equivalent to:
+
+```
+Set 1: 10 reps / 80 kg / RPE 8
+Set 2: 10 reps / 80 kg / RPE 8
+Set 3: 10 reps / 80 kg / RPE 8
+Set 4: 10 reps / 80 kg / RPE 8
+Set 5: 10 reps / 80 kg / RPE 8
+```
+
+Case 2 — reps overrides:
+
+```
+Default reps: 10
+Set 4 reps override: 8
+Set 5 reps override: 6
+
+Effective reps: 10 / 10 / 10 / 8 / 6
+```
+
+Case 3 — independent property overrides:
+
+```
+Defaults:
+Reps: 10
+Load: 80 kg
+RPE: 8
+
+Set 3 reps override: 8
+Set 5 load override: 90 kg
+Set 5 RPE override: 9
+
+Effective:
+Set 1: 10 reps / 80 kg / RPE 8
+Set 2: 10 reps / 80 kg / RPE 8
+Set 3:  8 reps / 80 kg / RPE 8
+Set 4: 10 reps / 80 kg / RPE 8
+Set 5: 10 reps / 90 kg / RPE 9
+```
+
+Case 4 — changing a default preserves overrides:
+
+```
+Initial default reps: 10
+Set 3 reps override: 8
+
+Coach changes default reps to 12.
+
+Effective reps: 12 / 12 / 8 / 12 / 12
+```
+
+Case 5 — clearing an override:
+
+```
+Default reps: 12
+Set 3 reps override: 8
+
+Coach clears the Set 3 reps override.
+
+Effective Set 3 reps: 12 inherited
+```
+
+#### **Canonical invariants**
+
+- **Cardinality and ordering:** an exercise prescribed for `N` sets has exactly `N` effective planned positions, each with a stable ordinal `1..N`. Planned-set position is distinct from exercise order inside a Workout.
+- **Authoring model:** a Coach authors exercise-level defaults plus sparse, property-specific overrides. A default, inherited value, and explicit override are distinct authoring states even when they currently resolve to the same visible value.
+- **Uniform shorthand and inheritance:** defaults are semantically applied to every planned position that has no override for that property. Uniform work therefore needs one entry per default, not N repeated entries.
+- **Per-set override:** an individual position may independently override its reps or text instruction, load and unit, and/or RPE. Changing default reps must not affect a position with a reps override; it may still inherit load and RPE.
+- **Edit prefill and clear:** opening an inherited property for editing begins with its effective value. Editing creates an override; clearing that override restores inheritance from the current default.
+- **Effective prescription:** at save/build and at scheduling, every planned position has a deterministic resolved effective value where applicable. Defaults and sparse overrides are authoring semantics; the effective plan is the resolved prescription used for snapshot and execution.
+- **Text prescriptions:** an effective position may use the existing text/non-numeric prescription capability (for example `AMAP`, `30 sec`, or `10–12`) instead of numeric reps. For example, a default note of `AMAP` produces `N` positions that inherit `AMAP` until a position explicitly overrides its note. This preserves current prescription expressiveness; it does not by itself add time/distance actual logging.
+- **Load:** prescribed load is planned data, separate from actual load. When a planned load is present, its unit travels with it; V0.1 units follow the existing `kg` / `lb` model. A load override must preserve a valid load/unit pair; mixed-unit behavior inside one exercise remains an architecture decision.
+- **Planned versus actual:** an actual SetLog records what happened and never overwrites its plan. Session execution and review must be able to associate actual performance with the corresponding frozen planned-set position.
+- **Snapshot:** scheduling freezes the fully effective planned prescription for every position. Later edits to a reusable Workout template must not alter an already ScheduledWorkout.
+- **Multi-athlete snapshot:** one Workout template and one batch scheduling request still create independent frozen ScheduledWorkout snapshots for every selected Athlete.
+- **Athlete execution:** Athlete-facing execution shows the frozen effective target for each planned position. Whether a value originated as a default, inheritance, or override is a Coach authoring concern and is not required in the Athlete view.
+
+Example — planned versus actual:
+
+```
+Planned Set 4: 8 reps / 85 kg / RPE 8
+Actual Set 4:  7 reps / 85 kg / RPE 9
+```
+
+Both values must remain independently representable and understandable during execution and review.
+
+The later schema/API architecture session must decide the storage representation, API compatibility strategy, exact SetLog-to-planned-position reference, and behavior for skipped or extra actual sets. Those decisions are intentionally not made here.
 
 ---
 

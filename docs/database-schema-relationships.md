@@ -1,6 +1,6 @@
 # DontWorkout — Database Schema & Relationships
 
-Status: **V0.1 — aligned with Backend API Contract V0.4**
+Status: **Current V0.1 schema + approved planned-set semantics pending architecture design**
 
 Purpose: Define the PostgreSQL data model, table responsibilities, foreign keys, cardinality, and integrity constraints for the MVP. Endpoint behavior stays in the Go Backend API Contract.
 
@@ -57,6 +57,8 @@ scheduled_workout_exercises
 | `scheduled_workout_exercises` | `scheduled_workout_id`, `exercise_id`, `exercise_name`, target fields, `position` | ScheduledWorkout 1:N | Frozen prescription snapshot created at scheduling time. |
 | `workout_sessions` | `scheduled_workout_id`, `athlete_id`, `status`, timestamps | ScheduledWorkout 1:0..1 | Actual training occurrence. One scheduled workout can create at most one session. |
 | `set_logs` | `session_id`, `scheduled_workout_exercise_id`, `set_number`, `load`, `unit`, `reps`, `rpe`, `logged_by_user_id` | Session 1:N; ScheduledWorkoutExercise 1:N | Actual performance facts recorded during the session. |
+
+The target-field rows above describe the current scalar schema. They do not yet represent the approved uniform-first planned-set behavior defined in §5.1.
 
 ## 3. PostgreSQL Schema Shape
 
@@ -177,6 +179,8 @@ V0.1 rule: if a system exercise and requested name match after `lower(trim(name)
 
 `SetLog` is what actually happened during training.
 
+The current relationship aligns plan and actual at exercise level. The approved planned-set semantics in §5.1 require a later representation that can also align them by planned-set position.
+
 Example:
 
 ```
@@ -199,6 +203,28 @@ SetLog #4: 110 kg × 4 @9
 ```
 
 Historical display always reads `exercise_name` and target fields from `scheduled_workout_exercises`. `exercise_id` remains only for analytics/cross-session exercise history. Renaming an Exercise later must not rewrite historical display.
+
+### 5.1 Approved planned-set semantics; storage representation pending
+
+The product now requires the following behavior, even though the current scalar schema above cannot yet persist it:
+
+- `target sets = N` yields exactly `N` effective planned set positions, ordered `1..N`.
+- The **authoring model** contains exercise-level defaults plus sparse, property-specific per-position overrides. The Coach starts in a **uniform-first** editing mode: one reps value or text prescription, one load plus unit, and one RPE may apply to all `N` positions; uniform work must not require N repeated entries.
+- A position with no explicit override for a property inherits that property's current default. An individual position can override reps while still inheriting load and RPE; it is not an all-or-nothing override object. Planned-set position is distinct from the `position` field that orders exercises in a Workout.
+- Editing an inherited property begins with that position's current effective value. Changing it creates an override. Changing a default updates every position still inheriting that property, while explicit overrides remain unchanged. Clearing an override restores inheritance from the current default.
+- Every effective planned position can express numeric reps or an existing text prescription, optional planned load with `kg`/`lb` unit, and optional planned RPE. A default note such as `AMAP` can be inherited across positions and individually overridden; this does not add duration/time actual metrics. A load override must preserve a valid load/unit pair; mixed-unit behavior remains pending design.
+- The **effective planned prescription** resolves defaults and overrides deterministically for every planned position at save/build and scheduling time. The authoring model is distinct from this resolved plan.
+- Scheduling freezes each athlete's fully effective planned positions. Later template default or override edits never mutate a ScheduledWorkout snapshot.
+- SetLogs remain actual facts. Session execution and review must be able to relate actual performance to the corresponding frozen planned position without overwriting planned values. Athlete-facing targets show the effective frozen value and need not expose its authoring provenance.
+
+Example:
+
+```
+Planned Set 4: 8 reps / 85 kg / RPE 8
+Actual Set 4:  7 reps / 85 kg / RPE 9
+```
+
+This is a domain invariant, not a schema prescription. A later architecture session must choose whether storage uses normalized rows, structured values, or another relational design; it must also define migration/backfill, API compatibility, and skipped/extra actual-set behavior.
 
 ## 6. Important Integrity Rules
 
@@ -223,23 +249,15 @@ Coach
 → Review
 ```
 
-V0.1 SetLog is reps-based. `load` and `unit` are nullable for bodyweight movements. Time/distance actual metrics are future extensions.
+V0.1 SetLog is currently reps-based. Actual `load` and `unit` are nullable for bodyweight movements. Time/distance actual metrics remain future extensions; preserving a planned text prescription such as `30 sec` does not itself make duration an actual SetLog metric.
 
-Not implemented in V0.1: PlannedSet/per-set prescription, polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
+Not implemented in the current schema: a representation of the approved planned-set semantics, polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
 
 ## 8. Future Extension Points
 
-### PlannedSet
+### Planned-set storage representation
 
-Future per-set prescription:
-
-```
-ScheduledWorkoutExercise
-  └──< PlannedSet
-          └── actual SetLog
-```
-
-Example: `100×5@7 / 105×5@8 / 110×3@9`.
+The approved semantics require `100×5@7 / 105×5@8 / 110×3@9` to remain three ordered effective plans and to survive scheduling as a frozen athlete snapshot. `PlannedSet` rows are one possible implementation, but are not a decision in this document. Do not add a table, JSON column, array, foreign key, or migration until the architecture session selects the representation and SetLog alignment behavior.
 
 ### WorkoutItem
 
