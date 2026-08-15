@@ -5,7 +5,16 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 
-type Plan = { sets: number; reps?: number; prescriptionNote?: string; rpe?: number };
+type PlannedSet = {
+  scheduledWorkoutPlannedSetId: string;
+  position: number;
+  reps?: number;
+  prescriptionNote?: string;
+  load?: number;
+  unit?: "kg" | "lb";
+  rpe?: number;
+};
+type Plan = { sets: PlannedSet[] };
 type ExerciseSummary = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; position: number };
 type Session = { id: string; status: "ACTIVE" | "COMPLETED" };
 type TodayScheduledWorkout = { id: string; scheduledDate: string; workoutName: string; exercises: ExerciseSummary[]; session: Session | null };
@@ -25,10 +34,44 @@ function shiftLocalDate(date: string, days: number): string {
   return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, "0")}-${String(shifted.getDate()).padStart(2, "0")}`;
 }
 
-function prescription(plan: Plan): string {
-  const parts = [plan.reps === undefined ? plan.prescriptionNote ?? "" : `${plan.sets} × ${plan.reps}`];
-  if (plan.rpe !== undefined) parts.push(`RPE ${plan.rpe}`);
+function orderedPlannedSets(plan: Plan): PlannedSet[] {
+  return [...plan.sets].sort((left, right) => left.position - right.position);
+}
+
+function plannedSetSummary(target: PlannedSet): string {
+  const parts = [target.reps === undefined ? target.prescriptionNote ?? "" : `${target.reps} reps`];
+  if (target.load !== undefined) parts.push(target.unit === undefined ? `${target.load}` : `${target.load} ${target.unit}`);
+  if (target.rpe !== undefined) parts.push(`RPE ${target.rpe}`);
   return parts.filter(Boolean).join(" · ");
+}
+
+function samePrescription(left: PlannedSet, right: PlannedSet): boolean {
+  return left.reps === right.reps
+    && left.prescriptionNote === right.prescriptionNote
+    && left.load === right.load
+    && left.unit === right.unit
+    && left.rpe === right.rpe;
+}
+
+function PlannedSetPreview({ plan }: { plan: Plan }) {
+  const targets = orderedPlannedSets(plan);
+  if (targets.length === 0) return <p className="mt-1 text-sm font-medium text-slate-500">No planned sets</p>;
+
+  const uniform = targets.every((target) => samePrescription(targets[0], target));
+  if (uniform) return <div className="mt-2">
+    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{targets.length} set{targets.length === 1 ? "" : "s"}</p>
+    <p className="mt-1 text-base font-medium leading-6 text-slate-600">{plannedSetSummary(targets[0])}</p>
+  </div>;
+
+  return <div className="mt-2">
+    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{targets.length} planned sets</p>
+    <ol className="mt-2 space-y-1.5">
+      {targets.map((target) => <li key={target.scheduledWorkoutPlannedSetId} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-sm leading-5">
+        <span className="font-bold text-slate-700">Set {target.position}</span>
+        <span className="min-w-0 font-medium text-slate-600">{plannedSetSummary(target)}</span>
+      </li>)}
+    </ol>
+  </div>;
 }
 
 function errorMessage(err: unknown): string {
@@ -127,7 +170,7 @@ export default function AthleteTodayPage() {
                     {workout.exercises.map((exercise) => (
                       <li key={exercise.scheduledWorkoutExerciseId} className="py-4">
                         <p className="text-sm font-bold uppercase tracking-wide text-slate-900">{exercise.name}</p>
-                        <p className="mt-1 text-base font-medium text-slate-600">{prescription(exercise.plan)}</p>
+                        <PlannedSetPreview plan={exercise.plan} />
                       </li>
                     ))}
                   </ul>
