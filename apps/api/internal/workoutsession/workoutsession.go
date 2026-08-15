@@ -227,28 +227,40 @@ type Athlete struct {
 	Name string `json:"name"`
 }
 
-// Plan is the frozen prescription for one exercise, read from
-// scheduled_workout_exercises only — never from the current workout
-// template or exercise (docs/go-backend-api-contract-v0.1.md §2 snapshot
-// precedence rule).
+// Plan is the fully resolved frozen prescription for one exercise. Its rows
+// come from scheduled_workout_planned_sets; target_load_unit is inherited
+// from the scheduled_workout_exercises snapshot parent. Neither field is
+// ever read from the reusable Workout template.
 type Plan struct {
-	Sets             int      `json:"sets"`
-	Reps             *int     `json:"reps,omitempty"`
-	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
-	RPE              *float64 `json:"rpe,omitempty"`
+	Sets []PlannedSet `json:"sets"`
+}
+
+// PlannedSet is one immutable planned target in an exercise's scheduled
+// snapshot. Unit is only present when the target has a load.
+type PlannedSet struct {
+	ScheduledWorkoutPlannedSetID string   `json:"scheduledWorkoutPlannedSetId"`
+	Position                     int      `json:"position"`
+	Reps                         *int     `json:"reps,omitempty"`
+	PrescriptionNote             *string  `json:"prescriptionNote,omitempty"`
+	Load                         *float64 `json:"load,omitempty"`
+	Unit                         *string  `json:"unit,omitempty"`
+	RPE                          *float64 `json:"rpe,omitempty"`
 }
 
 // SetLog is one recorded set, scoped to a session and a
 // scheduled_workout_exercise (docs/go-backend-api-contract-v0.1.md §3.7).
 // Deliberately excludes createdAt — not part of this endpoint's response.
 type SetLog struct {
-	ID             string   `json:"id"`
-	SetNumber      int      `json:"setNumber"`
-	Load           *float64 `json:"load,omitempty"`
-	Unit           *string  `json:"unit,omitempty"`
-	Reps           int      `json:"reps"`
-	RPE            *float64 `json:"rpe,omitempty"`
-	LoggedByUserID string   `json:"loggedByUserId"`
+	ID                           string   `json:"id"`
+	Kind                         string   `json:"kind"`
+	ScheduledWorkoutPlannedSetID *string  `json:"scheduledWorkoutPlannedSetId,omitempty"`
+	PlannedPosition              *int     `json:"plannedPosition,omitempty"`
+	SetNumber                    int      `json:"setNumber"`
+	Load                         *float64 `json:"load,omitempty"`
+	Unit                         *string  `json:"unit,omitempty"`
+	Reps                         int      `json:"reps"`
+	RPE                          *float64 `json:"rpe,omitempty"`
+	LoggedByUserID               string   `json:"loggedByUserId"`
 }
 
 // Exercise is one ScheduledWorkoutExercise with its plan and the SetLogs
@@ -367,33 +379,40 @@ func lookupAccessibleSession(ctx context.Context, pool *pgxpool.Pool, caller aut
 }
 
 // loadExercisesWithSetLogs returns scheduledWorkoutID's snapshot exercises,
-// each with the SetLogs recorded against it during sessionID.
-//
-// The LEFT JOIN is scoped by BOTH sl.session_id = sessionID AND
-// sl.scheduled_workout_exercise_id = swe.id: the double condition keeps
-// another WorkoutSession's SetLogs (a prior attempt at the same
-// ScheduledWorkoutExercise, in principle) from ever leaking into this
-// response, and still preserves exercises with zero logs via the LEFT
-// JOIN (an inner join would silently drop them).
-//
-// Display fields (name, target sets/reps/note/rpe) come from
-// scheduled_workout_exercises only, never from workout_exercises or
-// exercises — the frozen-snapshot rule (docs/go-backend-api-contract-v0.1.md
-// §2). Rows are ordered by swe.position then sl.set_number, and grouped in
-// Go keyed by scheduled_workout_exercise id in first-seen order, so each
-// exercise appears exactly once with its SetLogs in setNumber order.
+// canonical planned targets, and actual logs recorded during sessionID.
+// Planned targets and actual logs deliberately use separate queries: joining
+// both 1:N relationships would multiply each planned row by every SetLog.
 func loadExercisesWithSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID, scheduledWorkoutID string) ([]Exercise, error) {
-	const query = `
-		SELECT swe.id, swe.exercise_name, swe.target_sets, swe.target_reps, swe.target_prescription_note, swe.target_rpe,
-		       sl.id, sl.set_number, sl.load, sl.unit, sl.reps, sl.rpe, sl.logged_by_user_id
-		FROM scheduled_workout_exercises swe
-		LEFT JOIN set_logs sl ON sl.session_id = $1 AND sl.scheduled_workout_exercise_id = swe.id
-		WHERE swe.scheduled_workout_id = $2
-		ORDER BY swe.position, sl.set_number`
-
-	rows, err := pool.Query(ctx, query, sessionID, scheduledWorkoutID)
+	exercises, byID, err := loadSnapshotExercises(ctx, pool, scheduledWorkoutID)
 	if err != nil {
-		return nil, fmt.Errorf("workoutsession: load exercises: %w", err)
+		return nil, err
+	}
+
+	if err := loadActualSetLogs(ctx, pool, sessionID, scheduledWorkoutID, byID); err != nil {
+		return nil, err
+	}
+	for i := range exercises {
+		exercises[i] = *byID[exercises[i].ScheduledWorkoutExerciseID]
+	}
+	return exercises, nil
+}
+
+// loadSnapshotExercises reads only the immutable snapshot rows. The scalar
+// target_* compatibility columns on scheduled_workout_exercises are not read.
+func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWorkoutID string) ([]Exercise, map[string]*Exercise, error) {
+	const query = `
+		SELECT swe.id, swe.exercise_name,
+		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
+		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
+		       p.target_rpe
+		FROM scheduled_workout_exercises swe
+		JOIN scheduled_workout_planned_sets p ON p.scheduled_workout_exercise_id = swe.id
+		WHERE swe.scheduled_workout_id = $1
+		ORDER BY swe.position, p.planned_position`
+
+	rows, err := pool.Query(ctx, query, scheduledWorkoutID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("workoutsession: load planned exercises: %w", err)
 	}
 	defer rows.Close()
 
@@ -402,23 +421,13 @@ func loadExercisesWithSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID
 	for rows.Next() {
 		var (
 			swExerciseID, exerciseName string
-			targetSets                 int
-			targetReps                 *int
-			targetPrescriptionNote     *string
-			targetRPE                  *float64
-			setLogID                   *string
-			setNumber                  *int
-			load                       *float64
-			unit                       *string
-			reps                       *int
-			rpe                        *float64
-			loggedByUserID             *string
+			plannedSet                 PlannedSet
 		)
 		if err := rows.Scan(
-			&swExerciseID, &exerciseName, &targetSets, &targetReps, &targetPrescriptionNote, &targetRPE,
-			&setLogID, &setNumber, &load, &unit, &reps, &rpe, &loggedByUserID,
+			&swExerciseID, &exerciseName,
+			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
 		); err != nil {
-			return nil, fmt.Errorf("workoutsession: scan exercise row: %w", err)
+			return nil, nil, fmt.Errorf("workoutsession: scan planned exercise row: %w", err)
 		}
 
 		ex, ok := byID[swExerciseID]
@@ -426,39 +435,75 @@ func loadExercisesWithSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID
 			ex = &Exercise{
 				ScheduledWorkoutExerciseID: swExerciseID,
 				Name:                       exerciseName,
-				Plan: Plan{
-					Sets:             targetSets,
-					Reps:             targetReps,
-					PrescriptionNote: targetPrescriptionNote,
-					RPE:              targetRPE,
-				},
-				SetLogs: make([]SetLog, 0),
+				Plan:                       Plan{Sets: make([]PlannedSet, 0)},
+				SetLogs:                    make([]SetLog, 0),
 			}
 			byID[swExerciseID] = ex
 			order = append(order, swExerciseID)
 		}
-
-		if setLogID != nil {
-			ex.SetLogs = append(ex.SetLogs, SetLog{
-				ID:             *setLogID,
-				SetNumber:      *setNumber,
-				Load:           load,
-				Unit:           unit,
-				Reps:           *reps,
-				RPE:            rpe,
-				LoggedByUserID: *loggedByUserID,
-			})
-		}
+		ex.Plan.Sets = append(ex.Plan.Sets, plannedSet)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("workoutsession: iterate exercise rows: %w", err)
+		return nil, nil, fmt.Errorf("workoutsession: iterate planned exercise rows: %w", err)
 	}
 
 	exercises := make([]Exercise, 0, len(order))
 	for _, id := range order {
 		exercises = append(exercises, *byID[id])
 	}
-	return exercises, nil
+	return exercises, byID, nil
+}
+
+// loadActualSetLogs reads actual performance separately from planned targets.
+// planned_position is joined only to label a non-null explicit association;
+// it is never inferred from set_number.
+func loadActualSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID, scheduledWorkoutID string, byID map[string]*Exercise) error {
+	const query = `
+		SELECT sl.scheduled_workout_exercise_id,
+		       sl.id, sl.scheduled_workout_planned_set_id, p.planned_position,
+		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rpe, sl.logged_by_user_id
+		FROM set_logs sl
+		JOIN scheduled_workout_exercises swe ON swe.id = sl.scheduled_workout_exercise_id
+		LEFT JOIN scheduled_workout_planned_sets p
+		  ON p.id = sl.scheduled_workout_planned_set_id
+		 AND p.scheduled_workout_exercise_id = sl.scheduled_workout_exercise_id
+		WHERE sl.session_id = $1 AND swe.scheduled_workout_id = $2
+		ORDER BY swe.position, sl.set_number`
+
+	rows, err := pool.Query(ctx, query, sessionID, scheduledWorkoutID)
+	if err != nil {
+		return fmt.Errorf("workoutsession: load actual set logs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			swExerciseID string
+			setLog       SetLog
+		)
+		if err := rows.Scan(
+			&swExerciseID,
+			&setLog.ID, &setLog.ScheduledWorkoutPlannedSetID, &setLog.PlannedPosition,
+			&setLog.SetNumber, &setLog.Load, &setLog.Unit, &setLog.Reps, &setLog.RPE, &setLog.LoggedByUserID,
+		); err != nil {
+			return fmt.Errorf("workoutsession: scan actual set-log row: %w", err)
+		}
+
+		ex, ok := byID[swExerciseID]
+		if !ok {
+			return fmt.Errorf("workoutsession: actual set log belongs to an exercise outside the snapshot")
+		}
+		if setLog.ScheduledWorkoutPlannedSetID == nil {
+			setLog.Kind = "EXTRA"
+		} else {
+			setLog.Kind = "PLANNED"
+		}
+		ex.SetLogs = append(ex.SetLogs, setLog)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("workoutsession: iterate actual set-log rows: %w", err)
+	}
+	return nil
 }
 
 // ErrSessionNotActive indicates the session exists and is accessible to
@@ -475,6 +520,15 @@ var ErrSessionNotActive = errors.New("workoutsession: session is not ACTIVE")
 // go-backend-api-contract-v0.1.md §3.8).
 var ErrExerciseNotInSession = errors.New("workoutsession: scheduledWorkoutExerciseId does not belong to this session")
 
+// ErrPlannedSetNotInSession indicates a PLANNED request references a frozen
+// target that is not part of the requested snapshot exercise in this session.
+// This is invalid request association, not a resource-scoping lookup.
+var ErrPlannedSetNotInSession = errors.New("workoutsession: scheduledWorkoutPlannedSetId does not belong to this session exercise")
+
+// ErrPlannedSetAlreadyLogged indicates a normal actual log has already
+// claimed the frozen target. Handlers map it to 409 CONFLICT.
+var ErrPlannedSetAlreadyLogged = errors.New("workoutsession: scheduled planned set already logged")
+
 // setLogSetNumberConstraint is the exact, auto-generated name of the
 // UNIQUE (session_id, scheduled_workout_exercise_id, set_number) constraint
 // (confirmed against the live schema, not assumed from naming convention —
@@ -483,30 +537,47 @@ var ErrExerciseNotInSession = errors.New("workoutsession: scheduledWorkoutExerci
 // collision) is a genuine bug and must not be silently retried.
 const setLogSetNumberConstraint = "set_logs_session_id_scheduled_workout_exercise_id_set_numbe_key"
 
+// plannedTargetClaimIndex is the partial uniqueness backstop for PLANNED
+// logs. It is intentionally distinct from setLogSetNumberConstraint: target
+// claim conflicts are domain conflicts, never chronology retries.
+const plannedTargetClaimIndex = "set_logs_one_planned_target_per_session_idx"
+
 // maxSetLogInsertAttempts is one initial attempt plus up to three
 // whole-transaction retries on the expected set-number 23505 (docs/
 // go-backend-api-contract-v0.1.md §3.8 setNumber concurrency handling).
 const maxSetLogInsertAttempts = 4
 
 // CreateSetLogInput is the decoded, wire-format-independent request for
-// CreateSetLog. Every field is a pointer except ScheduledWorkoutExerciseID
-// so "omitted" is distinguishable from "explicit zero" — most importantly
-// Load (0 is a valid load; nil means bodyweight/no load) and Reps (nil
-// means the required field was never sent, distinct from an invalid 0).
+// CreateSetLog. Pointer fields preserve optional-field semantics: Load 0 is
+// valid while nil means bodyweight/no load, and nil Reps means the required
+// field was omitted rather than supplied as an invalid zero.
 type CreateSetLogInput struct {
-	ScheduledWorkoutExerciseID string
-	Load                       *float64
-	Unit                       *string
-	Reps                       *int
-	RPE                        *float64
+	ScheduledWorkoutExerciseID   string
+	Kind                         string
+	ScheduledWorkoutPlannedSetID *string
+	Load                         *float64
+	Unit                         *string
+	Reps                         *int
+	RPE                          *float64
 }
 
-// validate applies §3.8's field rules, independent of any DB access:
+// validate applies §3.8's request and actual-field rules, independent of DB
+// access:
+//   - kind: exactly PLANNED or EXTRA, with its matching target-ID rule
 //   - reps: required, integer, >= 1
 //   - load: optional; if present, >= 0 and unit is required (kg or lb)
 //   - unit: must be nil exactly when load is nil
 //   - rpe: optional; if present, 1-10
 func (in CreateSetLogInput) validate() error {
+	if in.Kind != "PLANNED" && in.Kind != "EXTRA" {
+		return &ValidationError{Message: "kind must be 'PLANNED' or 'EXTRA'"}
+	}
+	if in.Kind == "PLANNED" && in.ScheduledWorkoutPlannedSetID == nil {
+		return &ValidationError{Message: "scheduledWorkoutPlannedSetId is required when kind is PLANNED"}
+	}
+	if in.Kind == "EXTRA" && in.ScheduledWorkoutPlannedSetID != nil {
+		return &ValidationError{Message: "scheduledWorkoutPlannedSetId must be omitted when kind is EXTRA"}
+	}
 	if in.Reps == nil {
 		return &ValidationError{Message: "reps is required"}
 	}
@@ -547,6 +618,8 @@ func (in CreateSetLogInput) validate() error {
 //  5. field validation (reps/load/unit/rpe) -> else *ValidationError
 //  6. input.ScheduledWorkoutExerciseID must belong to this session's
 //     scheduled_workout -> else ErrExerciseNotInSession
+//  7. a PLANNED target must belong to that same snapshot exercise -> else
+//     ErrPlannedSetNotInSession
 //
 // setNumber is always server-computed, never trusted from the client;
 // loggedByUserId is always caller.ID.
@@ -569,6 +642,11 @@ func CreateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 	if err := input.validate(); err != nil {
 		return SetLog{}, err
 	}
+	if input.ScheduledWorkoutPlannedSetID != nil {
+		if _, err := uuid.Parse(*input.ScheduledWorkoutPlannedSetID); err != nil {
+			return SetLog{}, &ValidationError{Message: "scheduledWorkoutPlannedSetId must be a valid UUID"}
+		}
+	}
 
 	belongs, err := scheduledWorkoutExerciseBelongsTo(ctx, pool, input.ScheduledWorkoutExerciseID, header.scheduledWorkoutID)
 	if err != nil {
@@ -577,8 +655,17 @@ func CreateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 	if !belongs {
 		return SetLog{}, ErrExerciseNotInSession
 	}
+	if input.Kind == "PLANNED" {
+		belongs, err := plannedSetBelongsToSessionExercise(ctx, pool, *input.ScheduledWorkoutPlannedSetID, input.ScheduledWorkoutExerciseID, header.scheduledWorkoutID)
+		if err != nil {
+			return SetLog{}, fmt.Errorf("workoutsession: check planned-set ownership: %w", err)
+		}
+		if !belongs {
+			return SetLog{}, ErrPlannedSetNotInSession
+		}
+	}
 
-	return insertSetLogWithRetry(ctx, pool, caller, sessionID, input)
+	return insertSetLogWithRetry(ctx, pool, caller, sessionID, header.scheduledWorkoutID, input)
 }
 
 // scheduledWorkoutExerciseBelongsTo reports whether scheduledWorkoutExerciseID
@@ -589,6 +676,27 @@ func scheduledWorkoutExerciseBelongsTo(ctx context.Context, pool *pgxpool.Pool, 
 	const query = `SELECT 1 FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2`
 	var exists int
 	err := pool.QueryRow(ctx, query, scheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// plannedSetBelongsToSessionExercise verifies the complete request chain:
+// planned target -> requested snapshot exercise -> session snapshot.
+func plannedSetBelongsToSessionExercise(ctx context.Context, pool *pgxpool.Pool, plannedSetID, scheduledWorkoutExerciseID, scheduledWorkoutID string) (bool, error) {
+	const query = `
+		SELECT 1
+		FROM scheduled_workout_planned_sets p
+		JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
+		WHERE p.id = $1
+		  AND p.scheduled_workout_exercise_id = $2
+		  AND swe.scheduled_workout_id = $3`
+	var exists int
+	err := pool.QueryRow(ctx, query, plannedSetID, scheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&exists)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
@@ -621,15 +729,28 @@ func scheduledWorkoutExerciseBelongsTo(ctx context.Context, pool *pgxpool.Pool, 
 // retried; any other error (including a 23505 on a different constraint,
 // e.g. a pkey collision) is returned immediately, not masked as a
 // setNumber race.
-func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID string, input CreateSetLogInput) (SetLog, error) {
+func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID, scheduledWorkoutID string, input CreateSetLogInput) (SetLog, error) {
 	const statusForShare = `SELECT status FROM workout_sessions WHERE id = $1 FOR SHARE`
+	const lockPlannedSet = `
+		SELECT p.planned_position
+		FROM scheduled_workout_planned_sets p
+		JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
+		WHERE p.id = $1
+		  AND p.scheduled_workout_exercise_id = $2
+		  AND swe.scheduled_workout_id = $3
+		FOR UPDATE OF p`
+	const plannedSetAlreadyClaimed = `
+		SELECT EXISTS (
+			SELECT 1 FROM set_logs
+			WHERE session_id = $1 AND scheduled_workout_planned_set_id = $2
+		)`
 	const nextSetNumber = `
 		SELECT COALESCE(MAX(set_number), 0) + 1
 		FROM set_logs
 		WHERE session_id = $1 AND scheduled_workout_exercise_id = $2`
 	const insert = `
-		INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, set_number, load, unit, reps, rpe, logged_by_user_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 		RETURNING id, set_number, load, unit, reps, rpe, logged_by_user_id`
 
 	var lastErr error
@@ -649,6 +770,26 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 				return SetLog{}, ErrSessionNotActive
 			}
 
+			var plannedPosition *int
+			if input.Kind == "PLANNED" {
+				var position int
+				if err := tx.QueryRow(ctx, lockPlannedSet, *input.ScheduledWorkoutPlannedSetID, input.ScheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&position); err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						return SetLog{}, ErrPlannedSetNotInSession
+					}
+					return SetLog{}, fmt.Errorf("workoutsession: lock planned set: %w", err)
+				}
+				plannedPosition = &position
+
+				var claimed bool
+				if err := tx.QueryRow(ctx, plannedSetAlreadyClaimed, sessionID, *input.ScheduledWorkoutPlannedSetID).Scan(&claimed); err != nil {
+					return SetLog{}, fmt.Errorf("workoutsession: check planned-set claim: %w", err)
+				}
+				if claimed {
+					return SetLog{}, ErrPlannedSetAlreadyLogged
+				}
+			}
+
 			var setNumber int
 			if err := tx.QueryRow(ctx, nextSetNumber, sessionID, input.ScheduledWorkoutExerciseID).Scan(&setNumber); err != nil {
 				return SetLog{}, fmt.Errorf("workoutsession: compute next set number: %w", err)
@@ -656,11 +797,16 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 
 			var s SetLog
 			err = tx.QueryRow(ctx, insert,
-				uuid.NewString(), sessionID, input.ScheduledWorkoutExerciseID, setNumber,
+				uuid.NewString(), sessionID, input.ScheduledWorkoutExerciseID, input.ScheduledWorkoutPlannedSetID, setNumber,
 				input.Load, input.Unit, *input.Reps, input.RPE, caller.ID,
 			).Scan(&s.ID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID)
 			if err != nil {
 				return SetLog{}, err
+			}
+			s.Kind = input.Kind
+			if input.Kind == "PLANNED" {
+				s.ScheduledWorkoutPlannedSetID = input.ScheduledWorkoutPlannedSetID
+				s.PlannedPosition = plannedPosition
 			}
 
 			if err := tx.Commit(ctx); err != nil {
@@ -674,6 +820,12 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 		}
 		if errors.Is(err, ErrSessionNotActive) {
 			return SetLog{}, err
+		}
+		if errors.Is(err, ErrPlannedSetNotInSession) || errors.Is(err, ErrPlannedSetAlreadyLogged) {
+			return SetLog{}, err
+		}
+		if isPlannedTargetClaimConflict(err) {
+			return SetLog{}, ErrPlannedSetAlreadyLogged
 		}
 		if isSetNumberConflict(err) {
 			lastErr = err
@@ -691,4 +843,11 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 func isSetNumberConflict(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == setLogSetNumberConstraint
+}
+
+// isPlannedTargetClaimConflict identifies the partial unique index used as
+// the final concurrency backstop for normal planned-target claims.
+func isPlannedTargetClaimConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == plannedTargetClaimIndex
 }

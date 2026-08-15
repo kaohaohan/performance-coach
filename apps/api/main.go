@@ -645,11 +645,13 @@ func handleCompleteSession(pool *pgxpool.Pool) http.HandlerFunc {
 // any of those fields sent by the client are simply ignored by decoding
 // into this struct.
 type createSetLogRequest struct {
-	ScheduledWorkoutExerciseID string   `json:"scheduledWorkoutExerciseId"`
-	Load                       *float64 `json:"load"`
-	Unit                       *string  `json:"unit"`
-	Reps                       *int     `json:"reps"`
-	RPE                        *float64 `json:"rpe"`
+	ScheduledWorkoutExerciseID   string   `json:"scheduledWorkoutExerciseId"`
+	Kind                         string   `json:"kind"`
+	ScheduledWorkoutPlannedSetID *string  `json:"scheduledWorkoutPlannedSetId"`
+	Load                         *float64 `json:"load"`
+	Unit                         *string  `json:"unit"`
+	Reps                         *int     `json:"reps"`
+	RPE                          *float64 `json:"rpe"`
 }
 
 // handleCreateSetLog decodes the request body, delegates validation,
@@ -674,11 +676,13 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		input := workoutsession.CreateSetLogInput{
-			ScheduledWorkoutExerciseID: req.ScheduledWorkoutExerciseID,
-			Load:                       req.Load,
-			Unit:                       req.Unit,
-			Reps:                       req.Reps,
-			RPE:                        req.RPE,
+			ScheduledWorkoutExerciseID:   req.ScheduledWorkoutExerciseID,
+			Kind:                         req.Kind,
+			ScheduledWorkoutPlannedSetID: req.ScheduledWorkoutPlannedSetID,
+			Load:                         req.Load,
+			Unit:                         req.Unit,
+			Reps:                         req.Reps,
+			RPE:                          req.RPE,
 		}
 
 		setLog, err := workoutsession.CreateSetLog(r.Context(), pool, user, sessionID, input)
@@ -693,6 +697,10 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session is not active")
 			case errors.Is(err, workoutsession.ErrExerciseNotInSession):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "scheduledWorkoutExerciseId does not belong to this session")
+			case errors.Is(err, workoutsession.ErrPlannedSetNotInSession):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "scheduledWorkoutPlannedSetId does not belong to this session exercise")
+			case errors.Is(err, workoutsession.ErrPlannedSetAlreadyLogged):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "scheduled planned set already logged")
 			default:
 				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 			}

@@ -31,3 +31,23 @@ func TestCreateWorkoutRequestLegacyScalarDoesNotProducePlan(t *testing.T) {
 		t.Fatal("legacy scalar payload unexpectedly resolved as a canonical plan")
 	}
 }
+
+func TestCreateSetLogRequestDecodesPlannedAssociation(t *testing.T) {
+	var req createSetLogRequest
+	if err := json.Unmarshal([]byte(`{"kind":"PLANNED","scheduledWorkoutExerciseId":"exercise-id","scheduledWorkoutPlannedSetId":"planned-set-id","reps":10}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Kind != "PLANNED" || req.ScheduledWorkoutExerciseID != "exercise-id" || req.ScheduledWorkoutPlannedSetID == nil || *req.ScheduledWorkoutPlannedSetID != "planned-set-id" || req.Reps == nil || *req.Reps != 10 {
+		t.Fatalf("decoded request = %#v", req)
+	}
+}
+
+func TestCreateSetLogRequestDecodesExtraWithoutPlannedAssociation(t *testing.T) {
+	var req createSetLogRequest
+	if err := json.Unmarshal([]byte(`{"kind":"EXTRA","scheduledWorkoutExerciseId":"exercise-id","reps":8}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Kind != "EXTRA" || req.ScheduledWorkoutPlannedSetID != nil {
+		t.Fatalf("decoded request = %#v", req)
+	}
+}
