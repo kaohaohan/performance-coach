@@ -40,10 +40,14 @@ func run() error {
 		return err
 	}
 
-	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Separate timeout budgets: DB connectivity and Firebase Admin SDK setup
+	// are independent dependencies. On a Cloud Run cold start, a slow Cloud
+	// SQL connector handshake must not starve Firebase's own budget (or vice
+	// versa) by sharing one deadline between two unrelated sequential calls.
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dbCancel()
 
-	pool, err := db.NewPool(startupCtx, cfg.DatabaseURL)
+	pool, err := db.NewPool(dbCtx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -51,7 +55,10 @@ func run() error {
 
 	log.Println("database connection verified")
 
-	verifier, err := authn.NewVerifier(startupCtx, cfg.FirebaseProjectID)
+	firebaseCtx, firebaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer firebaseCancel()
+
+	verifier, err := authn.NewVerifier(firebaseCtx, cfg.FirebaseProjectID)
 	if err != nil {
 		return err
 	}
@@ -77,6 +84,11 @@ func run() error {
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: mux,
+		// Without this, a client that opens a connection and sends headers
+		// slowly can hold it open indefinitely (slowloris). On Cloud Run
+		// that connection also occupies one of the instance's Concurrency
+		// slots, so an unbounded header read can crowd out real requests.
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
