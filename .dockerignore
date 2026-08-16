@@ -1,0 +1,10 @@
+# The Docker build context is the repository root; only the Go API is copied
+# into the image. Exclude unrelated worktree files before Docker sends the
+# context to its builder.
+.git
+.env
+.env.*
+**/node_modules
+apps/web/.next
+apps/web/.next-mobile
+apps/web/screenlog.*
