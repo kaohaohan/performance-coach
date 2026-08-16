@@ -1,10 +1,10 @@
-# Deployment Architecture v0.1
+# Deployment Architecture v0.2
 
-Status: approved target architecture for a controlled production pilot. This document is the canonical deployment/runbook specification for future deployment tasks. It does not provision or deploy anything.
+Status: the v0.1 architecture below (hosting split, `asia-east1` colocation, Cloud SQL baseline, migration-job-only schema changes, forward-only rollback) remains **approved**. The v0.2 additions — phase reordering around the container image, per-entrypoint configuration, and the new Observability section (§12) — are **proposed**, pending review, because they introduce new acceptance criteria for D1b–D4 rather than only clarifying existing text. This document is the canonical deployment/runbook specification for future deployment tasks. It does not provision or deploy anything.
 
 ## 1. Scope and principles
 
-The pilot architecture optimizes for a small real-user release: simple operations, correct production boundaries, controlled cost, and hands-on learning of Docker, Cloud Run, Cloud SQL, and production secrets. It preserves the current application split and does not add Kubernetes, Redis, a load balancer, VPC networking, replicas, HA, Terraform, or CI/CD in v0.1.
+The pilot architecture optimizes for a small real-user release: simple operations, correct production boundaries, controlled cost, and hands-on learning of Docker, Cloud Run, Cloud SQL, and production secrets. It preserves the current application split and does not add Kubernetes, Redis, a load balancer, VPC networking, replicas, HA, Terraform, or CI/CD in this architecture.
 
 The product flow remains Coach → Workout → Schedule Athlete → WorkoutSession → SetLog → Coach Review. Deployment work must not change the API or database contracts without their normal approval process.
 
@@ -46,7 +46,7 @@ Use `asia-east1` (Taiwan) for Artifact Registry, Cloud Run, Cloud Run Jobs, and 
 
 ### Decisions
 
-| Decision | v0.1 choice |
+| Decision | Choice (approved in v0.1, unchanged in v0.2) |
 | --- | --- |
 | Frontend | Vercel, rooted at `apps/web`. |
 | API | Docker image on Cloud Run. |
@@ -83,18 +83,45 @@ Requirements:
 - Explicitly test that Vercel forwards the `Authorization` header end-to-end.
 - Do not set production values as Vercel Preview defaults. Preview deployments are not a staging environment and must not mutate production data.
 - Future custom domains change the browser origin only; the `/backend` client contract remains unchanged.
+- Measure the added latency of this hop. §15 requires cost to be measured rather than assumed; the same applies to round-trip time. The current implementation is a Next.js `rewrites()` **external rewrite** (`apps/web/next.config.ts`) — Vercel proxies it through its own routing/edge network rather than through a deployed Vercel Function, so there is no configurable "function region" to tune today. Measure the actual round-trip in D6 first; if it is poor, the available options are limited (Vercel project/region settings, or restructuring the proxy as a Function to gain a configurable execution region) and should be chosen from measured numbers, not assumed in advance.
 
 Direct browser-to-Cloud-Run calls are deferred. They would require an explicit CORS allow-list and would expose a second API origin in client configuration without a current benefit.
 
 ## 5. Cloud Run API
 
-Cloud Run is suitable for the existing Go API: it listens on `PORT`, exposes `/health` and `/ready`, accepts graceful shutdown, and has no VM-specific dependency. A future D1 container task must add a production Dockerfile and `.dockerignore`, build from the repository context, and validate the image locally before cloud deployment.
+Cloud Run is suitable for the existing Go API: it listens on `PORT`, exposes `/health` and `/ready`, accepts graceful shutdown, and has no VM-specific dependency. A future D1 container task must add `apps/api/Dockerfile` and a root `.dockerignore`, build from the repository context (`docker build -f apps/api/Dockerfile .`), and validate the image locally before cloud deployment.
 
 ### Invocation and application authorization
 
 The Cloud Run service must permit unauthenticated **Cloud Run invocation** so Vercel can proxy browser traffic to it. This does not make protected application endpoints anonymous: the Go API remains responsible for verifying Firebase ID tokens and enforcing role/relationship authorization.
 
 Do not try to protect the Cloud Run service itself with Cloud Run IAM while using browser Firebase tokens. Firebase ID tokens are application credentials, not Cloud Run invoker credentials. Keep only deliberately public operational endpoints such as `/health` minimal; all business routes retain Go authentication.
+
+### The security boundary is the Go API, not Vercel
+
+The Cloud Run service URL is publicly reachable by anyone who learns it. The Vercel rewrite is a convenience for the browser (same-origin, no CORS), **not** a security boundary: a client can call the Cloud Run host directly and bypass Vercel entirely. This is acceptable precisely because Firebase token verification and role/relationship authorization live in the Go API, which sees both paths identically.
+
+Two consequences must be recorded rather than assumed:
+
+- Nothing in v0.1/v0.2 provides rate limiting, at either layer. An unauthenticated caller can force token-verification work and consume Cloud Run instances up to the max-instance cap. This is an accepted controlled-pilot risk, bounded by the max-instance cap and the pilot's small user set.
+- Any future protection (Cloud Armor, a shared secret header injected by the Vercel rewrite, WAF rules) must be applied at Cloud Run, not only at Vercel. See §17.
+
+### Health endpoints and probes
+
+The API exposes two distinct endpoints and they are not interchangeable:
+
+| Endpoint | Meaning |
+| --- | --- |
+| `/health` | Process liveness only; deliberately does not touch PostgreSQL. |
+| `/ready` | Re-pings PostgreSQL on every call (`handleReady` in `apps/api/main.go`) and returns 503 if it currently fails. It is a live check, not a one-time startup fact. |
+
+Configure Cloud Run's probes explicitly instead of accepting its default TCP probe on `PORT`, which would report a process that cannot reach the database as healthy. Cloud Run's startup probe and container-level health checks are GA; a continuous, traffic-gating readiness probe is a Preview feature as of this writing — confirm current status before relying on it.
+
+For the pilot, the explicit choice is: wire `/ready` as the **startup probe** only, gating the first traffic to a new revision. This is a deliberate scope limit, not an oversight — record it as such:
+
+- **At boot**, `db.NewPool` in `apps/api/internal/db` pings the database and returns a fatal error on failure, so a revision that cannot reach the database on startup never receives traffic. This covers the common case (bad config, unreachable Cloud SQL at deploy time).
+- **After startup**, a database outage mid-revision is *not* caught by a probe under this choice — the running instance keeps receiving traffic and individual requests fail with 5xx via normal error handling, rather than the instance being pulled from rotation. `/ready` still reports 503 correctly if polled manually or by an external monitor; it is just not wired as a continuous Cloud Run gate in v0.2.
+- Evaluate the Preview readiness probe as a follow-up once it is confirmed stable (§17); it is deferred, not rejected, because relying on a Preview feature for the pilot's only failure-detection path is itself a risk.
 
 ### Initial scaling guardrails
 
@@ -134,13 +161,23 @@ Use Cloud Run's built-in Cloud SQL connection configuration to attach the instan
 /cloudsql/<GCP_PROJECT_ID>:asia-east1:<CLOUD_SQL_INSTANCE>
 ```
 
-For this MVP, use Cloud SQL public IP plus the Cloud Run managed connector/socket path. This provides encrypted connector transport and avoids a Serverless VPC Access connector. Private IP/VPC networking is a deferred hardening option, not a v0.1 prerequisite.
+For this MVP, use Cloud SQL public IP plus the Cloud Run managed connector/socket path. This provides encrypted connector transport and avoids a Serverless VPC Access connector. Private IP/VPC networking is a deferred hardening option, not a prerequisite for this pilot.
 
 `DATABASE_URL` remains the application variable name. Its production value is a secret and must be constructed for the Unix socket connection with the production database name, user, password, and `sslmode=disable` only when using the managed connector path. The connection mechanism—not a public TCP connection from application code—is responsible for the secure Cloud Run-to-Cloud SQL transport.
+
+`sslmode=disable` is safe on the `/cloudsql/...` Unix socket path, where the transport never leaves the container and the connector supplies encryption. It is also safe against a local loopback PostgreSQL, which is what `.env.example` already uses (`localhost:5433`) — there is no network to protect between the API process and a database on the same machine. The risk is a *production* DSN that ends up pointed at a public TCP host with `sslmode=disable` still set, which would send credentials and data in plaintext.
+
+The assertion D1b adds must therefore be host-based, not blanket: refuse to start only when `sslmode=disable` is set **and** the DSN host is neither a `/cloudsql/` socket path **nor** a loopback address (`localhost`, `127.0.0.1`). This rejects exactly the dangerous case — a leaked production DSN pointed at a public host — without breaking local development, which never had a network-facing DSN to leak.
 
 ### Connection budget
 
 `pgxpool.New` currently uses defaults and has no explicit maximum. Before production deployment, D1b must add explicit bounded pool configuration. Initial target: at most four database connections per API instance. With Cloud Run maximum instances of three, the planned API budget is at most twelve pooled connections, plus one separately run migration job. Size the Cloud SQL instance and its `max_connections` allowance around all clients, not only API requests.
+
+`pgxpool.New` without an explicit `Config` already applies pgx's own defaults for `MaxConnLifetime`, `MaxConnIdleTime`, and a periodic health check, so the pool is not entirely without eviction today. The requirement for D1b is not "add eviction that doesn't exist" but to **explicitly pin and verify** `MaxConns`, `MaxConnIdleTime`, and `MaxConnLifetime` for production rather than run on library defaults nobody has confirmed against Cloud SQL's own idle-connection behavior. Pin the values, then check under D6 load that Cloud SQL isn't closing connections faster than the pool retires them.
+
+Also size the pool against the configured Cloud Run concurrency: at concurrency `20` and four connections per instance, up to sixteen in-flight requests can be waiting on a connection. That is acceptable for short CRUD queries but means database slowness turns into request queueing.
+
+This queueing currently has no explicit upper bound. `main.go` does not set `http.Server.ReadTimeout`/`WriteTimeout`, and a handler's `r.Context()` is canceled on client disconnect or when the handler returns — not on a query simply taking too long. Cloud Run's own request timeout closes the client-facing connection when it expires, but that is not the same as a guarantee that the container stops the in-flight database work; whether it does depends on whether that closure is wired to cancel the request context. D1b should add an explicit deadline — a server-level request timeout, a per-handler `context.WithTimeout` around the database call, or both — so a slow query has a bounded worst case instead of an assumed one. Verify the chosen mechanism under D6 load rather than relying on incidental cancellation.
 
 Do not scale Cloud Run above the agreed cap or raise the pool cap until connection usage, latency, and Cloud SQL limits have been checked.
 
@@ -155,7 +192,7 @@ No actual values belong in this document, source control, Docker image layers, l
 | `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` | LOCAL ONLY | Not set in Vercel production | Never point production browsers to an emulator. |
 | `BACKEND_BASE_URL` | SERVER CONFIG | Vercel production environment | Cloud Run HTTPS URL; no trailing slash. |
 | `DATABASE_URL` | SECRET | Secret Manager, injected into Cloud Run service and migration job | Database username/password and socket URL. |
-| `FIREBASE_PROJECT_ID` | SERVER CONFIG | Cloud Run service and migration job configuration if needed | Production Firebase/GCP project ID; no credential JSON. |
+| `FIREBASE_PROJECT_ID` | SERVER CONFIG | Cloud Run API service only; **not** the migration job | Production Firebase/GCP project ID; no credential JSON. The migration job does not authenticate users and must not require it — see §9. |
 | `FIREBASE_AUTH_EMULATOR_HOST` | LOCAL ONLY | Not set in Cloud Run | Production must use Firebase's real token verification path. |
 | `PORT` | PLATFORM CONFIG | Cloud Run supplies it | App default is `8080`; do not make it a secret. |
 | Cloud SQL instance connection name | SERVER CONFIG | Cloud Run Cloud SQL attachment/configuration | Not a password, but keep it out of browser variables. |
@@ -166,7 +203,7 @@ Use Secret Manager for secret material. When injecting a secret as an environmen
 
 ## 9. Schema migrations
 
-Choose **an explicit Cloud Run migration Job** for v0.1.
+Choose **an explicit Cloud Run migration Job** for this pilot.
 
 The job uses the same immutable API image but a migration command/entrypoint. It runs one task with maximum retries set to `0`, uses the migration database credential, records applied migration versions/checksums, and exits. Run and verify it before directing production traffic to an API revision that requires the schema change.
 
@@ -180,8 +217,30 @@ The repository currently contains SQL migration files but no runner or schema-ve
 - an applied-version/checksum ledger;
 - failure on changed historical migration content;
 - a dry/local validation path against a clean PostgreSQL database;
-- distinct API, migration, and bootstrap entrypoints; and
+- distinct API, migration, and bootstrap entrypoints;
+- **per-entrypoint configuration requirements** (see below);
+- bounded pool configuration including idleness and lifetime (see §7); and
 - no automatic migration in API startup.
+
+#### Per-entrypoint configuration
+
+`config.Load` in `apps/api/internal/config/config.go` currently requires both `DATABASE_URL` and `FIREBASE_PROJECT_ID` and returns an error if either is missing. The migration job never verifies a user token and will not have `FIREBASE_PROJECT_ID` set (§8), so reusing this single loader would make the migration job fail to start for a variable it does not use.
+
+Each entrypoint must therefore declare and validate only what it actually needs:
+
+| Entrypoint | Required configuration |
+| --- | --- |
+| api | `DATABASE_URL`, `FIREBASE_PROJECT_ID` (`PORT` supplied by Cloud Run) |
+| migrate | `DATABASE_URL` only |
+| bootstrap | `DATABASE_URL`, plus its reviewed input manifest reference (§10) |
+
+A single "everything is required" loader shared by all three is not acceptable. Validating configuration a component does not use converts an unused variable into a startup failure, and — worse in the other direction — encourages setting credentials on jobs that have no business holding them.
+
+#### Repository structure
+
+`main.go` currently sits at `apps/api/` with no `cmd/` directory, so "distinct entrypoints" is a module restructure, not a flag. D1b moves the API entrypoint to `apps/api/cmd/api` and adds `apps/api/cmd/migrate` and `apps/api/cmd/bootstrap`, leaving domain packages under `apps/api/internal` unchanged. D1b also extends the D1a Dockerfile to build all three binaries into the one immutable image; the Cloud Run service and each job then select among them by command, preserving the single-image decision above. Scope D1b estimates for this restructure — it touches the build, the Dockerfile, and every entrypoint's configuration path, not just the migration runner.
+
+### Schema rollback posture
 
 Production schema rollback is **forward-only** unless an explicitly reviewed recovery plan says otherwise. The existing `0001_init_schema.down.sql` drops all tables and must never be used as a normal production rollback. Use a compatible forward fix, or restore to a separate instance from point-in-time recovery when necessary.
 
@@ -210,17 +269,61 @@ Each item is a future, separately approved implementation/deployment task. Resou
 
 | Phase | Outcome and acceptance gate |
 | --- | --- |
-| D1a — container readiness | Add Dockerfile and `.dockerignore` for `apps/api`; build and run locally; `/health` works in the container. |
-| D1b — production database tooling | Add bounded `pgxpool` configuration plus explicit migration/bootstrap entrypoints; prove migrations from a clean local database. |
+| D1a — container readiness | **Done.** `apps/api/Dockerfile` (multi-stage, `golang:1.26` builder → `gcr.io/distroless/static-debian12` runtime, `CGO_ENABLED=0`) and a root `.dockerignore` are in place; build context is the repository root (`docker build -f apps/api/Dockerfile .`). `.dockerignore` excludes `**/node_modules`, `apps/web/.next`, `apps/web/.next-mobile`, `apps/web/screenlog.*`, `.git`, `.env`, `.env.*`. Verified locally: image builds, container starts (`database connection verified` → `listening on :8080`), `/health` and `/ready` both return 200, and `SIGTERM` triggers graceful shutdown (`shutdown signal received`, clean exit within Cloud Run's grace period). Final image size ~54MB. D1b extends this Dockerfile to the migrate and bootstrap binaries once they exist. |
+| D1b — production database tooling | Add bounded `pgxpool` configuration (§7), the `sslmode` startup assertion (§7), per-entrypoint configuration and the `cmd/` restructure (§9), and explicit migration/bootstrap entrypoints; prove migrations from a clean local database. |
+| D1c — structured logging | Implement §12: JSON logs to stdout with `severity`, request IDs, and the redaction rules. Verify locally before any cloud phase, so D3c onward is observable. |
 | D2 — GCP/Cloud SQL foundation | After cost approval, establish project/billing/IAM, Artifact Registry, Cloud SQL in `asia-east1`, backups/PITR, least-privilege identities, and a documented connection budget. |
-| D3 — secrets, migration, bootstrap | Create Secret Manager entries, configure identities, run migration job, then approved bootstrap job; verify database state and access boundaries. |
-| D4 — Cloud Run API | Manually build/publish image and deploy API with Cloud SQL attachment, public invocation, bounded scaling, secrets, and ADC identity; validate logs/readiness/Firebase verification. |
+| D3a — secrets and identities | Create Secret Manager entries, the runtime and migration service accounts, and their least-privilege grants. No workload runs yet. |
+| D3b — first image publish | Manually build and push the image to Artifact Registry in `asia-east1`. **Record the image digest**; every later phase references that digest. |
+| D3c — migration and bootstrap | Using the D3b digest, run the migration job and verify schema state; then run the approved bootstrap job (§10) and verify access boundaries. Also perform the one-time restore drill below. |
+| D4 — Cloud Run API | Deploy the API service **from the same D3b digest** with Cloud SQL attachment, public invocation, bounded scaling, secrets, explicit probes (§5), and ADC identity; validate logs/readiness/Firebase verification. |
 | D5 — Vercel frontend | Connect `apps/web`, set production-only public Firebase config and `BACKEND_BASE_URL`, then deploy normally through Vercel Git integration. |
-| D6 — production E2E | Test the complete Coach/Athlete core loop, authorization failures, refresh/reload, mobile browser path, logs, and persisted records. |
+| D6 — production E2E | Test the complete Coach/Athlete core loop, authorization failures, refresh/reload, mobile browser path, logs, and persisted records. Measure and record Vercel→Cloud Run round-trip latency (§4) and observed cold-start behaviour. |
 | D7 — custom domain/DNS | Only after D6 works on provider URLs, configure Vercel domain and Firebase authorized domains; Cloudflare may manage DNS. |
 | D8 — CI/CD later | Automate the understood manual path: immutable image, explicit migration job gate, deploy, smoke test, and controlled rollback. |
 
-## 12. Verification checklist
+### Why the image is published before the migration job
+
+§9 requires the migration job to run the same immutable image as the API. The image must therefore exist before any job runs, which is why D3b sits between identity setup and the first workload. Deploy the API service (D4) from that same digest rather than rebuilding, so the schema that was migrated and the binary that serves traffic provably came from one build. Reference the digest, not a mutable tag: a tag can be repointed, and "which image is actually running" must stay answerable during an incident.
+
+### One-time restore drill
+
+D3c includes restoring from point-in-time recovery to a **separate temporary instance**, verifying the restored data, and then deleting that instance. Backups and PITR are enabled in D2, but a recovery path that has never been executed is an assumption, not a capability — and §14's incident posture depends on it working. Do this once, while there is no production data to lose and no incident in progress. Record the elapsed time; that number is the real recovery expectation.
+
+## 12. Observability
+
+The API currently logs with `log.Println`, which reaches Cloud Logging as unstructured text with no severity. Every entry then looks identical to a filter, so the checks §13 asks for — spotting credential leakage, connection saturation, or a failing token verification — would have to be done by eye. A pilot with real users needs the minimum below in place before D3c, not after an incident.
+
+This is deliberately a floor, not an observability strategy. Distributed tracing, error aggregation, and dashboards are deferred (§17).
+
+### Log format
+
+- Write **JSON to stdout**, one object per line. Cloud Run collects stdout automatically; no logging agent or SDK is required.
+- Include a `severity` field using Cloud Logging's severity names (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) so entries are filterable and errors are visibly errors.
+- Include a request ID on every request-scoped entry, and echo it to the client via an `X-Request-Id` response header — not as a new field in the JSON body. The API's error envelope is a fixed contract (`authn.WriteError` in `apps/api/internal/authn/authn.go` writes exactly `{"error":{"code","message"}}`); adding a body field is an API contract change requiring its own review, which this document does not authorize. A response header carries the same debugging value without touching the contract.
+- Log the start-of-life facts once at boot: resolved port, whether the database ping succeeded, the Firebase project ID, and the migration ledger version if applicable. These make "which revision is this and what does it think it is connected to" answerable without a redeploy.
+
+### Never log
+
+The following must not appear in any log line, at any severity, including error paths and panic handlers:
+
+- `DATABASE_URL` or any component of it, especially the password;
+- the `Authorization` header, or any Firebase ID token, in whole or in part;
+- any Secret Manager value;
+- full request bodies for authenticated endpoints, which carry athlete data.
+
+Log the *shape* of a failure — endpoint, status, error class, request ID — not the credential that produced it. Error wrapping is the usual leak: a connection error that wraps the DSN will print the password when logged.
+
+### Alerting
+
+At least one alert must exist and must have been deliberately triggered once before the pilot opens, so it is known to actually deliver:
+
+- elevated 5xx rate on the Cloud Run service, **or**
+- Cloud SQL instance unavailability.
+
+An alert that has never fired is in the same category as a backup that has never been restored.
+
+## 13. Verification checklist
 
 Before calling the first pilot deployment ready, verify:
 
@@ -231,10 +334,15 @@ Before calling the first pilot deployment ready, verify:
 - A coach creates/schedules a workout; athlete opens it and records SetLogs; coach reviews results.
 - Database writes persist after API revision replacement.
 - Cloud Run and Cloud SQL logs show no credential values or unexpected connection saturation.
+- Logs arrive in Cloud Logging parsed as JSON with a usable `severity`, and an error path is confirmed to surface as `ERROR` rather than `INFO` (§12).
+- A request ID from the `X-Request-Id` response header can be used to locate that exact request in Cloud Logging, and the JSON error body remains unchanged (`{"error":{"code","message"}}`).
+- At least one alert is configured **and has been deliberately triggered once** to confirm delivery (§12).
+- The point-in-time-recovery restore drill has been completed, its elapsed time recorded, and the temporary instance deleted (§11).
+- The API service and the migration job that ran against this database were deployed from the same image digest (§11).
 - Vercel Preview has no production backend or production Firebase mutation path.
-- Backup/PITR configuration, instance location, max instance cap, pool cap, and Secret Manager version pins are recorded in the deployment change record.
+- Backup/PITR configuration, instance location, max instance cap, pool cap, connection idle/lifetime settings, image digest, and Secret Manager version pins are recorded in the deployment change record.
 
-## 13. Rollback and incident posture
+## 14. Rollback and incident posture
 
 - **API:** move Cloud Run traffic back to the prior healthy revision. Keep the prior image/revision identifiable.
 - **Frontend:** use Vercel's prior deployment rollback/redeployment controls.
@@ -243,7 +351,7 @@ Before calling the first pilot deployment ready, verify:
 
 The initial single-zone database has no high-availability failover. This is an accepted controlled-pilot availability trade-off, not a claim of production-grade redundancy.
 
-## 14. Cost guardrails
+## 15. Cost guardrails
 
 Cloud SQL is the likely material recurring cost because the instance runs continuously, with additional storage, backup, and network charges. Before D2, use the current Google Cloud Pricing Calculator for `asia-east1`, PostgreSQL 16, the intended Enterprise dedicated-core size, storage, backups/PITR, and estimated network traffic. Record the monthly estimate and a pilot spending limit before creating resources.
 
@@ -251,7 +359,7 @@ Cloud Run has request-based CPU/memory pricing and can scale to zero with `min i
 
 Confirm the applicable Vercel plan at provisioning time. Current Vercel plan eligibility and pricing can change; a commercial pilot may require a paid plan. Do not rely on historical price figures.
 
-## 15. Cloudflare's limited role
+## 16. Cloudflare's limited role
 
 Cloudflare Quick Tunnel is only temporary remote access to a developer Mac:
 
@@ -263,9 +371,9 @@ It is not production infrastructure and is not an application runtime. Quick Tun
 
 There is one current local-auth caveat: a browser on an iPhone cannot reach `127.0.0.1:9099` on the developer Mac, and the current Firebase emulator configuration uses an HTTP emulator host. A Quick Tunnel for Next.js alone therefore does not make Firebase emulator authentication work remotely over HTTPS. Resolve that in a future, isolated local-testing task with either safe emulator tunneling/proxying or a non-production Firebase project; it does not affect the production architecture.
 
-After D6, Cloudflare may manage DNS for a custom Vercel domain. Cloudflare Workers, Pages, and Containers are not part of v0.1 hosting.
+After D6, Cloudflare may manage DNS for a custom Vercel domain. Cloudflare Workers, Pages, and Containers are not part of this pilot's hosting.
 
-## 16. Deferred items and change triggers
+## 17. Deferred items and change triggers
 
 Revisit this architecture only when evidence requires it:
 
@@ -276,8 +384,11 @@ Revisit this architecture only when evidence requires it:
 - Sustained load: adjust Cloud Run concurrency/max instances and pool sizes using measured database connections and latency.
 - Repeatable releases: add CI/CD only after D1–D6 manual path is documented and understood.
 - A true staging need: define isolated Firebase, API, and database resources; do not let Vercel Previews act as staging by accident.
+- Abuse or unexplained traffic against the public Cloud Run URL: add rate limiting at Cloud Run — Cloud Armor, or a shared secret header injected by the Vercel rewrite and required by the API. Applying it only at Vercel would not help, since the Cloud Run host is directly reachable (§5).
+- Debugging that outgrows single-request logs: add distributed tracing and error aggregation on top of the §12 floor.
+- Measured Vercel→Cloud Run latency is poor at D6: investigate Vercel project/region configuration and whether restructuring the `/backend` proxy as a Vercel Function (for a configurable execution region) is warranted, before changing the application architecture (§4).
 
-## 17. Official references
+## 18. Official references
 
 - [Cloud Run locations](https://cloud.google.com/run/docs/locations), [Cloud SQL PostgreSQL region availability](https://cloud.google.com/sql/docs/postgres/region-availability-overview), and [Artifact Registry locations](https://cloud.google.com/artifact-registry/docs/repositories/repo-locations)
 - [Cloud Run service identity](https://cloud.google.com/run/docs/securing/service-identity) and [Firebase Admin SDK setup](https://firebase.google.com/docs/admin/setup)
