@@ -1,7 +1,8 @@
-// Command api is the Performance Coach Go API entrypoint.
-//
-// V0.1 scope: process lifecycle, a verified PostgreSQL connection pool, and
-// /health + /ready endpoints. No domain routes yet.
+// Command api is the Performance Coach Go API entrypoint. It is one of
+// three entrypoints built from this module (api, migrate, bootstrap;
+// docs/deployment-architecture-v0.2.md §9) and is the only one that serves
+// HTTP traffic or verifies Firebase ID tokens. It never runs schema
+// migrations or bootstrap data creation itself.
 package main
 
 import (
@@ -35,7 +36,7 @@ func main() {
 }
 
 func run() error {
-	cfg, err := config.Load()
+	cfg, err := config.LoadAPI()
 	if err != nil {
 		return err
 	}
@@ -47,7 +48,7 @@ func run() error {
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dbCancel()
 
-	pool, err := db.NewPool(dbCtx, cfg.DatabaseURL)
+	pool, err := db.NewPool(dbCtx, cfg.DatabaseURL, db.DefaultMaxConns)
 	if err != nil {
 		return err
 	}
@@ -81,14 +82,34 @@ func run() error {
 	mux.Handle("POST /api/v1/sessions/{sessionId}/complete", authMiddleware(handleCompleteSession(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/set-logs", authMiddleware(handleCreateSetLog(pool)))
 
+	// requestTimeout bounds the worst case for a single request end to end,
+	// including any in-flight database call. Without this, main.go had no
+	// deadline of its own: a handler's r.Context() is canceled on client
+	// disconnect or when the handler returns, not on a query simply taking
+	// too long, so a slow query could otherwise hold a pooled connection
+	// (and a Cloud Run concurrency slot) indefinitely
+	// (docs/deployment-architecture-v0.2.md §7). http.TimeoutHandler cancels
+	// the handler's context when it fires, so a database call using
+	// r.Context() is canceled along with the response. Verify this bound
+	// under D6 load rather than assuming it is generous enough.
+	const requestTimeout = 10 * time.Second
+	handler := http.TimeoutHandler(mux, requestTimeout, `{"error":{"code":"DEADLINE_EXCEEDED","message":"request timed out"}}`)
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: mux,
+		Handler: handler,
 		// Without this, a client that opens a connection and sends headers
 		// slowly can hold it open indefinitely (slowloris). On Cloud Run
 		// that connection also occupies one of the instance's Concurrency
 		// slots, so an unbounded header read can crowd out real requests.
 		ReadHeaderTimeout: 5 * time.Second,
+		// ReadTimeout/WriteTimeout are a second, connection-level backstop
+		// behind the per-request TimeoutHandler above: they bound the whole
+		// request/response cycle at the transport level regardless of
+		// handler behavior. Set comfortably above requestTimeout so the
+		// handler-level timeout is normally what fires.
+		ReadTimeout:  requestTimeout + 5*time.Second,
+		WriteTimeout: requestTimeout + 5*time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
