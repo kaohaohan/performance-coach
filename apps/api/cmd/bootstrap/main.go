@@ -11,26 +11,43 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/bootstrap"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	// Built first, before config.LoadBootstrap(): a missing/invalid
+	// environment variable is then reported as one structured ERROR line
+	// like every other fact this job logs, instead of a plain-text
+	// log.Fatal (docs/deployment-architecture-v0.2.md §12). This is a
+	// short-lived job, not an HTTP server — no request ID, no
+	// logging.Middleware; those are request-scoped concepts this
+	// entrypoint has no requests for.
+	logger := logging.New(os.Stdout)
+	slog.SetDefault(logger)
+
+	if err := run(logger); err != nil {
+		logger.Error("fatal bootstrap error", "error", err.Error())
+		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(logger *slog.Logger) error {
 	cfg, err := config.LoadBootstrap()
 	if err != nil {
 		return err
 	}
 
+	// Only cfg.ManifestPath (a filesystem path, not its content) is ever
+	// logged. The manifest itself carries Firebase UIDs and names (§10);
+	// nothing about it is echoed below, including in the success summary,
+	// which reports counts only.
 	manifest, err := bootstrap.LoadManifest(cfg.ManifestPath)
 	if err != nil {
 		return err
@@ -48,13 +65,16 @@ func run() error {
 	}
 	defer pool.Close()
 
-	log.Println("database connection verified")
+	logger.Info("database connection verified")
 
 	result, err := bootstrap.Apply(context.Background(), pool, manifest)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("bootstrap complete: %d user(s) upserted, %d relationship(s) created", result.UsersUpserted, result.RelationshipsCreated)
+	logger.Info("bootstrap complete",
+		"users_upserted", result.UsersUpserted,
+		"relationships_created", result.RelationshipsCreated,
+	)
 	return nil
 }

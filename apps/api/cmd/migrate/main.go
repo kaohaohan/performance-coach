@@ -11,21 +11,34 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	// Built first, before config.LoadMigrate(): a missing/invalid
+	// environment variable is then reported as one structured ERROR line
+	// like every other fact this job logs, instead of a plain-text
+	// log.Fatal (docs/deployment-architecture-v0.2.md §12). This is a
+	// short-lived job, not an HTTP server — no request ID, no
+	// logging.Middleware; those are request-scoped concepts this
+	// entrypoint has no requests for.
+	logger := logging.New(os.Stdout)
+	slog.SetDefault(logger)
+
+	if err := run(logger); err != nil {
+		logger.Error("fatal migration error", "error", err.Error())
+		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(logger *slog.Logger) error {
 	cfg, err := config.LoadMigrate()
 	if err != nil {
 		return err
@@ -40,23 +53,25 @@ func run() error {
 	}
 	defer pool.Close()
 
-	log.Println("database connection verified")
+	logger.Info("database connection verified")
 
 	// The job itself has no overall deadline beyond the Cloud Run Job's own
 	// timeout: migrations run as long as they take, and are not subject to
 	// the API's per-request timeout budget.
 	applied, err := migrate.Up(context.Background(), pool, func(version string) {
-		log.Printf("applied migration %s", version)
+		// version is our own derived migration filename stem (e.g.
+		// "0001_init_schema"), never external/user input — safe to log.
+		logger.Info("applied migration", "version", version)
 	})
 	if err != nil {
 		return err
 	}
 
 	if len(applied) == 0 {
-		log.Println("no pending migrations")
+		logger.Info("no pending migrations")
 		return nil
 	}
 
-	log.Printf("applied %d migration(s)", len(applied))
+	logger.Info("migration run complete", "applied_count", len(applied))
 	return nil
 }

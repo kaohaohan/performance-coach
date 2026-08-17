@@ -1,14 +1,17 @@
 // Package migrate applies the SQL files in apps/api/migrations against a
 // PostgreSQL database in order, tracking what has already run in an
 // applied-version/checksum ledger table (docs/deployment-architecture-v0.2.md
-// §9). It never runs from API startup: this package is used only by the
-// migrate entrypoint.
+// §9). Applying migrations (Up) never runs from API startup — only the
+// migrate entrypoint calls it. LatestAppliedVersion is read-only and is
+// also used by the api entrypoint, purely to log which schema version it
+// thinks it is running against (§12).
 package migrate
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -16,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/migrations"
@@ -209,4 +213,36 @@ func applyOne(ctx context.Context, pool *pgxpool.Pool, m Migration) error {
 // is escaped anyway for correctness against a version containing a quote.
 func quoteLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// LatestAppliedVersion returns the highest version recorded in the
+// schema_migrations ledger, for boot-time logging
+// (docs/deployment-architecture-v0.2.md §12: "the migration ledger version
+// if applicable"). It is deliberately best-effort: ok is false with a nil
+// err both when no migration has ever run and when the ledger table itself
+// does not exist yet (a database migrate has never touched), since neither
+// case is a fault in the caller. A non-nil err means the query itself
+// failed for some other reason (e.g. the database is unreachable); the
+// caller decides what to do with that, but this function never applies or
+// modifies anything, so it is always safe to call from API startup.
+func LatestAppliedVersion(ctx context.Context, pool *pgxpool.Pool) (version string, ok bool, err error) {
+	err = pool.QueryRow(ctx, `SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1`).Scan(&version)
+	if err == nil {
+		return version, true, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+
+	// PostgreSQL error code 42P01 is undefined_table: the migrate
+	// entrypoint has never run against this database yet. Compared inline
+	// rather than via github.com/jackc/pgerrcode, to avoid a new
+	// dependency for one well-known, stable SQLSTATE code.
+	const undefinedTable = "42P01"
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == undefinedTable {
+		return "", false, nil
+	}
+
+	return "", false, fmt.Errorf("migrate: read latest applied version: %w", err)
 }

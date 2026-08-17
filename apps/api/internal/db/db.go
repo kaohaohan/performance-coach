@@ -3,11 +3,18 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrInvalidDatabaseConfig is returned when DATABASE_URL parses as a URL
+// (so AssertSafeSSLMode lets it through) but pgxpool.ParseConfig still
+// rejects it. See the comment at NewPool's call to pgxpool.ParseConfig for
+// why its message is deliberately generic.
+var ErrInvalidDatabaseConfig = errors.New("db: DATABASE_URL was rejected while building the connection pool config (its content is not included here: some pgx parse failures embed the raw DSN, credentials included, unredacted)")
 
 // Pool-wide connection budget, pinned explicitly rather than left to
 // pgxpool's library defaults (docs/deployment-architecture-v0.2.md §7
@@ -49,9 +56,20 @@ func NewPool(ctx context.Context, databaseURL string, maxConns int32) (*pgxpool.
 		return nil, err
 	}
 
+	// pgxpool.ParseConfig's error is not safe to propagate verbatim. It
+	// redacts the password when it can identify one — a recognized
+	// postgres:// URL with, say, an invalid sslmode value — but a string
+	// that reaches its libpq keyword/value fallback parser and fails to
+	// tokenize at all is embedded in the error raw, credentials included
+	// (verified in dsn_test.go/TestNewPoolRejectsUnparsablePoolConfigWithoutLeaking:
+	// AssertSafeSSLMode's net/url.Parse is lenient enough to accept
+	// strings that are not valid postgres DSNs at all, so this path is
+	// reachable even after that check passes). Since callers of NewPool
+	// cannot tell which case they got from the error alone, neither is
+	// ever propagated — same reasoning as AssertSafeSSLMode/ErrUnparsableDSN.
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("db: parse config: %w", err)
+		return nil, ErrInvalidDatabaseConfig
 	}
 	poolConfig.MaxConns = maxConns
 	poolConfig.MaxConnIdleTime = maxConnIdleTime

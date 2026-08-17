@@ -81,7 +81,30 @@ func TestUpRefusesChangedHistoricalMigration(t *testing.T) {
 		t.Fatalf("first Up(): %v", err)
 	}
 
-	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET checksum = 'tampered' WHERE version = '0001_init_schema'`); err != nil {
+	// This test deliberately corrupts the ledger below to prove Up()
+	// refuses to proceed past it. Capture the correct checksum first, so
+	// cleanup can restore it rather than leaving the ledger — and
+	// therefore the whole shared TEST_DATABASE_URL database — permanently
+	// tampered after the test finishes. Restoring the checksum (not
+	// dropping the schema) matters: `go test ./...` can run other
+	// packages' integration tests concurrently against this same
+	// database, and they assume an intact, already-migrated schema; they
+	// do not call migrate.Up themselves, so they would be broken by a
+	// missing schema just as much as by a tampered one. Registered before
+	// the corrupting UPDATE, and t.Cleanup runs even if the test fails,
+	// so the tampering never outlives this test either way.
+	var originalChecksum string
+	const version = "0001_init_schema"
+	if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version = $1`, version).Scan(&originalChecksum); err != nil {
+		t.Fatalf("read original checksum: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `UPDATE schema_migrations SET checksum = $1 WHERE version = $2`, originalChecksum, version); err != nil {
+			t.Errorf("cleanup: restore original checksum: %v", err)
+		}
+	})
+
+	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET checksum = 'tampered' WHERE version = $1`, version); err != nil {
 		t.Fatalf("tamper with ledger: %v", err)
 	}
 

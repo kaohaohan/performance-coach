@@ -1,10 +1,22 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 )
+
+// ErrUnparsableDSN is returned when DATABASE_URL cannot be parsed as a URL.
+// Its message is deliberately generic and does not include the underlying
+// net/url error text — that text embeds the full input string
+// (net/url.Error.URL), which would print the DSN, password included,
+// verbatim into a log or fatal error message. There is no way to redact a
+// string that failed to parse: unlike a successfully parsed *url.URL
+// (which supports Redacted()), we never get far enough to know which
+// substring was the password. Refusing to include any of it is the only
+// safe option.
+var ErrUnparsableDSN = errors.New("db: DATABASE_URL could not be parsed as a URL (its content is not included here: a parse error can embed credentials found anywhere in the input string)")
 
 // AssertSafeSSLMode refuses a DSN that disables TLS while pointed at a
 // network host that is neither a Cloud SQL Unix socket path nor a loopback
@@ -25,9 +37,9 @@ import (
 // convention of putting a Unix socket directory in a "host" query
 // parameter when the authority host is empty.
 func AssertSafeSSLMode(databaseURL string) error {
-	host, sslModeDisabled, err := parseHostAndSSLMode(databaseURL)
-	if err != nil {
-		return fmt.Errorf("db: parse DATABASE_URL: %w", err)
+	host, sslModeDisabled, ok := parseHostAndSSLMode(databaseURL)
+	if !ok {
+		return ErrUnparsableDSN
 	}
 	if !sslModeDisabled {
 		return nil
@@ -38,10 +50,10 @@ func AssertSafeSSLMode(databaseURL string) error {
 	return fmt.Errorf("db: refusing to start: sslmode=disable is set with a non-local database host %q; use a /cloudsql/ socket path, a loopback host, or a non-disable sslmode", host)
 }
 
-func parseHostAndSSLMode(databaseURL string) (host string, sslModeDisabled bool, err error) {
+func parseHostAndSSLMode(databaseURL string) (host string, sslModeDisabled bool, ok bool) {
 	u, err := url.Parse(databaseURL)
 	if err != nil {
-		return "", false, err
+		return "", false, false
 	}
 
 	query := u.Query()
@@ -56,7 +68,7 @@ func parseHostAndSSLMode(databaseURL string) (host string, sslModeDisabled bool,
 	}
 
 	sslMode := strings.ToLower(query.Get("sslmode"))
-	return host, sslMode == "disable", nil
+	return host, sslMode == "disable", true
 }
 
 func isCloudSQLSocket(host string) bool {

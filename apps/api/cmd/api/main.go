@@ -9,8 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -23,6 +24,8 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
@@ -30,12 +33,19 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	// Built first, before config.LoadAPI(): a missing/invalid environment
+	// variable is then reported as one structured ERROR line like every
+	// other startup fact, instead of a plain-text log.Fatal.
+	logger := logging.New(os.Stdout)
+	slog.SetDefault(logger)
+
+	if err := run(logger); err != nil {
+		logger.Error("fatal startup error", "error", err.Error())
+		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(logger *slog.Logger) error {
 	cfg, err := config.LoadAPI()
 	if err != nil {
 		return err
@@ -54,7 +64,25 @@ func run() error {
 	}
 	defer pool.Close()
 
-	log.Println("database connection verified")
+	// Best-effort: never fails startup (docs/deployment-architecture-v0.2.md
+	// §12 "the migration ledger version if applicable"). See
+	// migrate.LatestAppliedVersion's doc comment for what "best-effort"
+	// covers — no ledger table yet is not an error, but a real query
+	// failure is at least surfaced at WARNING rather than silently dropped.
+	migrationVersion, migrationKnown, err := migrate.LatestAppliedVersion(dbCtx, pool)
+	if err != nil {
+		logger.Warn("could not determine migration ledger version", "error", err.Error())
+	}
+
+	bootFields := []any{
+		"port", cfg.Port,
+		"firebase_project_id", cfg.FirebaseProjectID,
+		"db_ping", "ok",
+	}
+	if migrationKnown {
+		bootFields = append(bootFields, "migration_version", migrationVersion)
+	}
+	logger.Info("api starting", bootFields...)
 
 	firebaseCtx, firebaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer firebaseCancel()
@@ -95,6 +123,14 @@ func run() error {
 	const requestTimeout = 10 * time.Second
 	handler := http.TimeoutHandler(mux, requestTimeout, `{"error":{"code":"DEADLINE_EXCEEDED","message":"request timed out"}}`)
 
+	// logging.Middleware must wrap outside TimeoutHandler, not inside the
+	// mux it wraps: TimeoutHandler discards headers set by the inner
+	// handler when it fires, but a header already set on the
+	// ResponseWriter it was given survives both the timeout and the happy
+	// path. Wrapping it here is what keeps X-Request-Id present on a
+	// request that times out.
+	handler = logging.Middleware(logger)(handler)
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: handler,
@@ -117,7 +153,7 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		log.Printf("listening on :%s", cfg.Port)
+		logger.Info("listening", "port", cfg.Port)
 		serveErr <- srv.ListenAndServe()
 	}()
 
@@ -127,7 +163,7 @@ func run() error {
 			return err
 		}
 	case <-ctx.Done():
-		log.Println("shutdown signal received")
+		logger.Info("shutdown signal received")
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
@@ -191,7 +227,7 @@ func handleAthletes(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 				return
 			}
-			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			authn.WriteInternalError(w, r, err)
 			return
 		}
 
@@ -222,7 +258,7 @@ func handleListExercises(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 				return
 			}
-			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			authn.WriteInternalError(w, r, err)
 			return
 		}
 
@@ -261,7 +297,7 @@ func handleCreateExercise(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.As(err, &conflictErr):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", conflictErr.Error())
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -364,7 +400,7 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -391,7 +427,7 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 				return
 			}
-			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			authn.WriteInternalError(w, r, err)
 			return
 		}
 
@@ -447,7 +483,7 @@ func handleCreateScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, scheduledworkout.ErrAthletesNotConnected):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "one or more athletes are not connected to caller")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -504,7 +540,7 @@ func handleListScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, scheduledworkout.ErrAthleteNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -542,7 +578,7 @@ func handleListMyScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, scheduledworkout.ErrForbidden):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not an athlete")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -579,7 +615,7 @@ func handleStartSession(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrCompleted):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session already completed")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -620,7 +656,7 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -657,7 +693,7 @@ func handleCompleteSession(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrCompleted):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session already completed")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -735,7 +771,7 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrPlannedSetAlreadyLogged):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "scheduled planned set already logged")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}

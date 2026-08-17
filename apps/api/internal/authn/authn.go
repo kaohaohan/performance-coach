@@ -22,6 +22,8 @@ import (
 	fbauth "firebase.google.com/go/v4/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
 )
 
 // User is the internal application identity resolved from a verified
@@ -106,7 +108,7 @@ func Middleware(verifier TokenVerifier, pool *pgxpool.Pool) func(http.Handler) h
 					writeUnauthenticated(w)
 					return
 				}
-				WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				WriteInternalError(w, r, err)
 				return
 			}
 
@@ -144,6 +146,24 @@ func lookupByFirebaseUID(ctx context.Context, pool *pgxpool.Pool, firebaseUID st
 		return User{}, err
 	}
 	return u, nil
+}
+
+// WriteInternalError logs err at ERROR severity via the request-scoped
+// logger attached to r.Context() by logging.Middleware — correlated with
+// the same request_id as that request's own summary log line
+// (docs/deployment-architecture-v0.2.md §12) — and then writes the fixed
+// 500 INTERNAL envelope. err is never included in the response: the
+// client-visible message stays the generic, unchanging string the API
+// contract already specifies, so the only way to see err is by locating
+// the matching request_id in Cloud Logging (§13's verification line).
+//
+// This is the shared path every internal-error branch should use instead
+// of calling WriteError(..., http.StatusInternalServerError, ...)
+// directly and discarding err: before D1c-2, every such branch discarded
+// the error, so a production 500 produced no log output at all.
+func WriteInternalError(w http.ResponseWriter, r *http.Request, err error) {
+	logging.FromContext(r.Context()).Error("internal error", "error", err.Error())
+	WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 }
 
 // WriteError writes the API contract's unified error envelope:
