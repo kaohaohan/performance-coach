@@ -50,7 +50,7 @@ Use `asia-east1` (Taiwan) for Artifact Registry, Cloud Run, Cloud Run Jobs, and 
 | --- | --- |
 | Frontend | Vercel, rooted at `apps/web`. |
 | API | Docker image on Cloud Run. |
-| Database | Cloud SQL for PostgreSQL 16, Enterprise edition, single-zone, smallest suitable **dedicated-core** instance. |
+| Database | Cloud SQL for PostgreSQL 16, Enterprise edition, single-zone, **`db-g1-small` (shared-core)** in `asia-east1`, with automated backups and PITR mandatory. Revised from "smallest suitable dedicated-core" by the D2 cost gate — see §3.1 for the audit, the accepted SLA trade-off, and the evidence-based upgrade triggers. |
 | Authentication | Firebase Auth; Go verifies Firebase ID tokens. |
 | Environments | `LOCAL` and `PRODUCTION/PILOT` only. |
 | API URL model | Keep the same-origin `/backend/*` abstraction. |
@@ -58,6 +58,60 @@ Use `asia-east1` (Taiwan) for Artifact Registry, Cloud Run, Cloud Run Jobs, and 
 | Cloudflare | Quick Tunnel for temporary local testing only; DNS/custom domain later. |
 
 Cloud SQL is the baseline, not a pre-approved purchasing decision. Before provisioning, price the exact selected `asia-east1` configuration in the Google Cloud Pricing Calculator. If it is disproportionate for the pilot, open a separate ADR for alternatives; do not silently substitute another database service.
+
+### 3.1 D2 cost gate outcome and database-tier decision
+
+**Result: PASSED (2026-08-17), with the baseline revised downward.** Approved ceiling USD 100/month — retained as an *approval guardrail, not an expected spend*. Selected configuration: **≈ USD 28/month**.
+
+**Selected configuration:** `asia-east1`, PostgreSQL 16, Cloud SQL Enterprise edition, **`db-g1-small`** (shared-core, 1.7 GB RAM), single-zone, 10 GB PD-SSD with storage auto-growth, **automated backups and point-in-time recovery both enabled and mandatory**.
+
+Backups and PITR were *not* weakened to reach this number. The shared-core audit confirmed both are fully supported on `db-g1-small` with no machine-type restriction.
+
+**Cost basis.** Rates come from the live Cloud Billing Catalog API (`cloudbilling.googleapis.com`, service `9662-B51E-5089`) for `asia-east1`, effective 2026-08-17. SKU IDs are recorded so the estimate is reproducible:
+
+| Component | SKU | Rate | Monthly (730 h) |
+| --- | --- | --- | --- |
+| `db-g1-small` instance | `D46D-EDAD-F725` | $0.035 / hour | $25.55 |
+| PD-SSD storage (10 GB) | `9067-0A43-FDD8` | $0.17 / GiB-month | $1.70 |
+| Backup / PITR storage | `2FAE-DAED-89EC` | $0.09 / GiB-month | ~$1–2 (variable) |
+| **Total** | | | **≈ $28–29/month** |
+
+**Tier comparison at the time of decision:**
+
+| Tier | RAM | `max_connections` | Monthly | Outcome |
+| --- | --- | --- | --- | --- |
+| `db-f1-micro` | 0.6 GB | 25 | ≈ $10 | **Rejected** — see below |
+| **`db-g1-small`** | **1.7 GB** | **50** | **≈ $28** | ✅ **Selected** |
+| `db-custom-1-3840` | 3.75 GB | 100 | ≈ $52 | Deferred until triggers fire |
+
+`db-f1-micro` was rejected on capacity, not price. With 25 `max_connections` (≈22 after superuser reservations) against a 14-connection budget, and only 0.6 GB RAM to hold `shared_buffers` plus 14 backends, it has minimal headroom and an out-of-memory event restarts the instance. The $18/month saving does not justify operating that close to the limit with real user data.
+
+**Accepted trade-off: no SLA, burstable CPU.** Google documents `db-f1-micro` and `db-g1-small` as shared-core machine types outside the Cloud SQL SLA, intended for test and development. We consciously accept this for the pre-revenue pilot:
+
+- The pilot is 2–3 coaches and ~30 athletes (≤50 users) with bursty, low-volume traffic; sustained CPU saturation is not the expected pattern.
+- The architecture **already** accepts single-zone with no HA failover (§14), so this does not introduce a categorically new availability posture. It removes SLA credits and adds CPU throttling risk under sustained load.
+- Data protection is unchanged: automated backups and PITR remain mandatory and are what actually protect against data loss.
+- The dominant business risk at this stage is whether coaches adopt the product, not marginal availability nines.
+
+**Upgrade path is an in-place tier change, not a provider migration.** Moving to `db-custom-1-3840` (or larger) later changes the `--tier` on the same Cloud SQL instance: same data, same DSN, same region, no `pg_dump`/restore and no cutover window. **The expected restart/downtime behaviour must be verified before performing the upgrade**, not assumed from this document.
+
+**Evidence-based upgrade triggers.** Upgrade when measurement shows one of the following — explicitly *not* on a revenue or "first paying customer" milestone:
+
+- Sustained CPU pressure or observed shared-core throttling under normal load.
+- Sustained memory pressure, or any out-of-memory-driven instance restart.
+- Connection saturation: usage approaching the 50-connection `max_connections` limit, or pool acquisition waits appearing under normal traffic.
+- Database latency that is unacceptable for the core loop, attributable to the instance rather than the network path.
+- A stated availability or SLA requirement that shared-core cannot satisfy.
+- A materially increased workload (user count, concurrency, or data volume) beyond the pilot envelope this decision was sized for.
+
+**Alternatives evaluated and rejected:**
+
+- **Neon PostgreSQL** — rejected on region. Neon's Asia-Pacific regions are Singapore (`aws-ap-southeast-1`) and Sydney only; Taiwan, Tokyo, and Hong Kong are not offered. Taipei→Singapore is ~3,200 km, a ~32 ms round-trip physical floor and realistically 40–60 ms with routing plus a GCP→AWS cross-cloud hop, against ~1 ms for a same-region Cloud SQL Unix socket. The API issues several sequential statements per request, so a five-statement transaction moves from ~5 ms to 200–300 ms — a user-visible regression in the core logging loop. Neon Launch (≈ $7–15/month with scale-to-zero) is cheaper than the selected tier, but `db-g1-small` at ≈ $28/month retains same-region latency, the existing deployment architecture, and zero code change — which is judged the better trade at this scale. Neon remains the fallback if a future decision makes Cloud SQL untenable.
+- **Cloudflare** — not a PostgreSQL option at all. D1 has SQLite semantics and would not support this schema's `uuid`/`timestamptz`/`numeric` types, partial indexes on `lower(name)`, or composite foreign keys; substituting it is precisely what `AGENTS.md` §5 forbids without an explicit architecture decision. Hyperdrive accelerates an existing PostgreSQL database from Cloudflare Workers and is irrelevant to a Go service on Cloud Run. Cloudflare's managed-PostgreSQL offering is a PlanetScale resale, i.e. a third provider carrying the same region question as Neon. §16 remains the full extent of Cloudflare's role.
+
+**Lock-in assessment.** The decision is reversible, and that was verified rather than assumed. The codebase contains exactly one Cloud SQL-specific literal — the `/cloudsql/` prefix allowlist in `AssertSafeSSLMode` (`apps/api/internal/db/dsn.go`). There is no Cloud SQL connector dependency, no custom pgx dialer, no region literal in any Go file, and no `CREATE EXTENSION`, trigger, advisory lock, or `LISTEN`/`NOTIFY` in any migration. Migrating to another PostgreSQL host later is a configuration change plus a cutover window, not a rewrite; the real cost would be rebuilding the GCP-side configuration and repeating D2/D3, not moving the schema or data.
+
+**Deferred cost lever.** Committed-use discounts are 25% (1-year) and 52% (3-year) on vCPU and RAM, and apply to Enterprise edition — but **not to shared-core machine types**, so they are unavailable on `db-g1-small`. CUDs become relevant only if an upgrade trigger moves the pilot to dedicated-core; revisit then, not now.
 
 ## 4. Frontend and network path
 
@@ -153,7 +207,11 @@ In Firebase production setup, configure the production Firebase project/web app 
 
 ## 7. Cloud SQL and database connectivity
 
-Provision a PostgreSQL 16 Cloud SQL instance in `asia-east1` using Cloud SQL Enterprise, single zone, with automated backups and point-in-time recovery enabled. Do not use shared-core `db-f1-micro` or `db-g1-small` for a production pilot: Google documents them as test/development configurations without an SLA.
+Provision a PostgreSQL 16 Cloud SQL instance in `asia-east1` using Cloud SQL Enterprise edition, single zone, **tier `db-g1-small`**, with automated backups and point-in-time recovery enabled. Backups and PITR are mandatory and are not negotiable against cost.
+
+`db-g1-small` is a **shared-core** machine type. Google documents shared-core types as test/development configurations **without a Cloud SQL SLA**, and their CPU is burstable/shared rather than dedicated. This is a deliberate, recorded trade-off for the pre-revenue pilot — see §3.1 for the audit, the accepted risk, and the evidence-based upgrade triggers. It is **not** a default to copy into any later environment: a production deployment with availability commitments must use a dedicated-core tier.
+
+`db-f1-micro` is explicitly excluded. Its 25 `max_connections` and 0.6 GB RAM leave insufficient headroom over the connection budget below, and an out-of-memory event restarts the instance.
 
 Use Cloud Run's built-in Cloud SQL connection configuration to attach the instance and connect through its Unix socket:
 
@@ -172,6 +230,18 @@ The assertion D1b adds must therefore be host-based, not blanket: refuse to star
 ### Connection budget
 
 `pgxpool.New` currently uses defaults and has no explicit maximum. Before production deployment, D1b must add explicit bounded pool configuration. Initial target: at most four database connections per API instance. With Cloud Run maximum instances of three, the planned API budget is at most twelve pooled connections, plus one separately run migration job. Size the Cloud SQL instance and its `max_connections` allowance around all clients, not only API requests.
+
+**Reconciliation against `db-g1-small`.** The budget is unchanged by the tier decision — the audit showed it fits without modification:
+
+| Client | Connections |
+| --- | --- |
+| Cloud Run API (3 instances × pool `MaxConns` 4) | 12 |
+| Migration **or** bootstrap job (`MaintenanceMaxConns` 2) | 2 |
+| **Planned worst case** | **14** |
+
+`db-g1-small` provides `max_connections = 50` (Cloud SQL derives this from the instance's 1.7 GB of memory). After Cloud SQL's own superuser/agent reservations, roughly 45+ remain usable against a worst case of 14 — approximately 3× headroom. No change to `DefaultMaxConns`, `MaintenanceMaxConns`, or the Cloud Run max-instance cap is required or authorized by this decision.
+
+Verify the actual `max_connections` on the created instance rather than assuming this figure, and treat sustained usage approaching the limit as an upgrade trigger (§3.1).
 
 `pgxpool.New` without an explicit `Config` already applies pgx's own defaults for `MaxConnLifetime`, `MaxConnIdleTime`, and a periodic health check, so the pool is not entirely without eviction today. The requirement for D1b is not "add eviction that doesn't exist" but to **explicitly pin and verify** `MaxConns`, `MaxConnIdleTime`, and `MaxConnLifetime` for production rather than run on library defaults nobody has confirmed against Cloud SQL's own idle-connection behavior. Pin the values, then check under D6 load that Cloud SQL isn't closing connections faster than the pool retires them.
 
@@ -272,7 +342,7 @@ Each item is a future, separately approved implementation/deployment task. Resou
 | D1a — container readiness | **Done.** `apps/api/Dockerfile` (multi-stage, `golang:1.26` builder → `gcr.io/distroless/static-debian12` runtime, `CGO_ENABLED=0`) and a root `.dockerignore` are in place; build context is the repository root (`docker build -f apps/api/Dockerfile .`). `.dockerignore` excludes `**/node_modules`, `apps/web/.next`, `apps/web/.next-mobile`, `apps/web/screenlog.*`, `.git`, `.env`, `.env.*`. Verified locally: image builds, container starts (`database connection verified` → `listening on :8080`), `/health` and `/ready` both return 200, and `SIGTERM` triggers graceful shutdown (`shutdown signal received`, clean exit within Cloud Run's grace period). Final image size ~54MB. D1b extends this Dockerfile to the migrate and bootstrap binaries once they exist. |
 | D1b — production database tooling | **Done.** `apps/api/main.go` moved to `apps/api/cmd/api`; `apps/api/cmd/migrate` and `apps/api/cmd/bootstrap` added, all three built into the one D1a image (`apps/api/Dockerfile`). `internal/config` now exposes `LoadAPI`/`LoadMigrate`/`LoadBootstrap`, each validating only its entrypoint's variables (migrate/bootstrap never require `FIREBASE_PROJECT_ID`). `internal/db.NewPool` pins `MaxConns` (4 for api via `DefaultMaxConns`, 2 for migrate/bootstrap via `MaintenanceMaxConns`), `MaxConnIdleTime` (5m), and `MaxConnLifetime` (30m), and calls the new host-based `AssertSafeSSLMode` before connecting, refusing to start when `sslmode=disable` targets a host that is neither a `/cloudsql/` socket nor loopback. `cmd/api` adds an explicit request deadline (`http.TimeoutHandler`, 10s) plus `http.Server.ReadTimeout`/`WriteTimeout` as a transport-level backstop. `internal/migrate` embeds `apps/api/migrations/*.up.sql` (`migrations/embed.go`), applies them in order with a `schema_migrations` version/checksum ledger, and refuses to proceed if an already-applied migration's on-disk content has changed; verified against a clean local database in `internal/migrate/migrate_integration_test.go` (apply-from-empty, idempotent re-run, tampered-checksum refusal), all passing against the local Postgres 16 container. `internal/bootstrap` validates a reviewed JSON manifest (`DisallowUnknownFields`, role/relationship checks) and idempotently upserts `users`/`coach_athletes`; manually verified end-to-end against the local test database, including a no-op second run. Local Docker image builds all three binaries (~79.5MB); `/migrate` and `/bootstrap` run correctly via `--entrypoint` override, `/api` (default entrypoint) still serves `/health`/`/ready` as 200. |
 | D1c — structured logging | **Done.** `apps/api/internal/logging` (new): JSON to stdout via `log/slog`, keys remapped to Cloud Logging's `severity`/`message`, `WARN`→`WARNING`. `logging.Middleware` (wired in `cmd/api`, outside `http.TimeoutHandler` so `X-Request-Id` survives the D1b request-timeout path) mints a request ID per request, echoes it as `X-Request-Id`, and logs one summary line per request at `INFO`/`WARNING`/`ERROR` by status class; successful `/health`/`/ready` polling is not logged, a failing `/ready` still is. `authn.WriteInternalError` replaced all 13 internal-error call sites that previously discarded `err` and logged nothing — every 500 now logs, correlated by `request_id` with its request's summary line, without changing the `{"error":{"code","message"}}` envelope (documented as an additive contract change in `docs/go-backend-api-contract-v0.1.md`, V0.8). Boot logs record port, `db_ping`, Firebase project ID, and a best-effort migration ledger version (`migrate.LatestAppliedVersion`; absent, not an error, if the ledger doesn't exist yet). Closed two DSN-leak paths in `internal/db`: an unparsable `DATABASE_URL` (`net/url.Parse` failure) and a syntactically-parseable-but-invalid one that reaches `pgxpool.ParseConfig`'s libpq keyword/value fallback — both previously able to print the DSN, password included, verbatim to stdout via `log.Fatal`; neither `AssertSafeSSLMode` nor `NewPool` now propagate the underlying parse error's text under any circumstance. `cmd/migrate`/`cmd/bootstrap` converted to the same JSON logger (no request IDs/middleware — non-HTTP jobs); bootstrap logs manifest **counts** only, never UIDs/names. Verified locally against the docker-compose Postgres: full `go test ./...` (unit + integration) green, plus manual runs of all three entrypoints' happy and fatal paths confirming valid one-object-per-line JSON, correct severity, and no credential leakage. §12's *Alerting* subsection and the related §13 checklist line are Cloud Monitoring configuration and remain deferred to D2/D4, not implementable locally. |
-| D2 — GCP/Cloud SQL foundation | After cost approval, establish project/billing/IAM, Artifact Registry, Cloud SQL in `asia-east1`, backups/PITR, least-privilege identities, and a documented connection budget. |
+| D2 — GCP/Cloud SQL foundation | **Cost gate passed (§3.1)** at ≈ $28/month against the USD 100/month approval guardrail, for **`db-g1-small`** in `asia-east1`; `db-f1-micro`, dedicated-core, Neon, and Cloudflare all evaluated and rejected there. Target project is `dontworkout` (the existing Firebase project). Remaining: establish billing/IAM, enable APIs, Artifact Registry, the Cloud SQL instance with mandatory backups/PITR, least-privilege identities, and the documented connection budget (§7). |
 | D3a — secrets and identities | Create Secret Manager entries, the runtime and migration service accounts, and their least-privilege grants. No workload runs yet. |
 | D3b — first image publish | Manually build and push the image to Artifact Registry in `asia-east1`. **Record the image digest**; every later phase references that digest. |
 | D3c — migration and bootstrap | Using the D3b digest, run the migration job and verify schema state; then run the approved bootstrap job (§10) and verify access boundaries. Also perform the one-time restore drill below. |
@@ -353,7 +423,11 @@ The initial single-zone database has no high-availability failover. This is an a
 
 ## 15. Cost guardrails
 
-Cloud SQL is the likely material recurring cost because the instance runs continuously, with additional storage, backup, and network charges. Before D2, use the current Google Cloud Pricing Calculator for `asia-east1`, PostgreSQL 16, the intended Enterprise dedicated-core size, storage, backups/PITR, and estimated network traffic. Record the monthly estimate and a pilot spending limit before creating resources.
+Cloud SQL is the likely material recurring cost because the instance runs continuously, with additional storage, backup, and network charges. **This pricing exercise has been completed for D2 — see §3.1** for the SKU-level cost basis, the tier comparison, and the selected configuration (`db-g1-small`, ≈ $28/month).
+
+The **USD 100/month ceiling is an approval guardrail, not an expected or budgeted spend.** Passing it does not by itself make a configuration appropriate; §3.1 records why the cheapest SLA-backed option was not simply taken, and why `db-f1-micro` was rejected despite being cheaper still.
+
+Re-run this pricing exercise, and record a fresh estimate, whenever an upgrade trigger (§3.1) is met or the configuration otherwise changes. Note that committed-use discounts do not apply to shared-core tiers.
 
 Cloud Run has request-based CPU/memory pricing and can scale to zero with `min instances = 0`; it also has build, artifact storage, logging, and outbound internet traffic considerations. Traffic from Cloud Run to Cloud SQL in the same region is the intended low-latency path; the Vercel-to-Cloud-Run proxy is external traffic and should be measured, not assumed free.
 
@@ -377,8 +451,9 @@ After D6, Cloudflare may manage DNS for a custom Vercel domain. Cloudflare Worke
 
 Revisit this architecture only when evidence requires it:
 
-- Cloud SQL cost fails the D2 cost gate: write an ADR comparing managed PostgreSQL alternatives.
-- Availability requirements exceed a controlled pilot: consider Cloud SQL HA, tested recovery exercises, and a higher database tier.
+- Cloud SQL cost fails the D2 cost gate: write an ADR comparing managed PostgreSQL alternatives. The gate has already been run and passed — see §3.1 for the selected tier, the SKU-level cost basis, and the `db-f1-micro`/dedicated-core/Neon/Cloudflare rejections. Start from that comparison rather than repeating it; the trigger for revisiting is a *material change* in cost or scale, not a fresh re-evaluation of the same options.
+- **A §3.1 upgrade trigger is met** — sustained CPU or memory pressure, connection saturation against the 50-connection limit, unacceptable instance-attributable database latency, a stated availability/SLA requirement, or materially increased workload: upgrade the Cloud SQL tier from `db-g1-small` to a dedicated-core tier. This is an in-place `--tier` change on the same instance, not a provider migration; verify the expected restart/downtime behaviour before performing it. Upgrading is explicitly **not** triggered by revenue or a first paying customer — only by measured evidence.
+- Availability requirements exceed a controlled pilot: consider Cloud SQL HA, tested recovery exercises, and a dedicated-core tier with SLA coverage (shared-core carries no Cloud SQL SLA — §3.1).
 - Private networking/compliance requirements: consider Cloud SQL private IP and VPC connectivity.
 - Media upload/video analysis: add object storage and signed-upload design; do not store media in PostgreSQL.
 - Sustained load: adjust Cloud Run concurrency/max instances and pool sizes using measured database connections and latency.
