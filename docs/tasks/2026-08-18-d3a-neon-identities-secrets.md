@@ -110,17 +110,18 @@
 | Phase 0 read-only reconciliation | Done | Repository, GCP, Artifact Registry, Neon project, branch, compute, database, and role metadata reconciled without reading credentials. |
 | Gate 1 — Task Doc | Done | This document is the only approved repository change. |
 | Gate 2 — Neon transport inspection | Done | Pinned `neonctl` 2.39.0 in a temporary directory. Mocked the generic reset API route: successful response is stdout-only and can be parsed downstream; error messages are stderr. No Neon authentication or mutation occurred. |
-| Gate 3 — Secret containers | Not Started | Create empty containers only. |
-| Gate 4 — Service accounts | Not Started | No keys and no default service account usage. |
-| Gate 5 — IAM bindings | Not Started | Secret/resource scoped; no `roles/cloudsql.client`. |
-| Gate 6 — Credential rotation, SQL roles, secret versions | Not Started | Credential-safe atomic operation; requires explicit approval. |
-| Gate 7 — D3a verification | Not Started | Metadata and boolean privilege checks only. |
+| Gate 3 — Secret containers | Done | Created `performance-coach-api-database-url` and `performance-coach-migrate-database-url` with automatic replication; both began empty. |
+| Gate 4 — Service accounts | Done | Created the dedicated API and migration service accounts without user-managed keys or project IAM roles. |
+| Gate 5 — IAM bindings | Done | Granted `roles/secretmanager.secretAccessor` only at each matching secret resource; no `roles/cloudsql.client`. |
+| Gate 6 — Credential rotation, SQL roles, secret versions | Done | Rotated the exposed owner credential; SQL-created restricted `performance_coach_migrate` and `performance_coach_api`; added one full DATABASE_URL version to each matching secret through an in-memory/stdin-only pipeline. |
+| Gate 7 — D3a verification | Done | Read-only verification confirmed role attributes/memberships, direct-versus-pooled endpoint construction, one enabled secret version each, scoped IAM, and no user-managed keys. |
 | Post-D3c API table grants | Not Started | D3c dependency; must complete before D4. |
 | Pre-D4 `schema_migrations` warning decision | Not Started | No code change approved in D3a. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress; Gates 1 and 2 complete only.
+- Final status: D3a pre-D3c identity, credential, Secret Manager, IAM, and read-only verification gates are complete. The post-D3c API table-DML grant remains pending by design.
 - Deviations from plan: Gate 2 found no dedicated reset subcommand in `neonctl` 2.39.0; the supported path is the generic `neonctl api` command. The later credential gate must use the embedded psql fallback, not native `psql` or `connection-string`.
 - Follow-ups:
+  - After D3c migration, grant `performance_coach_api` exact table-level DML only; retain no privilege on `schema_migrations`.
   - Resolve the intentional API denial of `schema_migrations` against the current best-effort startup lookup before D4, without broadening runtime database privileges by default.
