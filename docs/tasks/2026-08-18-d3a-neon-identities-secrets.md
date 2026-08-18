@@ -30,6 +30,9 @@
   - Select Option 2. Rotate `neondb_owner`, use it only in a non-logging in-memory bootstrap process, and create `performance_coach_migrate` and `performance_coach_api` with SQL. Store only the two dedicated role DSNs in Secret Manager and assign each to a dedicated GCP service account.
 - Risks & unknowns:
   - The installed Neon CLI/API transport must be inspected immediately before any password reset. The reset API returns plaintext password material and asynchronous operations; no command may expose the response in stdout, stderr, shell history, logs, or files.
+  - Gate 2 pinned `neonctl` 2.39.0 in a temporary directory. Its generic `api` command can call the documented password-reset route and writes a successful JSON response, including any password field, to stdout. It must therefore be used only in a closed pipe to an in-memory consumer, without `--include`; a mock response verified that stderr is empty on the successful path when `--no-analytics --no-color` are set. A non-2xx API response can copy the server message to stderr, so the consumer must not pass a password in a request body or arrange for secret-bearing error messages.
+  - `neonctl connection-string` is prohibited for the real operation because it prints a full DSN to stdout. `neonctl psql` normally invokes native `psql` with the DSN as a process argument, which is also prohibited. The later credential gate must force the CLI's embedded psql implementation with `--fallback` and stream SQL through stdin; it must not put generated role passwords in `-c` arguments.
+  - `neonctl auth` persists OAuth credentials in its configured credentials file. It was not needed for Gate 2 and was not run. Before a real credential operation, choose an approved authentication source that does not put a token in command arguments, transcript output, or a temporary file.
   - The schema does not exist until D3c. D3a can create and restrict the API login role, but exact table-level DML grants can only be applied after the migration creates the tables and before D4 deploys the API.
   - The current API performs a best-effort `schema_migrations` lookup at startup. Because `performance_coach_api` will intentionally have no privilege on that table, the current image will log a permission warning while continuing startup. Do not change code in D3a; resolve this as an explicit follow-up decision before D4.
   - The default Compute Engine service account currently has broad project Editor access. D3a will not use it; changing that unrelated existing binding is outside this task.
@@ -106,7 +109,7 @@
 | --- | --- | --- |
 | Phase 0 read-only reconciliation | Done | Repository, GCP, Artifact Registry, Neon project, branch, compute, database, and role metadata reconciled without reading credentials. |
 | Gate 1 — Task Doc | Done | This document is the only approved repository change. |
-| Gate 2 — Neon transport inspection | Not Started | Must not rotate or create credentials. |
+| Gate 2 — Neon transport inspection | Done | Pinned `neonctl` 2.39.0 in a temporary directory. Mocked the generic reset API route: successful response is stdout-only and can be parsed downstream; error messages are stderr. No Neon authentication or mutation occurred. |
 | Gate 3 — Secret containers | Not Started | Create empty containers only. |
 | Gate 4 — Service accounts | Not Started | No keys and no default service account usage. |
 | Gate 5 — IAM bindings | Not Started | Secret/resource scoped; no `roles/cloudsql.client`. |
@@ -117,7 +120,7 @@
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress; Gate 1 complete only.
-- Deviations from plan: None.
+- Final status: In progress; Gates 1 and 2 complete only.
+- Deviations from plan: Gate 2 found no dedicated reset subcommand in `neonctl` 2.39.0; the supported path is the generic `neonctl api` command. The later credential gate must use the embedded psql fallback, not native `psql` or `connection-string`.
 - Follow-ups:
   - Resolve the intentional API denial of `schema_migrations` against the current best-effort startup lookup before D4, without broadening runtime database privileges by default.
