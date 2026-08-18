@@ -1,10 +1,12 @@
 # Deployment Architecture v0.2
 
-Status: the v0.1 architecture below (hosting split, `asia-east1` colocation, Cloud SQL baseline, migration-job-only schema changes, forward-only rollback) remains **approved**. The v0.2 additions — phase reordering around the container image, per-entrypoint configuration, and the new Observability section (§12) — are **proposed**, pending review, because they introduce new acceptance criteria for D1b–D4 rather than only clarifying existing text. This document is the canonical deployment/runbook specification for future deployment tasks. It does not provision or deploy anything.
+Status: the v0.1 architecture below (hosting split, migration-job-only schema changes, forward-only rollback) remains **approved**. The v0.2 additions — phase reordering around the container image, per-entrypoint configuration, and the new Observability section (§12) — are **proposed**, pending review, because they introduce new acceptance criteria for D1b–D4 rather than only clarifying existing text. This document is the canonical deployment/runbook specification for future deployment tasks. It does not provision or deploy anything.
+
+**Superseded by `docs/adr/ADR-001-use-neon-launch-postgresql-for-mvp-pilot.md` (2026-08-18):** the database is now **Neon Launch PostgreSQL in `aws-ap-southeast-1` (Singapore)**, not Cloud SQL, and Cloud Run/Artifact Registry colocation moves from `asia-east1` to `asia-southeast1` accordingly. This document has been reconciled to that decision throughout; see the ADR for the full rationale, trade-offs, and rollback path. Everything else in v0.1/v0.2 — hosting split, migration-job-only schema changes, forward-only rollback, Vercel frontend, Firebase Auth — remains unchanged.
 
 ## 1. Scope and principles
 
-The pilot architecture optimizes for a small real-user release: simple operations, correct production boundaries, controlled cost, and hands-on learning of Docker, Cloud Run, Cloud SQL, and production secrets. It preserves the current application split and does not add Kubernetes, Redis, a load balancer, VPC networking, replicas, HA, Terraform, or CI/CD in this architecture.
+The pilot architecture optimizes for a small real-user release: simple operations, correct production boundaries, controlled cost, and hands-on learning of Docker, Cloud Run, managed PostgreSQL (Neon, per ADR-001), and production secrets. It preserves the current application split and does not add Kubernetes, Redis, a load balancer, VPC networking, replicas, HA, Terraform, or CI/CD in this architecture.
 
 The product flow remains Coach → Workout → Schedule Athlete → WorkoutSession → SetLog → Coach Review. Deployment work must not change the API or database contracts without their normal approval process.
 
@@ -34,32 +36,47 @@ Vercel: apps/web (Next.js)
         v
 Google Cloud Run: apps/api (Go container)
         |
-        | Cloud SQL connector / Unix socket
+        | outbound TCP/TLS (postgres://, sslmode=require) — revised by ADR-001
         v
-Google Cloud SQL: PostgreSQL
+Neon: PostgreSQL (aws-ap-southeast-1)
 
 Firebase Authentication supplies browser ID tokens.
 GitHub remains source control.
 ```
 
-Use `asia-east1` (Taiwan) for Artifact Registry, Cloud Run, Cloud Run Jobs, and Cloud SQL. The region is currently supported by each product; API and database must remain colocated. This avoids unnecessary latency and inter-region traffic.
+Use `asia-southeast1` (Singapore) for Cloud Run, Cloud Run Jobs, and API-adjacent GCP resources, colocated with the Neon database region (`aws-ap-southeast-1`). **Revised from `asia-east1` by ADR-001** (2026-08-18) specifically to preserve API↔database colocation after the database moved to Neon; see §3.1. Artifact Registry may remain in `asia-east1` or move with the rest — image pulls happen at deploy time, not per request, so this is not latency-sensitive; record whichever is chosen when D3b-equivalent work resumes.
 
 ### Decisions
 
-| Decision | Choice (approved in v0.1, unchanged in v0.2) |
+| Decision | Choice |
 | --- | --- |
-| Frontend | Vercel, rooted at `apps/web`. |
-| API | Docker image on Cloud Run. |
-| Database | Cloud SQL for PostgreSQL 16, Enterprise edition, single-zone, **`db-g1-small` (shared-core)** in `asia-east1`, with automated backups and PITR mandatory. Revised from "smallest suitable dedicated-core" by the D2 cost gate — see §3.1 for the audit, the accepted SLA trade-off, and the evidence-based upgrade triggers. |
-| Authentication | Firebase Auth; Go verifies Firebase ID tokens. |
-| Environments | `LOCAL` and `PRODUCTION/PILOT` only. |
-| API URL model | Keep the same-origin `/backend/*` abstraction. |
-| Deployment | Understand and perform a controlled manual backend deployment first; automate later. |
-| Cloudflare | Quick Tunnel for temporary local testing only; DNS/custom domain later. |
+| Frontend | Vercel, rooted at `apps/web`. (v0.1, unchanged) |
+| API | Docker image on Cloud Run, region `asia-southeast1`. (v0.1 choice of Cloud Run unchanged; region revised by ADR-001) |
+| Database | **Neon Launch PostgreSQL, `aws-ap-southeast-1` (Singapore).** Revised from Cloud SQL `db-g1-small`/`asia-east1` by **ADR-001** (2026-08-18) — see §3.1 for the full rationale, cost comparison, SLA findings, and trade-offs. |
+| Authentication | Firebase Auth; Go verifies Firebase ID tokens. (v0.1, unchanged) |
+| Environments | `LOCAL` and `PRODUCTION/PILOT` only. (v0.1, unchanged) |
+| API URL model | Keep the same-origin `/backend/*` abstraction. (v0.1, unchanged) |
+| Deployment | Understand and perform a controlled manual backend deployment first; automate later. (v0.1, unchanged) |
+| Cloudflare | Quick Tunnel for temporary local testing only; DNS/custom domain later. (v0.1, unchanged) |
 
-Cloud SQL is the baseline, not a pre-approved purchasing decision. Before provisioning, price the exact selected `asia-east1` configuration in the Google Cloud Pricing Calculator. If it is disproportionate for the pilot, open a separate ADR for alternatives; do not silently substitute another database service.
+### 3.1 Database hosting: Neon Launch (supersedes the Cloud SQL D2 cost-gate decision)
 
-### 3.1 D2 cost gate outcome and database-tier decision
+**This section is superseded by `docs/adr/ADR-001-use-neon-launch-postgresql-for-mvp-pilot.md` (2026-08-18). Read the ADR for the full rationale, trade-offs, and rollback path; this section is a condensed pointer, not a duplicate source of truth.**
+
+**Current decision:** Neon Launch PostgreSQL, `aws-ap-southeast-1` (Singapore). Cloud Run and its adjacent resources move to `asia-southeast1` to stay colocated (§3).
+
+**Why it changed:** the prior Cloud SQL `db-g1-small` selection passed its D2 cost gate at ≈$28/month against a $100/month guardrail, but that is a **fixed, always-on** cost disproportionate to a mostly-idle, ≤50-user pilot. Neon Launch's usage-based, scale-to-zero pricing (compute $0.106/CU-hour at minimum 0.25 CU, storage $0.35/GB-month, no monthly minimum) is estimated at roughly $10–15/month for this workload — re-verify against Neon's calculator before provisioning, the same discipline previously applied to the Cloud SQL estimate below.
+
+**Why Neon was previously rejected, and why that no longer applies:** the original rejection (recorded in the now-superseded text below) was a **latency** concern — Neon's nearest APAC region (Singapore) was far from `asia-east1`, where Cloud Run ran. That objection is resolved, not overridden, by moving Cloud Run to `asia-southeast1` alongside Neon (§3) — it was never a cost or capability objection.
+
+**SLA correction found during re-evaluation:** Google's current Cloud SQL SLA text excludes not just shared-core instances but **all single-zone instances** from the Covered Service — *"Shared-core Instances, single-zone Instances, and read pools with 1 node are excluded from the Covered Service"* ([cloud.google.com/sql/sla](https://cloud.google.com/sql/sla)). The single-zone `db-g1-small` baseline therefore never had an SLA advantage over Neon to weigh against its fixed cost, correcting the shared-core-only framing below.
+
+**Code portability confirmed by audit:** the only Cloud SQL-specific code is `isCloudSQLSocket()` in `apps/api/internal/db/dsn.go`; no connector dependency exists in `go.mod`; no code change is required to point at Neon. See ADR-001 for the full audit.
+
+**Trade-offs accepted:** Taiwan→Singapore user latency if pilot users are Taiwan-based (moved from the API↔DB leg to the browser↔API leg — measure in D6, don't assume it away); Neon cold start on scale-to-zero; a second cloud provider (AWS-hosted Neon alongside GCP); reversibility is preserved either direction. Full detail in ADR-001.
+
+<details>
+<summary>Superseded text — the original D2 Cloud SQL cost-gate decision (2026-08-17), retained for history</summary>
 
 **Result: PASSED (2026-08-17), with the baseline revised downward.** Approved ceiling USD 100/month — retained as an *approval guardrail, not an expected spend*. Selected configuration: **≈ USD 28/month**.
 
@@ -109,9 +126,11 @@ Backups and PITR were *not* weakened to reach this number. The shared-core audit
 - **Neon PostgreSQL** — rejected on region. Neon's Asia-Pacific regions are Singapore (`aws-ap-southeast-1`) and Sydney only; Taiwan, Tokyo, and Hong Kong are not offered. Taipei→Singapore is ~3,200 km, a ~32 ms round-trip physical floor and realistically 40–60 ms with routing plus a GCP→AWS cross-cloud hop, against ~1 ms for a same-region Cloud SQL Unix socket. The API issues several sequential statements per request, so a five-statement transaction moves from ~5 ms to 200–300 ms — a user-visible regression in the core logging loop. Neon Launch (≈ $7–15/month with scale-to-zero) is cheaper than the selected tier, but `db-g1-small` at ≈ $28/month retains same-region latency, the existing deployment architecture, and zero code change — which is judged the better trade at this scale. Neon remains the fallback if a future decision makes Cloud SQL untenable.
 - **Cloudflare** — not a PostgreSQL option at all. D1 has SQLite semantics and would not support this schema's `uuid`/`timestamptz`/`numeric` types, partial indexes on `lower(name)`, or composite foreign keys; substituting it is precisely what `AGENTS.md` §5 forbids without an explicit architecture decision. Hyperdrive accelerates an existing PostgreSQL database from Cloudflare Workers and is irrelevant to a Go service on Cloud Run. Cloudflare's managed-PostgreSQL offering is a PlanetScale resale, i.e. a third provider carrying the same region question as Neon. §16 remains the full extent of Cloudflare's role.
 
-**Lock-in assessment.** The decision is reversible, and that was verified rather than assumed. The codebase contains exactly one Cloud SQL-specific literal — the `/cloudsql/` prefix allowlist in `AssertSafeSSLMode` (`apps/api/internal/db/dsn.go`). There is no Cloud SQL connector dependency, no custom pgx dialer, no region literal in any Go file, and no `CREATE EXTENSION`, trigger, advisory lock, or `LISTEN`/`NOTIFY` in any migration. Migrating to another PostgreSQL host later is a configuration change plus a cutover window, not a rewrite; the real cost would be rebuilding the GCP-side configuration and repeating D2/D3, not moving the schema or data.
+**Lock-in assessment.** The decision is reversible, and that was verified rather than assumed. The codebase contains exactly one Cloud SQL-specific literal — the `/cloudsql/` prefix allowlist in `AssertSafeSSLMode` (`apps/api/internal/db/dsn.go`). There is no Cloud SQL connector dependency, no custom pgx dialer, no region literal in any Go file, and no `CREATE EXTENSION`, trigger, advisory lock, or `LISTEN`/`NOTIFY` in any migration. Migrating to another PostgreSQL host later is a configuration change plus a cutover window, not a rewrite; the real cost would be rebuilding the GCP-side configuration and repeating D2/D3, not moving the schema or data. **This lock-in assessment is what made ADR-001 possible to accept quickly** — the reversibility was verified in advance, not assumed at decision time.
 
-**Deferred cost lever.** Committed-use discounts are 25% (1-year) and 52% (3-year) on vCPU and RAM, and apply to Enterprise edition — but **not to shared-core machine types**, so they are unavailable on `db-g1-small`. CUDs become relevant only if an upgrade trigger moves the pilot to dedicated-core; revisit then, not now.
+**Deferred cost lever.** Committed-use discounts are 25% (1-year) and 52% (3-year) on vCPU and RAM, and apply to Enterprise edition — but **not to shared-core machine types**, so they are unavailable on `db-g1-small`. CUDs become relevant only if an upgrade trigger moves the pilot to dedicated-core; revisit then, not now. (Moot under the current Neon decision — CUDs are a Cloud SQL-specific lever.)
+
+</details>
 
 ## 4. Frontend and network path
 
@@ -173,7 +192,7 @@ Configure Cloud Run's probes explicitly instead of accepting its default TCP pro
 
 For the pilot, the explicit choice is: wire `/ready` as the **startup probe** only, gating the first traffic to a new revision. This is a deliberate scope limit, not an oversight — record it as such:
 
-- **At boot**, `db.NewPool` in `apps/api/internal/db` pings the database and returns a fatal error on failure, so a revision that cannot reach the database on startup never receives traffic. This covers the common case (bad config, unreachable Cloud SQL at deploy time).
+- **At boot**, `db.NewPool` in `apps/api/internal/db` pings the database and returns a fatal error on failure, so a revision that cannot reach the database on startup never receives traffic. This covers the common case (bad config, unreachable database at deploy time — Neon under the current decision, formerly Cloud SQL).
 - **After startup**, a database outage mid-revision is *not* caught by a probe under this choice — the running instance keeps receiving traffic and individual requests fail with 5xx via normal error handling, rather than the instance being pulled from rotation. `/ready` still reports 503 correctly if polled manually or by an external monitor; it is just not wired as a continuous Cloud Run gate in v0.2.
 - Evaluate the Preview readiness probe as a follow-up once it is confirmed stable (§17); it is deferred, not rejected, because relying on a Preview feature for the pilot's only failure-detection path is itself a risk.
 
@@ -194,44 +213,31 @@ Cloud Run request-based services can scale to zero. When no instance is active, 
 
 Use a dedicated, user-managed Cloud Run runtime service account. Let Firebase Admin obtain ADC from that Cloud Run service identity. The current `firebase.NewApp(... ProjectID ...)` initialization is compatible with this approach.
 
-The runtime service account requires only the roles needed by the running API, initially:
+The runtime service account requires only the roles needed by the running API. **Under the current Neon decision (ADR-001), this no longer includes a Cloud SQL role**: Neon is reached over standard outbound TCP/TLS, not a Cloud SQL connector attachment, so there is no GCP-side database IAM grant to make. The runtime service account's remaining GCP-side need is:
 
-- Cloud SQL Client, to connect through the Cloud SQL connector.
-- Secret Manager Secret Accessor, only for secrets mounted into the API.
+- Secret Manager Secret Accessor, only for secrets mounted into the API (still includes `DATABASE_URL`, now a Neon connection string).
 
-Create a separate migration-job service account with its own least-privilege database credential and only the cloud access it requires. Do not rely on the default Compute Engine service account or broad Editor roles.
+Create a separate migration-job service account with its own least-privilege database credential (a Neon role/password, granted at the database level, not GCP IAM) and only the cloud access it requires (Secret Manager access to read that credential). Do not rely on the default Compute Engine service account or broad Editor roles.
+
+*(Historical note: the superseded Cloud SQL decision required `roles/cloudsql.client` here, to connect through the Cloud SQL connector. That grant is dropped, not merely unused, under the current decision.)*
 
 Never commit, copy, mount, or bake a Firebase/GCP service-account JSON into the repository or container. Do not set `GOOGLE_APPLICATION_CREDENTIALS` in Cloud Run. Local development may use its existing safe local credential arrangement independently; its files remain outside version control.
 
 In Firebase production setup, configure the production Firebase project/web app and ensure the Vercel hostname (and later custom hostname) is an authorized domain when Firebase Auth providers or email action flows require it. `NEXT_PUBLIC_FIREBASE_API_KEY` is a public Firebase web configuration value, not a server secret; restrict its API key and monitor quotas in Firebase/Google Cloud.
 
-## 7. Cloud SQL and database connectivity
+## 7. Neon database and connectivity
 
-Provision a PostgreSQL 16 Cloud SQL instance in `asia-east1` using Cloud SQL Enterprise edition, single zone, **tier `db-g1-small`**, with automated backups and point-in-time recovery enabled. Backups and PITR are mandatory and are not negotiable against cost.
+**Superseded by ADR-001 (2026-08-18).** The database is **Neon Launch PostgreSQL** in `aws-ap-southeast-1` (Singapore), not Cloud SQL. This section is rewritten to match; the prior Cloud SQL-specific connectivity text has been removed rather than retained as a toggle, since it described a GCP-managed connector mechanism (Unix socket, IAM-based attachment) that has no Neon equivalent — Neon is a standard TCP/TLS PostgreSQL endpoint.
 
-`db-g1-small` is a **shared-core** machine type. Google documents shared-core types as test/development configurations **without a Cloud SQL SLA**, and their CPU is burstable/shared rather than dedicated. This is a deliberate, recorded trade-off for the pre-revenue pilot — see §3.1 for the audit, the accepted risk, and the evidence-based upgrade triggers. It is **not** a default to copy into any later environment: a production deployment with availability commitments must use a dedicated-core tier.
+Provision a Neon **Launch** plan project (not Free — Free's 6-hour/1 GB-month PITR history does not meet this project's backup expectation; see ADR-001) in the `aws-ap-southeast-1` region, colocated with Cloud Run in `asia-southeast1` (§3).
 
-`db-f1-micro` is explicitly excluded. Its 25 `max_connections` and 0.6 GB RAM leave insufficient headroom over the connection budget below, and an out-of-memory event restarts the instance.
+Neon requires TLS on every connection; there is no non-TLS mode to reject the way Cloud SQL's `sslmode=disable` needed host-based gating. Use `sslmode=require` or `sslmode=verify-full` (Neon recommends `verify-full`) in the connection string, per [Neon's connection security docs](https://neon.com/docs/connect/connect-securely). `AssertSafeSSLMode` (`apps/api/internal/db/dsn.go`) already accepts any non-`disable` mode regardless of host — **no code change is required** for this; it was verified directly against Neon's DSN shape as part of ADR-001's code audit. The function's Cloud SQL Unix-socket allowance (`isCloudSQLSocket`, matching a `/cloudsql/` host prefix) becomes dead code under this decision; it is harmless to leave and optional to remove.
 
-Use Cloud Run's built-in Cloud SQL connection configuration to attach the instance and connect through its Unix socket:
-
-```text
-/cloudsql/<GCP_PROJECT_ID>:asia-east1:<CLOUD_SQL_INSTANCE>
-```
-
-For this MVP, use Cloud SQL public IP plus the Cloud Run managed connector/socket path. This provides encrypted connector transport and avoids a Serverless VPC Access connector. Private IP/VPC networking is a deferred hardening option, not a prerequisite for this pilot.
-
-`DATABASE_URL` remains the application variable name. Its production value is a secret and must be constructed for the Unix socket connection with the production database name, user, password, and `sslmode=disable` only when using the managed connector path. The connection mechanism—not a public TCP connection from application code—is responsible for the secure Cloud Run-to-Cloud SQL transport.
-
-`sslmode=disable` is safe on the `/cloudsql/...` Unix socket path, where the transport never leaves the container and the connector supplies encryption. It is also safe against a local loopback PostgreSQL, which is what `.env.example` already uses (`localhost:5433`) — there is no network to protect between the API process and a database on the same machine. The risk is a *production* DSN that ends up pointed at a public TCP host with `sslmode=disable` still set, which would send credentials and data in plaintext.
-
-The assertion D1b adds must therefore be host-based, not blanket: refuse to start only when `sslmode=disable` is set **and** the DSN host is neither a `/cloudsql/` socket path **nor** a loopback address (`localhost`, `127.0.0.1`). This rejects exactly the dangerous case — a leaked production DSN pointed at a public host — without breaking local development, which never had a network-facing DSN to leak.
+`DATABASE_URL` remains the application variable name and remains a Secret Manager-held secret. Its production value becomes Neon's issued connection string, e.g. `postgres://<user>:<password>@<endpoint>.<region>.aws.neon.tech/<db>?sslmode=require`. There is no GCP-side "attachment" step (no `--add-cloudsql-instances`, no Cloud SQL connector, no dedicated IAM role) — Cloud Run reaches Neon the same way any external HTTPS/TLS dependency is reached, over its default outbound networking. §6 records the resulting IAM simplification.
 
 ### Connection budget
 
-`pgxpool.New` currently uses defaults and has no explicit maximum. Before production deployment, D1b must add explicit bounded pool configuration. Initial target: at most four database connections per API instance. With Cloud Run maximum instances of three, the planned API budget is at most twelve pooled connections, plus one separately run migration job. Size the Cloud SQL instance and its `max_connections` allowance around all clients, not only API requests.
-
-**Reconciliation against `db-g1-small`.** The budget is unchanged by the tier decision — the audit showed it fits without modification:
+`pgxpool.New`'s pinned pool configuration (`DefaultMaxConns` 4 for the API, `MaintenanceMaxConns` 2 for migrate/bootstrap — `apps/api/internal/db/db.go`) is unchanged by this decision; it is provider-agnostic. With Cloud Run maximum instances of three:
 
 | Client | Connections |
 | --- | --- |
@@ -239,17 +245,15 @@ The assertion D1b adds must therefore be host-based, not blanket: refuse to star
 | Migration **or** bootstrap job (`MaintenanceMaxConns` 2) | 2 |
 | **Planned worst case** | **14** |
 
-`db-g1-small` provides `max_connections = 50` (Cloud SQL derives this from the instance's 1.7 GB of memory). After Cloud SQL's own superuser/agent reservations, roughly 45+ remain usable against a worst case of 14 — approximately 3× headroom. No change to `DefaultMaxConns`, `MaintenanceMaxConns`, or the Cloud Run max-instance cap is required or authorized by this decision.
+Neon Launch's default compute size supports at least this comfortably, but **verify Neon's actual `max_connections` (and note Neon also offers connection pooling via PgBouncer, not yet evaluated here) against the created project rather than assuming a figure carried over from the Cloud SQL estimate** — the Cloud SQL-specific `max_connections=50` figure previously recorded here was a Cloud SQL-derived number (from `db-g1-small`'s 1.7 GB RAM) and does not apply to Neon. Re-derive this when the Neon project is actually provisioned, and treat connection saturation as a trigger to revisit pool sizing regardless of provider (§3.1, ADR-001).
 
-Verify the actual `max_connections` on the created instance rather than assuming this figure, and treat sustained usage approaching the limit as an upgrade trigger (§3.1).
-
-`pgxpool.New` without an explicit `Config` already applies pgx's own defaults for `MaxConnLifetime`, `MaxConnIdleTime`, and a periodic health check, so the pool is not entirely without eviction today. The requirement for D1b is not "add eviction that doesn't exist" but to **explicitly pin and verify** `MaxConns`, `MaxConnIdleTime`, and `MaxConnLifetime` for production rather than run on library defaults nobody has confirmed against Cloud SQL's own idle-connection behavior. Pin the values, then check under D6 load that Cloud SQL isn't closing connections faster than the pool retires them.
+`pgxpool.New` without an explicit `Config` already applies pgx's own defaults for `MaxConnLifetime`, `MaxConnIdleTime`, and a periodic health check, so the pool is not entirely without eviction today. The requirement for D1b is not "add eviction that doesn't exist" but to **explicitly pin and verify** `MaxConns`, `MaxConnIdleTime`, and `MaxConnLifetime` for production rather than run on library defaults nobody has confirmed against the host database's own idle-connection behavior — under ADR-001 that is Neon's, not Cloud SQL's, and Neon's scale-to-zero/idle-suspend behavior is a materially different thing to verify against than Cloud SQL's always-on idle handling. Pin the values, then check under D6 load that Neon isn't closing or suspending connections faster than the pool retires them.
 
 Also size the pool against the configured Cloud Run concurrency: at concurrency `20` and four connections per instance, up to sixteen in-flight requests can be waiting on a connection. That is acceptable for short CRUD queries but means database slowness turns into request queueing.
 
 This queueing currently has no explicit upper bound. `main.go` does not set `http.Server.ReadTimeout`/`WriteTimeout`, and a handler's `r.Context()` is canceled on client disconnect or when the handler returns — not on a query simply taking too long. Cloud Run's own request timeout closes the client-facing connection when it expires, but that is not the same as a guarantee that the container stops the in-flight database work; whether it does depends on whether that closure is wired to cancel the request context. D1b should add an explicit deadline — a server-level request timeout, a per-handler `context.WithTimeout` around the database call, or both — so a slow query has a bounded worst case instead of an assumed one. Verify the chosen mechanism under D6 load rather than relying on incidental cancellation.
 
-Do not scale Cloud Run above the agreed cap or raise the pool cap until connection usage, latency, and Cloud SQL limits have been checked.
+Do not scale Cloud Run above the agreed cap or raise the pool cap until connection usage, latency, and Neon's connection limits have been checked.
 
 ## 8. Configuration and secret inventory
 
@@ -261,12 +265,12 @@ No actual values belong in this document, source control, Docker image layers, l
 | `NEXT_PUBLIC_FIREBASE_API_KEY` | PUBLIC | Vercel production environment | Public Firebase API key; restrict it. |
 | `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` | LOCAL ONLY | Not set in Vercel production | Never point production browsers to an emulator. |
 | `BACKEND_BASE_URL` | SERVER CONFIG | Vercel production environment | Cloud Run HTTPS URL; no trailing slash. |
-| `DATABASE_URL` | SECRET | Secret Manager, injected into Cloud Run service and migration job | Database username/password and socket URL. |
+| `DATABASE_URL` | SECRET | Secret Manager, injected into Cloud Run service and migration job | **Revised by ADR-001**: Neon connection string (`postgres://user:pass@<endpoint>.aws.neon.tech/db?sslmode=require`), not a Cloud SQL socket URL. |
 | `FIREBASE_PROJECT_ID` | SERVER CONFIG | Cloud Run API service only; **not** the migration job | Production Firebase/GCP project ID; no credential JSON. The migration job does not authenticate users and must not require it — see §9. |
 | `FIREBASE_AUTH_EMULATOR_HOST` | LOCAL ONLY | Not set in Cloud Run | Production must use Firebase's real token verification path. |
 | `PORT` | PLATFORM CONFIG | Cloud Run supplies it | App default is `8080`; do not make it a secret. |
-| Cloud SQL instance connection name | SERVER CONFIG | Cloud Run Cloud SQL attachment/configuration | Not a password, but keep it out of browser variables. |
-| Database migration credential | SECRET | Secret Manager, migration job only | Separate least-privilege DDL credential. |
+| ~~Cloud SQL instance connection name~~ | — | — | **Removed by ADR-001** — no GCP-side connector attachment exists for Neon; there is no connection-name value to configure. |
+| Database migration credential | SECRET | Secret Manager, migration job only | Separate least-privilege DDL credential, now a Neon role/password rather than a Cloud SQL user. |
 | API runtime database credential | SECRET | Secret Manager, API service only | Prefer a DML-only credential once D1b adds it. |
 
 Use Secret Manager for secret material. When injecting a secret as an environment variable in Cloud Run, pin a numeric Secret Manager version rather than `latest`, then deliberately deploy a new revision when rotating it. Grant secret access to the exact runtime/job service account.
@@ -342,11 +346,11 @@ Each item is a future, separately approved implementation/deployment task. Resou
 | D1a — container readiness | **Done.** `apps/api/Dockerfile` (multi-stage, `golang:1.26` builder → `gcr.io/distroless/static-debian12` runtime, `CGO_ENABLED=0`) and a root `.dockerignore` are in place; build context is the repository root (`docker build -f apps/api/Dockerfile .`). `.dockerignore` excludes `**/node_modules`, `apps/web/.next`, `apps/web/.next-mobile`, `apps/web/screenlog.*`, `.git`, `.env`, `.env.*`. Verified locally: image builds, container starts (`database connection verified` → `listening on :8080`), `/health` and `/ready` both return 200, and `SIGTERM` triggers graceful shutdown (`shutdown signal received`, clean exit within Cloud Run's grace period). Final image size ~54MB. D1b extends this Dockerfile to the migrate and bootstrap binaries once they exist. |
 | D1b — production database tooling | **Done.** `apps/api/main.go` moved to `apps/api/cmd/api`; `apps/api/cmd/migrate` and `apps/api/cmd/bootstrap` added, all three built into the one D1a image (`apps/api/Dockerfile`). `internal/config` now exposes `LoadAPI`/`LoadMigrate`/`LoadBootstrap`, each validating only its entrypoint's variables (migrate/bootstrap never require `FIREBASE_PROJECT_ID`). `internal/db.NewPool` pins `MaxConns` (4 for api via `DefaultMaxConns`, 2 for migrate/bootstrap via `MaintenanceMaxConns`), `MaxConnIdleTime` (5m), and `MaxConnLifetime` (30m), and calls the new host-based `AssertSafeSSLMode` before connecting, refusing to start when `sslmode=disable` targets a host that is neither a `/cloudsql/` socket nor loopback. `cmd/api` adds an explicit request deadline (`http.TimeoutHandler`, 10s) plus `http.Server.ReadTimeout`/`WriteTimeout` as a transport-level backstop. `internal/migrate` embeds `apps/api/migrations/*.up.sql` (`migrations/embed.go`), applies them in order with a `schema_migrations` version/checksum ledger, and refuses to proceed if an already-applied migration's on-disk content has changed; verified against a clean local database in `internal/migrate/migrate_integration_test.go` (apply-from-empty, idempotent re-run, tampered-checksum refusal), all passing against the local Postgres 16 container. `internal/bootstrap` validates a reviewed JSON manifest (`DisallowUnknownFields`, role/relationship checks) and idempotently upserts `users`/`coach_athletes`; manually verified end-to-end against the local test database, including a no-op second run. Local Docker image builds all three binaries (~79.5MB); `/migrate` and `/bootstrap` run correctly via `--entrypoint` override, `/api` (default entrypoint) still serves `/health`/`/ready` as 200. |
 | D1c — structured logging | **Done.** `apps/api/internal/logging` (new): JSON to stdout via `log/slog`, keys remapped to Cloud Logging's `severity`/`message`, `WARN`→`WARNING`. `logging.Middleware` (wired in `cmd/api`, outside `http.TimeoutHandler` so `X-Request-Id` survives the D1b request-timeout path) mints a request ID per request, echoes it as `X-Request-Id`, and logs one summary line per request at `INFO`/`WARNING`/`ERROR` by status class; successful `/health`/`/ready` polling is not logged, a failing `/ready` still is. `authn.WriteInternalError` replaced all 13 internal-error call sites that previously discarded `err` and logged nothing — every 500 now logs, correlated by `request_id` with its request's summary line, without changing the `{"error":{"code","message"}}` envelope (documented as an additive contract change in `docs/go-backend-api-contract-v0.1.md`, V0.8). Boot logs record port, `db_ping`, Firebase project ID, and a best-effort migration ledger version (`migrate.LatestAppliedVersion`; absent, not an error, if the ledger doesn't exist yet). Closed two DSN-leak paths in `internal/db`: an unparsable `DATABASE_URL` (`net/url.Parse` failure) and a syntactically-parseable-but-invalid one that reaches `pgxpool.ParseConfig`'s libpq keyword/value fallback — both previously able to print the DSN, password included, verbatim to stdout via `log.Fatal`; neither `AssertSafeSSLMode` nor `NewPool` now propagate the underlying parse error's text under any circumstance. `cmd/migrate`/`cmd/bootstrap` converted to the same JSON logger (no request IDs/middleware — non-HTTP jobs); bootstrap logs manifest **counts** only, never UIDs/names. Verified locally against the docker-compose Postgres: full `go test ./...` (unit + integration) green, plus manual runs of all three entrypoints' happy and fatal paths confirming valid one-object-per-line JSON, correct severity, and no credential leakage. §12's *Alerting* subsection and the related §13 checklist line are Cloud Monitoring configuration and remain deferred to D2/D4, not implementable locally. |
-| D2 — GCP/Cloud SQL foundation | **Cost gate passed (§3.1)** at ≈ $28/month against the USD 100/month approval guardrail, for **`db-g1-small`** in `asia-east1`; `db-f1-micro`, dedicated-core, Neon, and Cloudflare all evaluated and rejected there. Target project is `dontworkout` (the existing Firebase project). Remaining: establish billing/IAM, enable APIs, Artifact Registry, the Cloud SQL instance with mandatory backups/PITR, least-privilege identities, and the documented connection budget (§7). |
-| D3a — secrets and identities | Create Secret Manager entries, the runtime and migration service accounts, and their least-privilege grants. No workload runs yet. |
-| D3b — first image publish | Manually build and push the image to Artifact Registry in `asia-east1`. **Record the image digest**; every later phase references that digest. |
-| D3c — migration and bootstrap | Using the D3b digest, run the migration job and verify schema state; then run the approved bootstrap job (§10) and verify access boundaries. Also perform the one-time restore drill below. |
-| D4 — Cloud Run API | Deploy the API service **from the same D3b digest** with Cloud SQL attachment, public invocation, bounded scaling, secrets, explicit probes (§5), and ADC identity; validate logs/readiness/Firebase verification. |
+| D2 — GCP foundation + Neon project | **Superseded by ADR-001 (2026-08-18).** The Cloud SQL cost gate that previously passed here (`db-g1-small`, ≈$28/month) is superseded, not merely re-priced — see §3.1/ADR-001. Target project is `dontworkout` (the existing Firebase project) for the GCP side; the database side is a separate Neon Launch project in `aws-ap-southeast-1`. Remaining: establish/confirm billing/IAM for GCP resources needed (Cloud Run, Artifact Registry, Secret Manager — **no Cloud SQL APIs/resources required**), create the Neon Launch project and database, and record its connection details for §7/§8. Re-run a fresh cost estimate against Neon's calculator before provisioning, per ADR-001. |
+| D3a — secrets and identities | Create Secret Manager entries (holding the Neon `DATABASE_URL`), the runtime and migration service accounts, and their least-privilege grants. **No `roles/cloudsql.client` grant** — see §6. No workload runs yet. |
+| D3b — first image publish | Manually build and push the image to Artifact Registry. **Record the image digest**; every later phase references that digest. **This digest remains fully reusable under ADR-001** — the code audit in ADR-001 confirmed no Cloud SQL-specific compiled code exists in the built binaries, so no rebuild is required purely because the database host changed. |
+| D3c — migration and bootstrap | Using the D3b digest, run the migration job and verify schema state against Neon; then run the approved bootstrap job (§10) and verify access boundaries. Also perform the one-time restore drill below, adapted to Neon's PITR mechanism (§14) rather than Cloud SQL's. |
+| D4 — Cloud Run API | Deploy the API service **from the same D3b digest**, in **`asia-southeast1`** (§3), with public invocation, bounded scaling, secrets (Neon `DATABASE_URL`), explicit probes (§5), and ADC identity. **No Cloud SQL attachment step** — see §7. Validate logs/readiness/Firebase verification. |
 | D5 — Vercel frontend | Connect `apps/web`, set production-only public Firebase config and `BACKEND_BASE_URL`, then deploy normally through Vercel Git integration. |
 | D6 — production E2E | Test the complete Coach/Athlete core loop, authorization failures, refresh/reload, mobile browser path, logs, and persisted records. Measure and record Vercel→Cloud Run round-trip latency (§4) and observed cold-start behaviour. |
 | D7 — custom domain/DNS | Only after D6 works on provider URLs, configure Vercel domain and Firebase authorized domains; Cloudflare may manage DNS. |
@@ -389,7 +393,7 @@ Log the *shape* of a failure — endpoint, status, error class, request ID — n
 At least one alert must exist and must have been deliberately triggered once before the pilot opens, so it is known to actually deliver:
 
 - elevated 5xx rate on the Cloud Run service, **or**
-- Cloud SQL instance unavailability.
+- database unavailability (Neon, under ADR-001) — Neon's monitoring/alerting mechanism differs from Cloud SQL's and should be confirmed when D2-equivalent work resumes, rather than assumed to be the same integration.
 
 An alert that has never fired is in the same category as a backup that has never been restored.
 
@@ -403,11 +407,11 @@ Before calling the first pilot deployment ready, verify:
 - Coach and athlete each can access only permitted records and relationships.
 - A coach creates/schedules a workout; athlete opens it and records SetLogs; coach reviews results.
 - Database writes persist after API revision replacement.
-- Cloud Run and Cloud SQL logs show no credential values or unexpected connection saturation.
+- Cloud Run and Neon logs show no credential values or unexpected connection saturation.
 - Logs arrive in Cloud Logging parsed as JSON with a usable `severity`, and an error path is confirmed to surface as `ERROR` rather than `INFO` (§12).
 - A request ID from the `X-Request-Id` response header can be used to locate that exact request in Cloud Logging, and the JSON error body remains unchanged (`{"error":{"code","message"}}`).
 - At least one alert is configured **and has been deliberately triggered once** to confirm delivery (§12).
-- The point-in-time-recovery restore drill has been completed, its elapsed time recorded, and the temporary instance deleted (§11).
+- The point-in-time-recovery restore drill has been completed against Neon's restore mechanism, its elapsed time recorded, and any temporary branch/project deleted (§11, §14).
 - The API service and the migration job that ran against this database were deployed from the same image digest (§11).
 - Vercel Preview has no production backend or production Firebase mutation path.
 - Backup/PITR configuration, instance location, max instance cap, pool cap, connection idle/lifetime settings, image digest, and Secret Manager version pins are recorded in the deployment change record.
@@ -416,20 +420,20 @@ Before calling the first pilot deployment ready, verify:
 
 - **API:** move Cloud Run traffic back to the prior healthy revision. Keep the prior image/revision identifiable.
 - **Frontend:** use Vercel's prior deployment rollback/redeployment controls.
-- **Database:** do not run destructive down migrations. First stop harmful traffic, assess compatibility, apply a reviewed forward fix, or use Cloud SQL point-in-time recovery to a separate recovery instance. Validate before any controlled cutover.
+- **Database:** do not run destructive down migrations. First stop harmful traffic, assess compatibility, apply a reviewed forward fix, or use **Neon's point-in-time restore** (branch-based, up to 7 days of history on Launch — ADR-001) to a separate branch/project for recovery. Validate before any controlled cutover. This replaces the superseded Cloud SQL PITR-to-separate-instance mechanism; confirm Neon's exact restore workflow when D3c-equivalent work resumes, since branch-based restore is mechanically different from Cloud SQL's instance-clone restore.
 - **Secrets:** rotate by creating a new Secret Manager version, updating the pinned version in a new Cloud Run revision/job configuration, and verifying before disabling the old version.
 
-The initial single-zone database has no high-availability failover. This is an accepted controlled-pilot availability trade-off, not a claim of production-grade redundancy.
+The database has no high-availability failover under either the superseded Cloud SQL decision or the current Neon decision. This is an accepted controlled-pilot availability trade-off, not a claim of production-grade redundancy — see ADR-001 for the Neon-specific SLA/availability posture.
 
 ## 15. Cost guardrails
 
-Cloud SQL is the likely material recurring cost because the instance runs continuously, with additional storage, backup, and network charges. **This pricing exercise has been completed for D2 — see §3.1** for the SKU-level cost basis, the tier comparison, and the selected configuration (`db-g1-small`, ≈ $28/month).
+**Superseded by ADR-001 (2026-08-18).** The database is no longer the fixed recurring Cloud SQL cost described below; it is Neon Launch's usage-based, scale-to-zero pricing. The ≈$28/month Cloud SQL figure and its SKU-level basis (formerly recorded in §3.1) no longer apply. A rough estimate of ≈$10–15/month for this workload is recorded in ADR-001 — **re-run this against Neon's own pricing calculator before provisioning**, the same discipline previously applied to the Cloud SQL estimate; do not carry the estimate forward as a quote.
 
-The **USD 100/month ceiling is an approval guardrail, not an expected or budgeted spend.** Passing it does not by itself make a configuration appropriate; §3.1 records why the cheapest SLA-backed option was not simply taken, and why `db-f1-micro` was rejected despite being cheaper still.
+The **USD 100/month ceiling remains the approval guardrail** for total infra spend, not tied to any one provider; it is retained as a sanity check, not because a fresh cost-gate exercise against it is expected to be close for either option at this pilot's scale.
 
-Re-run this pricing exercise, and record a fresh estimate, whenever an upgrade trigger (§3.1) is met or the configuration otherwise changes. Note that committed-use discounts do not apply to shared-core tiers.
+Re-run the Neon pricing exercise, and record a fresh estimate, whenever ADR-001's trigger conditions are met (sustained cost exceeding what Cloud SQL would have cost at actual usage, unacceptable cold-start latency, a stated SLA requirement, or materially increased workload) or the configuration otherwise changes.
 
-Cloud Run has request-based CPU/memory pricing and can scale to zero with `min instances = 0`; it also has build, artifact storage, logging, and outbound internet traffic considerations. Traffic from Cloud Run to Cloud SQL in the same region is the intended low-latency path; the Vercel-to-Cloud-Run proxy is external traffic and should be measured, not assumed free.
+Cloud Run has request-based CPU/memory pricing and can scale to zero with `min instances = 0`; it also has build, artifact storage, logging, and outbound internet traffic considerations. Cloud Run (`asia-southeast1`) to Neon (`aws-ap-southeast-1`) is now a **cross-cloud, same-region-pair** path rather than Cloud SQL's same-cloud Unix socket — it is not literally free intra-cloud traffic the way GCP-to-GCP was, and should be measured at D6 rather than assumed negligible. The Vercel-to-Cloud-Run proxy remains a separate external-traffic hop to measure independently (§4).
 
 Confirm the applicable Vercel plan at provisioning time. Current Vercel plan eligibility and pricing can change; a commercial pilot may require a paid plan. Do not rely on historical price figures.
 
@@ -451,10 +455,9 @@ After D6, Cloudflare may manage DNS for a custom Vercel domain. Cloudflare Worke
 
 Revisit this architecture only when evidence requires it:
 
-- Cloud SQL cost fails the D2 cost gate: write an ADR comparing managed PostgreSQL alternatives. The gate has already been run and passed — see §3.1 for the selected tier, the SKU-level cost basis, and the `db-f1-micro`/dedicated-core/Neon/Cloudflare rejections. Start from that comparison rather than repeating it; the trigger for revisiting is a *material change* in cost or scale, not a fresh re-evaluation of the same options.
-- **A §3.1 upgrade trigger is met** — sustained CPU or memory pressure, connection saturation against the 50-connection limit, unacceptable instance-attributable database latency, a stated availability/SLA requirement, or materially increased workload: upgrade the Cloud SQL tier from `db-g1-small` to a dedicated-core tier. This is an in-place `--tier` change on the same instance, not a provider migration; verify the expected restart/downtime behaviour before performing it. Upgrading is explicitly **not** triggered by revenue or a first paying customer — only by measured evidence.
-- Availability requirements exceed a controlled pilot: consider Cloud SQL HA, tested recovery exercises, and a dedicated-core tier with SLA coverage (shared-core carries no Cloud SQL SLA — §3.1).
-- Private networking/compliance requirements: consider Cloud SQL private IP and VPC connectivity.
+- **Neon cost or behavior fails to hold up** (sustained cost exceeding what Cloud SQL would have cost at actual measured usage, unacceptable cold-start latency in the core loop, or a stated availability/SLA requirement neither Neon nor single-zone Cloud SQL satisfies): revisit ADR-001. Its trade-offs and rollback path (§ "Rollback / migration path") are the starting point — the code portability audit there means switching back, or to a third provider, is a configuration change plus a data migration, not a rewrite. Do not repeat the full comparison from scratch; start from ADR-001's recorded reasoning and update only what evidence has changed.
+- Availability requirements exceed a controlled pilot: consider a dedicated-core, HA-enabled option with real SLA coverage — under the current decision this means evaluating Neon's higher tiers or Cloud SQL Enterprise/Enterprise Plus with HA (recall neither single-zone Cloud SQL nor the current Neon tier carries an SLA — ADR-001).
+- Private networking/compliance requirements: consider Neon's private networking options, or reconsider Cloud SQL private IP/VPC connectivity if that becomes the better fit.
 - Media upload/video analysis: add object storage and signed-upload design; do not store media in PostgreSQL.
 - Sustained load: adjust Cloud Run concurrency/max instances and pool sizes using measured database connections and latency.
 - Repeatable releases: add CI/CD only after D1–D6 manual path is documented and understood.
@@ -465,10 +468,10 @@ Revisit this architecture only when evidence requires it:
 
 ## 18. Official references
 
-- [Cloud Run locations](https://cloud.google.com/run/docs/locations), [Cloud SQL PostgreSQL region availability](https://cloud.google.com/sql/docs/postgres/region-availability-overview), and [Artifact Registry locations](https://cloud.google.com/artifact-registry/docs/repositories/repo-locations)
+- [Cloud Run locations](https://cloud.google.com/run/docs/locations) and [Artifact Registry locations](https://cloud.google.com/artifact-registry/docs/repositories/repo-locations)
 - [Cloud Run service identity](https://cloud.google.com/run/docs/securing/service-identity) and [Firebase Admin SDK setup](https://firebase.google.com/docs/admin/setup)
-- [Cloud Run to Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/connect-run) and [Cloud SQL connection management](https://cloud.google.com/sql/docs/postgres/manage-connections)
-- [Cloud SQL pricing](https://cloud.google.com/sql/pricing), [Google Cloud Pricing Calculator](https://cloud.google.com/products/calculator), and [Cloud SQL instance settings](https://cloud.google.com/sql/docs/postgres/instance-settings)
+- [Neon plans/pricing](https://neon.com/docs/introduction/plans), [Neon regions](https://neon.com/docs/introduction/regions), and [Neon connection security (sslmode/channel_binding)](https://neon.com/docs/connect/connect-securely)
 - [Cloud Run autoscaling](https://cloud.google.com/run/docs/about-instance-autoscaling), [Cloud Run pricing](https://cloud.google.com/run/pricing), and [Cloud Run public access](https://cloud.google.com/run/docs/authenticating/public)
 - [Cloud Run Secret Manager configuration](https://cloud.google.com/run/docs/configuring/services/secrets), [Next.js rewrites](https://nextjs.org/docs/app/api-reference/config/next-config-js/rewrites), and [Vercel rewrites](https://vercel.com/docs/routing/rewrites)
 - [Firebase API keys](https://firebase.google.com/docs/projects/api-keys), [Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/), and [Cloudflare DNS](https://developers.cloudflare.com/dns/get-started/)
+- **Superseded (Cloud SQL, retained for history):** [Cloud SQL PostgreSQL region availability](https://cloud.google.com/sql/docs/postgres/region-availability-overview), [Cloud Run to Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/connect-run), [Cloud SQL connection management](https://cloud.google.com/sql/docs/postgres/manage-connections), [Cloud SQL pricing](https://cloud.google.com/sql/pricing), [Google Cloud Pricing Calculator](https://cloud.google.com/products/calculator), [Cloud SQL instance settings](https://cloud.google.com/sql/docs/postgres/instance-settings), [Cloud SQL SLA](https://cloud.google.com/sql/sla)
