@@ -2,7 +2,11 @@
 
 Status: **PAUSED**, 2026-08-17. Deployment work is intentionally on hold while the team returns to Coach/Athlete core-loop product implementation. This is a status record only — it does not modify or supersede `docs/deployment-architecture-v0.2.md`, which remains the sole canonical architecture/runbook source.
 
-**Database-hosting decision revised, 2026-08-18** — see `docs/adr/ADR-001-use-neon-launch-postgresql-for-mvp-pilot.md`. The database is now **Neon Launch PostgreSQL in `aws-ap-southeast-1` (Singapore)**, not Cloud SQL, and Cloud Run relocates from `asia-east1` to **`asia-southeast1`** to stay colocated. The "What is done" and "Confirmed GCP state" sections below describe state as of the 2026-08-17 pause and are still accurate for what exists (D1a/D1b/D1c, the Artifact Registry image, the empty Cloud SQL/Secret Manager/service-account state) — nothing there needs correcting. Only the **Resume Point** changes, replaced below.
+**Database-hosting decision revised, 2026-08-18** — see `docs/adr/ADR-001-use-neon-launch-postgresql-for-mvp-pilot.md`. The database is now **Neon PostgreSQL in `aws-ap-southeast-1` (Singapore)**, not Cloud SQL, and Cloud Run relocates from `asia-east1` to **`asia-southeast1`** to stay colocated. The "What is done" and "Confirmed GCP state" sections below describe state as of the 2026-08-17 pause and are still accurate for what exists (D1a/D1b/D1c, the Artifact Registry image, the empty Cloud SQL/Secret Manager/service-account state) — nothing there needs correcting.
+
+**Rollout staged further, 2026-08-18** — see `docs/adr/ADR-002-stage-neon-free-before-launch-upgrade.md`. The D2 project is provisioned on the **Free** plan for the current disposable-data internal-testing phase, not Launch. Launch is a **required** upgrade gated on an explicit trigger (primarily: before real, non-recoverable athlete/coach data enters the system) — see ADR-002's "Upgrade trigger" section. This is not a reversal of the "backups/PITR mandatory" principle in ADR-001/v0.2 — it defers Launch until that principle actually applies.
+
+Only the **Resume Point** changes, replaced below.
 
 ## What is done
 
@@ -34,7 +38,7 @@ Status: **PAUSED**, 2026-08-17. Deployment work is intentionally on hold while t
 
 Resume at **Neon project creation** (the new D2), then proceed strictly in this order per the dependency chain in `docs/deployment-architecture-v0.2.md` §11:
 
-1. **Neon project creation (D2)** — Neon **Launch** plan (not Free — see ADR-001), region `aws-ap-southeast-1` (Singapore); re-verify current pricing against Neon's calculator before creating; record the connection details.
+1. **Neon project creation (D2)** — Neon **Free** plan for the current internal-testing phase (ADR-002), region `aws-ap-southeast-1` (Singapore), PostgreSQL 16; re-verify current Free-plan limits before creating; record the connection details. **Track the ADR-002 upgrade trigger from this point forward** — Launch is required before real, non-recoverable athlete/coach data enters the system, not an optional later step.
 2. **D3a — identities & secrets** — dedicated runtime service account (**Secret Manager Secret Accessor only — no Cloud SQL Client role, per ADR-001/§6**) and migration service account (least-privilege DDL credential, granted as a Neon database role); Secret Manager entries for `DATABASE_URL` (Neon connection string, `sslmode=require`) and the migration credential.
 3. **D3c — migration & bootstrap** — run against the D3b digest below (reusable unmodified, per the ADR-001 code audit); verify schema state against Neon; run the reviewed bootstrap manifest (§10); perform the one-time restore drill (§11, §14) using Neon's restore mechanism and record elapsed time.
 4. **D4 — Cloud Run API** — deploy from the same D3b digest, **in `asia-southeast1`** (revised from `asia-east1`); no Cloud SQL attachment (none needed); public invocation, bounded scaling (min 0 / max 3 / concurrency 20), secrets, `/ready` as startup probe only, ADC identity.
