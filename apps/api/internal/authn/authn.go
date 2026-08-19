@@ -40,11 +40,27 @@ type TokenVerifier interface {
 	VerifyIDToken(ctx context.Context, idToken string) (uid string, err error)
 }
 
+// Verifier satisfies both TokenVerifier (used by Middleware) and
+// IdentityVerifier (used by FirebaseOnlyMiddleware). NewVerifier returns
+// this combined interface so a caller (cmd/api/main.go) can wire both
+// middlewares from the one underlying Firebase Admin SDK client without
+// an unsafe type assertion — matching
+// docs/athlete-onboarding-invite-codes-v0.1.md §5.3: "firebaseVerifier ...
+// implements both TokenVerifier and IdentityVerifier — same underlying
+// VerifyIDToken call, two thin interfaces over it." Any existing caller
+// that only needs TokenVerifier (e.g. Middleware's parameter type)
+// continues to accept a Verifier value unchanged, since Verifier embeds
+// TokenVerifier.
+type Verifier interface {
+	TokenVerifier
+	IdentityVerifier
+}
+
 // NewVerifier initializes the Firebase Admin SDK auth client for the given
 // project. When the FIREBASE_AUTH_EMULATOR_HOST environment variable is
 // set, the SDK verifies against the local Auth Emulator instead of
 // production Firebase.
-func NewVerifier(ctx context.Context, projectID string) (TokenVerifier, error) {
+func NewVerifier(ctx context.Context, projectID string) (Verifier, error) {
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID})
 	if err != nil {
 		return nil, err

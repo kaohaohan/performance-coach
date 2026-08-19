@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -278,6 +279,392 @@ func TestStatusDerivationAtExpiryBoundary(t *testing.T) {
 	}
 }
 
+func TestPreviewInviteCodeReturnsPublicFieldsForActiveCode(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	description := testPrefix + " Fall squad"
+
+	created, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{Description: &description})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, variant := range []string{created.Code, strings.ToLower(created.Code), hyphenate(created.Code)} {
+		preview, err := invitecode.PreviewInviteCode(ctx, testPool, variant)
+		if err != nil {
+			t.Fatalf("PreviewInviteCode(%q) returned error: %v", variant, err)
+		}
+		if preview.Code != created.Code {
+			t.Fatalf("PreviewInviteCode(%q).Code = %q, want %q", variant, preview.Code, created.Code)
+		}
+		if preview.CoachName != coach.Name {
+			t.Fatalf("PreviewInviteCode(%q).CoachName = %q, want %q", variant, preview.CoachName, coach.Name)
+		}
+		if preview.Description == nil || *preview.Description != description {
+			t.Fatalf("PreviewInviteCode(%q).Description = %v, want %q", variant, preview.Description, description)
+		}
+	}
+}
+
+func TestPreviewInviteCodeReturnsNotFoundForUnknownMalformedExpiredRevoked(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+
+	if _, err := invitecode.PreviewInviteCode(ctx, testPool, "ZZZZZZZZZZ"); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("unknown code error = %v, want ErrNotFound", err)
+	}
+	if _, err := invitecode.PreviewInviteCode(ctx, testPool, "too-short"); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("malformed code error = %v, want ErrNotFound", err)
+	}
+
+	almostExpired := 1
+	expiring, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{ExpiresInDays: &almostExpired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE coach_invite_codes SET expires_at = created_at + interval '1 millisecond' WHERE id = $1`, expiring.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := invitecode.PreviewInviteCode(ctx, testPool, expiring.Code); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("expired code error = %v, want ErrNotFound", err)
+	}
+
+	revokable, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invitecode.Revoke(ctx, testPool, coach, revokable.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invitecode.PreviewInviteCode(ctx, testPool, revokable.Code); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("revoked code error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRedeemCreatesNewAthleteAndConnectsToCoach(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	created, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	identity := authn.Identity{UID: testPrefix + "-athlete-uid-" + uuid.NewString(), Email: "kevin@example.com"}
+	redeemed, err := invitecode.Redeem(ctx, testPool, identity, created.Code, invitecode.RedeemInput{Name: "Kevin Chen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redeemed.User.Role != "ATHLETE" || redeemed.User.Name != "Kevin Chen" {
+		t.Fatalf("redeemed.User = %#v, want ATHLETE Kevin Chen", redeemed.User)
+	}
+	if redeemed.Coach.Name != coach.Name {
+		t.Fatalf("redeemed.Coach.Name = %q, want %q", redeemed.Coach.Name, coach.Name)
+	}
+
+	var role, name, firebaseUID string
+	if err := testPool.QueryRow(ctx, `SELECT role, name, firebase_uid FROM users WHERE id = $1`, redeemed.User.ID).
+		Scan(&role, &name, &firebaseUID); err != nil {
+		t.Fatal(err)
+	}
+	if role != "ATHLETE" || name != "Kevin Chen" || firebaseUID != identity.UID {
+		t.Fatalf("persisted user = role=%q name=%q firebaseUid=%q, want ATHLETE %q %q", role, name, firebaseUID, "Kevin Chen", identity.UID)
+	}
+
+	var connected bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2)`, coach.ID, redeemed.User.ID).
+		Scan(&connected); err != nil {
+		t.Fatal(err)
+	}
+	if !connected {
+		t.Fatal("coach_athletes relationship was not created")
+	}
+}
+
+func TestRedeemRequiresNameOnlyWhenCreatingNewUser(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	created, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blankIdentity := authn.Identity{UID: testPrefix + "-blank-name-" + uuid.NewString()}
+	if _, err := invitecode.Redeem(ctx, testPool, blankIdentity, created.Code, invitecode.RedeemInput{Name: "   "}); !hasValidationError(err) {
+		t.Fatalf("new user with blank name error = %v, want ValidationError", err)
+	}
+
+	tooLongIdentity := authn.Identity{UID: testPrefix + "-long-name-" + uuid.NewString()}
+	tooLongName := strings.Repeat("x", 81)
+	if _, err := invitecode.Redeem(ctx, testPool, tooLongIdentity, created.Code, invitecode.RedeemInput{Name: tooLongName}); !hasValidationError(err) {
+		t.Fatalf("new user with 81-char name error = %v, want ValidationError", err)
+	}
+
+	// Neither rejected attempt above may have left a users row behind —
+	// the surrounding transaction must have rolled back.
+	for _, identity := range []authn.Identity{blankIdentity, tooLongIdentity} {
+		var count int
+		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM users WHERE firebase_uid = $1`, identity.UID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected redeem for %q left %d users row(s) behind, want 0 (transaction must roll back)", identity.UID, count)
+		}
+	}
+
+	// An existing ATHLETE redeeming again may omit name entirely — it is
+	// only required on the create path.
+	existingIdentity := authn.Identity{UID: testPrefix + "-existing-" + uuid.NewString()}
+	if _, err := invitecode.Redeem(ctx, testPool, existingIdentity, created.Code, invitecode.RedeemInput{Name: "First Time"}); err != nil {
+		t.Fatal(err)
+	}
+	secondCode, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemedAgain, err := invitecode.Redeem(ctx, testPool, existingIdentity, secondCode.Code, invitecode.RedeemInput{})
+	if err != nil {
+		t.Fatalf("existing athlete redeeming with blank name should succeed: %v", err)
+	}
+	if redeemedAgain.User.Name != "First Time" {
+		t.Fatalf("redeemedAgain.User.Name = %q, want unchanged %q (blank name must never overwrite)", redeemedAgain.User.Name, "First Time")
+	}
+}
+
+func TestRedeemIsIdempotentSameAthleteSameCoach(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	created, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := authn.Identity{UID: testPrefix + "-idempotent-" + uuid.NewString()}
+
+	first, err := invitecode.Redeem(ctx, testPool, identity, created.Code, invitecode.RedeemInput{Name: "Repeat Athlete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := invitecode.Redeem(ctx, testPool, identity, created.Code, invitecode.RedeemInput{Name: "Repeat Athlete"})
+	if err != nil {
+		t.Fatalf("repeat redeem should succeed as a no-op: %v", err)
+	}
+	if first.User.ID != second.User.ID {
+		t.Fatalf("repeat redeem user id = %q, want unchanged %q", second.User.ID, first.User.ID)
+	}
+
+	var relationshipCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2`, coach.ID, first.User.ID).
+		Scan(&relationshipCount); err != nil {
+		t.Fatal(err)
+	}
+	if relationshipCount != 1 {
+		t.Fatalf("coach_athletes rows for the same pair = %d, want exactly 1", relationshipCount)
+	}
+}
+
+func TestRedeemAllowsMultiCoachConnection(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coachA := createUser(t, "COACH")
+	coachB := createUser(t, "COACH")
+	codeA, err := invitecode.Create(ctx, testPool, coachA, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeB, err := invitecode.Create(ctx, testPool, coachB, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := authn.Identity{UID: testPrefix + "-multi-coach-" + uuid.NewString()}
+
+	first, err := invitecode.Redeem(ctx, testPool, identity, codeA.Code, invitecode.RedeemInput{Name: "Multi Coach Athlete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invitecode.Redeem(ctx, testPool, identity, codeB.Code, invitecode.RedeemInput{}); err != nil {
+		t.Fatalf("redeeming a second, different coach's code should be allowed: %v", err)
+	}
+
+	var relationshipCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM coach_athletes WHERE athlete_id = $1`, first.User.ID).Scan(&relationshipCount); err != nil {
+		t.Fatal(err)
+	}
+	if relationshipCount != 2 {
+		t.Fatalf("relationships for multi-coach athlete = %d, want 2", relationshipCount)
+	}
+}
+
+func TestRedeemRejectsExistingCoachAccountIncludingItsOwnCode(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	existingCoach := createUser(t, "COACH")
+	otherCoach := createUser(t, "COACH")
+	otherCoachesCode, err := invitecode.Create(ctx, testPool, otherCoach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownCode, err := invitecode.Create(ctx, testPool, existingCoach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coachIdentity := authn.Identity{UID: existingCoach.FirebaseUID}
+
+	if _, err := invitecode.Redeem(ctx, testPool, coachIdentity, otherCoachesCode.Code, invitecode.RedeemInput{}); !errors.Is(err, invitecode.ErrCoachCannotRedeem) {
+		t.Fatalf("coach redeeming another coach's code error = %v, want ErrCoachCannotRedeem", err)
+	}
+	if _, err := invitecode.Redeem(ctx, testPool, coachIdentity, ownCode.Code, invitecode.RedeemInput{}); !errors.Is(err, invitecode.ErrCoachCannotRedeem) {
+		t.Fatalf("coach redeeming their own code error = %v, want ErrCoachCannotRedeem", err)
+	}
+
+	var relationshipCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM coach_athletes WHERE athlete_id = $1`, existingCoach.ID).Scan(&relationshipCount); err != nil {
+		t.Fatal(err)
+	}
+	if relationshipCount != 0 {
+		t.Fatalf("a rejected coach redeem left %d coach_athletes row(s) behind, want 0", relationshipCount)
+	}
+}
+
+func TestRedeemRejectsExpiredAndRevokedCodesWithoutWritingAnything(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+
+	almostExpired := 1
+	expiring, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{ExpiresInDays: &almostExpired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE coach_invite_codes SET expires_at = created_at + interval '1 millisecond' WHERE id = $1`, expiring.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	revokable, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invitecode.Revoke(ctx, testPool, coach, revokable.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	expiredIdentity := authn.Identity{UID: testPrefix + "-expired-attempt-" + uuid.NewString()}
+	if _, err := invitecode.Redeem(ctx, testPool, expiredIdentity, expiring.Code, invitecode.RedeemInput{Name: "Should Not Exist"}); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("redeem of expired code error = %v, want ErrNotFound", err)
+	}
+
+	revokedIdentity := authn.Identity{UID: testPrefix + "-revoked-attempt-" + uuid.NewString()}
+	if _, err := invitecode.Redeem(ctx, testPool, revokedIdentity, revokable.Code, invitecode.RedeemInput{Name: "Should Not Exist"}); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("redeem of revoked code error = %v, want ErrNotFound", err)
+	}
+
+	for _, identity := range []authn.Identity{expiredIdentity, revokedIdentity} {
+		var count int
+		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM users WHERE firebase_uid = $1`, identity.UID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected redeem for %q left %d users row(s) behind, want 0", identity.UID, count)
+		}
+	}
+}
+
+func TestRedeemMalformedCodeReturnsNotFound(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	identity := authn.Identity{UID: testPrefix + "-malformed-attempt-" + uuid.NewString()}
+	if _, err := invitecode.Redeem(ctx, testPool, identity, "not-a-real-code!", invitecode.RedeemInput{Name: "Whoever"}); !errors.Is(err, invitecode.ErrNotFound) {
+		t.Fatalf("redeem of a malformed code error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRedeemConcurrentSameNewIdentity is the concurrency requirement from
+// docs/athlete-onboarding-invite-codes-v0.1.md §6: two goroutines
+// redeeming the same brand-new Firebase identity against the same code at
+// the same time must both succeed and must produce exactly one users row
+// and exactly one coach_athletes relationship — never a duplicate, never
+// an error surfaced to either caller.
+func TestRedeemConcurrentSameNewIdentity(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	created, err := invitecode.Create(ctx, testPool, coach, invitecode.CreateInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := authn.Identity{UID: testPrefix + "-concurrent-" + uuid.NewString()}
+
+	const goroutines = 8
+	start := make(chan struct{})
+	results := make(chan invitecode.Redeemed, goroutines)
+	errs := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			redeemed, err := invitecode.Redeem(ctx, testPool, identity, created.Code, invitecode.RedeemInput{Name: "Concurrent Athlete"})
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- redeemed
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("concurrent redeem returned an error, want all to succeed: %v", err)
+	}
+
+	var firstUserID string
+	count := 0
+	for r := range results {
+		count++
+		if firstUserID == "" {
+			firstUserID = r.User.ID
+		} else if r.User.ID != firstUserID {
+			t.Fatalf("concurrent redeem produced two different user ids: %q and %q", firstUserID, r.User.ID)
+		}
+	}
+	if count != goroutines {
+		t.Fatalf("got %d successful results, want %d", count, goroutines)
+	}
+
+	var userCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM users WHERE firebase_uid = $1`, identity.UID).Scan(&userCount); err != nil {
+		t.Fatal(err)
+	}
+	if userCount != 1 {
+		t.Fatalf("users rows for the concurrently-redeemed identity = %d, want exactly 1", userCount)
+	}
+
+	var relationshipCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2`, coach.ID, firstUserID).
+		Scan(&relationshipCount); err != nil {
+		t.Fatal(err)
+	}
+	if relationshipCount != 1 {
+		t.Fatalf("coach_athletes rows for the concurrently-redeemed pair = %d, want exactly 1", relationshipCount)
+	}
+}
+
+func hyphenate(code string) string {
+	if len(code) != 10 {
+		return code
+	}
+	return strings.ToLower(code[:5] + "-" + code[5:])
+}
+
 func requireIntegrationDB(t *testing.T) {
 	t.Helper()
 	if skipReason != "" {
@@ -317,6 +704,7 @@ func cleanupTestRows(ctx context.Context) {
 		return
 	}
 	pattern := testPrefix + "%"
+	_, _ = testPool.Exec(ctx, `DELETE FROM coach_athletes WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1) OR athlete_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM coach_invite_codes WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM users WHERE firebase_uid LIKE $1`, pattern)
 }
