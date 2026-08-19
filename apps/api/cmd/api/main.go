@@ -23,6 +23,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/invitecode"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
@@ -70,6 +71,9 @@ func run() error {
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
+	mux.Handle("POST /api/v1/invite-codes", authMiddleware(handleCreateInviteCode(pool)))
+	mux.Handle("GET /api/v1/invite-codes", authMiddleware(handleListInviteCodes(pool)))
+	mux.Handle("POST /api/v1/invite-codes/{id}/revoke", authMiddleware(handleRevokeInviteCode(pool)))
 	mux.Handle("GET /api/v1/exercises", authMiddleware(handleListExercises(pool)))
 	mux.Handle("POST /api/v1/exercises", authMiddleware(handleCreateExercise(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
@@ -198,6 +202,114 @@ func handleAthletes(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(athletes)
+	}
+}
+
+// createInviteCodeRequest is the wire shape for a POST /api/v1/invite-codes
+// request body (docs/athlete-onboarding-invite-codes-v0.1.md §5.1). Both
+// fields are optional: an omitted description means no description, and an
+// omitted expiresInDays defaults to 30.
+type createInviteCodeRequest struct {
+	Description   *string `json:"description"`
+	ExpiresInDays *int    `json:"expiresInDays"`
+}
+
+// handleCreateInviteCode creates one reusable invite code owned by the
+// caller. Coach only.
+func handleCreateInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req createInviteCodeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		created, err := invitecode.Create(r.Context(), pool, user, invitecode.CreateInput{
+			Description:   req.Description,
+			ExpiresInDays: req.ExpiresInDays,
+		})
+		if err != nil {
+			var validationErr *invitecode.ValidationError
+			switch {
+			case errors.Is(err, invitecode.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(created)
+	}
+}
+
+// handleListInviteCodes returns the caller's own invite codes, newest
+// first, including expired and revoked ones. Coach only.
+func handleListInviteCodes(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		codes, err := invitecode.ListForCoach(r.Context(), pool, user)
+		if err != nil {
+			if errors.Is(err, invitecode.ErrForbidden) {
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+				return
+			}
+			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(codes)
+	}
+}
+
+// handleRevokeInviteCode revokes one invite code owned by the caller.
+// Revocation is forward-only and idempotent: re-revoking an already
+// revoked code returns 200, not an error. An unknown id or another
+// coach's id both produce 404 — one indistinguishable response, per
+// docs/athlete-onboarding-invite-codes-v0.1.md §5.1. Coach only.
+func handleRevokeInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		id := r.PathValue("id")
+
+		revoked, err := invitecode.Revoke(r.Context(), pool, user, id)
+		if err != nil {
+			switch {
+			case errors.Is(err, invitecode.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.Is(err, invitecode.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code not found")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(revoked)
 	}
 }
 
