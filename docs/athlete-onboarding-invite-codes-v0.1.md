@@ -10,61 +10,47 @@ This doc supersedes the exploratory options in the prior read-only Phase 0 repor
 
 ---
 
-## 1. Bootstrap contradiction — resolved
+## 1. Bootstrap contradiction — resolved (revised)
 
-Two conflicting claims were presented:
+*Revision note: this section originally concluded that no Dockerfile/migrate/bootstrap code existed anywhere in the repository. That conclusion was true only of `origin/main`/`c41ec18`, the base this doc was first branched from. A follow-up delta reconciliation found the real deployment work on a sibling branch that `main` never merged. The corrected findings below replace the original verdict; nothing else in this document changed as a result.*
+
+Two conflicting claims were originally presented:
 
 - **Claim A** (prior deployment inspection): the backend image contains `/api`, `/migrate`, `/bootstrap` binaries.
 - **Claim B** (prior repo inspection): an implemented bootstrap command exists with JSON manifest input, transactional writes, `users` upsert by `firebase_uid`, and `coach_athletes ON CONFLICT DO NOTHING`.
-- **My prior Phase 0 report**: "The bootstrap job is documentation, not code."
+- **My original Phase 0 report**: "The bootstrap job is documentation, not code."
 
-I re-inspected the current local repo directly — not prior agent summaries — at commit `c41ec18` on `claude/athlete-onboarding-invite-codes-izs4w5`, working tree clean (`git status --short` empty).
+**Corrected verdict: Claim A and Claim B are both true — just not on `origin/main`.** They describe `origin/claude/perf-coach-phase-0-inspection-ao1t2v`, tip commit `a2ab984`, which branches directly off `c41ec18` and adds exactly this work:
 
-**Verdict: Claim A and Claim B are both false of this repository. My prior report was correct.**
+| SHA | Commit | Adds |
+|---|---|---|
+| `7bc218e` | `build(api): add Cloud Run container image` | `apps/api/Dockerfile`, `.dockerignore` |
+| `1b7b99b` | `feat(api): D1b production database tooling` | `apps/api/cmd/api`, `apps/api/cmd/migrate`, `apps/api/cmd/bootstrap`, `internal/migrate` (embedded SQL, `schema_migrations` version/checksum ledger), `internal/bootstrap` (manifest loader + `Apply`), `BOOTSTRAP_MANIFEST_PATH` |
+| `23a8b4f` | `docs: promote deployment architecture to v0.2 and record D1a completion` | `docs/deployment-architecture-v0.2.md` |
+| `a2ab984` | `docs: move pilot database from Cloud SQL to Neon (ADR 0001)` | `docs/adr/0001-pilot-database-provider.md` |
 
-Exact evidence:
+`origin/main`/`c41ec18` was simply stale relative to this branch — the deployment work was never merged back, not that it never existed. My original Phase 0 report was correct about the state of `origin/main`; it was incomplete because it only checked one branch.
 
-```
-$ find . -type d -name cmd -not -path "*/node_modules/*"
-(no output — no cmd/ directory exists anywhere)
+### What bootstrap actually is — and is not
 
-$ find . -iname "*bootstrap*" -not -path "*/node_modules/*" -not -path "*/.git/*"
-(no output — no file or directory with "bootstrap" in its name)
+Direct inspection of `apps/api/internal/bootstrap/bootstrap.go` and `apps/api/cmd/bootstrap/main.go` at `a2ab984` confirms **bootstrap is an operator/deployment provisioning mechanism, not athlete self-service onboarding.** It:
 
-$ find . -iname "*migrate*" -not -path "*/node_modules/*" -not -path "*/.git/*"
-(no output — no migration-runner binary; only apps/api/migrations/*.sql exist)
+- accepts a reviewed, non-secret **JSON manifest file** (`BOOTSTRAP_MANIFEST_PATH`) listing `users: [{firebaseUid, name, role}]` and `relationships: [{coachFirebaseUid, athleteFirebaseUid}]`, decoded with `DisallowUnknownFields` so an unexpected field (e.g. a password) is rejected at load time rather than silently ignored;
+- treats `firebaseUid`, `name`, and `role` in that manifest as **trusted input** — a human already reviewed the file before it touched the database; nothing is verified against a live Firebase token, because bootstrap has no HTTP surface and never calls into `authn` at all;
+- **upserts `users`**: `INSERT ... ON CONFLICT (firebase_uid) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role` — re-running the same manifest re-affirms names/roles rather than erroring;
+- **creates `coach_athletes` relationships**: `INSERT ... ON CONFLICT DO NOTHING`, resolving both sides by `firebase_uid` lookup;
+- runs the whole manifest inside one `pool.Begin` / `defer tx.Rollback(ctx)` / `tx.Commit(ctx)` transaction — atomic and idempotent for its actual use case (an operator re-running the same reviewed file);
+- is **not HTTP-reachable** — it is never wired into `apps/api/main.go`'s mux on either branch; it runs only as a standalone CLI/Cloud Run Job, by hand, from a manifest a human wrote.
 
-$ find . -iname "Dockerfile*" -not -path "*/node_modules/*" -not -path "*/.git/*"
-(no output — no Dockerfile exists in the repo at all, let alone one producing /api /migrate /bootstrap)
+This means bootstrap is a good fit for **provisioning the initial pilot coaches (and any other pre-approved seed accounts)** — exactly the deployment doc's original intent (§10, "Production bootstrap data") — and nothing here changes that. It is not, and must not become, the athlete's onboarding path: an athlete has no reviewed manifest, no operator, and no file to be listed in. **The invite-code feature described in the rest of this document remains required, unchanged in design**, as the normal, self-service product lifecycle: coach creates an invite → athlete signs up with Firebase → athlete redeems the invite over HTTP with no operator involved.
 
-$ grep -rn "BOOTSTRAP_MANIFEST_PATH" . --exclude-dir=.git --exclude-dir=node_modules
-(no output)
+One divergence is deliberate and must be preserved, not "fixed" toward bootstrap's pattern: bootstrap's user upsert does `ON CONFLICT (firebase_uid) DO UPDATE SET name = ..., role = ...`, which is correct for trusted, human-reviewed input but would be unsafe if reused as-is behind an HTTP-facing endpoint (it would let a repeat caller overwrite their own `role`, or overwrite another account's `name`). §6 below's redeem design already uses `ON CONFLICT (firebase_uid) DO NOTHING RETURNING id` instead — create-once, never overwrite — independently arrived at for exactly this reason. See §5.3/§6 for the full design; no change to it is needed as a result of this reconciliation. The `INSERT INTO coach_athletes ... ON CONFLICT DO NOTHING` idiom, by contrast, *is* identical between bootstrap and the redeem design — both are safe because relationship rows have no mutable fields to overwrite.
 
-$ grep -rln "package bootstrap\|internal/bootstrap" . --exclude-dir=.git --exclude-dir=node_modules
-(no output)
+### Source-of-truth caveat
 
-$ grep -rni "upsert" . --exclude-dir=.git --exclude-dir=node_modules
-(no output — the word "upsert" does not appear anywhere in the repo)
+`a2ab984` is the newest deployment state currently verifiable from remote Git refs (`git fetch --all --tags --prune` against `origin`, all branches inspected). It may still be behind unpushed commits that exist only on the author's local machine — that cannot be checked from here. Separately, and just as important: nothing in any accessible ref proves the deployment *ran*. The deployment doc's own phase table marks D1a/D1b **Done** (container image builds locally, `/migrate`/`/bootstrap` verified via `--entrypoint` override against a local database) but marks D2 onward — cloud foundation, Secret Manager, the first Artifact Registry image publish, and, critically, **D3c (actually running the migration and bootstrap jobs against real Neon/Cloud Run)** — as future work with no recorded image digest, no "deployment change record," and no evidence of execution in git. That is not a claim that D3a–D6 did not happen; it is a statement of what remote Git does and does not prove. If those phases were completed by hand outside version control, that fact simply isn't visible from any ref this inspection can reach.
 
-$ grep -rn "ON CONFLICT" . --exclude-dir=.git --exclude-dir=node_modules
-./apps/api/internal/exercise/exercise.go:193   -- private Exercise create-or-find, unrelated to users/coach_athletes
-./apps/api/internal/workoutsession/workoutsession.go:104  -- session-start idempotency, unrelated to users/coach_athletes
-```
-
-The **only** places `INSERT INTO users` or `INSERT INTO coach_athletes` appear anywhere in the repository are five `*_integration_test.go` files, which build fixture rows directly with `pool.Exec` for their own test setup — not application or operational code:
-
-```
-apps/api/internal/exercise/exercise_integration_test.go:230
-apps/api/internal/workoutsession/workoutsession_integration_test.go:329,337
-apps/api/internal/scheduledworkout/scheduledworkout_integration_test.go:465
-apps/api/internal/workout/workout_integration_test.go:240
-```
-
-The full non-`.git`/non-`node_modules` file tree was walked and contains 40 tracked files. No `Dockerfile`, no `cmd/`, no `internal/bootstrap`, no manifest-loading code, no `docker-compose` service beyond Postgres. `docker-compose.yml` runs only `postgres:16`.
-
-**What is real:** `docs/deployment-architecture-v0.1.md` §9–§11 *describes* a bootstrap job as a planned, not-yet-built deployment phase (D3), with acceptance criteria (idempotent, manifest-driven, auditable). That is a design document for future infrastructure work, not the current backend image. Anyone who told you `/bootstrap` ships in the image, or that a manifest-driven upsert command is implemented, was describing that planning doc as if it were shipped code, or was describing a different snapshot of the repo than what exists at `c41ec18` today.
-
-**Consequence for this feature:** nothing here can build on or coexist with an existing bootstrap command, because there isn't one. Coaches remain provisioned by hand (direct SQL against Neon) for the pilot, unchanged by this feature. This feature's job is to give **athletes** a real provisioning path that isn't manual SQL; it deliberately does not touch coach provisioning.
+**Consequence for this feature:** coach provisioning today is manual SQL, or — on the not-yet-merged deployment branch — the `bootstrap` CLI job; either way it is operator-driven, not self-service, and this feature does not change that. This feature's job remains giving **athletes** a real, self-service provisioning path that requires no operator; it deliberately does not touch or replace coach provisioning.
 
 ---
 
@@ -106,7 +92,7 @@ The lock list above doesn't cover every implementation-level fork. Each of these
 
 Re-confirmed directly against the working tree, not assumed from the prior report:
 
-- **Coach & athlete provisioning today**: manual SQL against Neon. No code path creates a `users` row. (§1 above.)
+- **Coach & athlete provisioning today**: manual SQL against Neon on `origin/main`, or the `bootstrap` CLI job on the not-yet-merged deployment branch (§1 above). Neither is HTTP-reachable — no code path on any branch creates a `users` row from a live request. That gap is exactly what this feature's redeem endpoint closes.
 - **`authn.Middleware` behavior on a verified-but-unknown Firebase UID**: `401 UNAUTHENTICATED`, documented in `apps/api/internal/authn/authn.go`'s package comment — "no signup flow exists yet." This is the exact gap decision #7/#8 close.
 - **Web auth providers**: `apps/web/lib/auth-context.tsx` implements only `signInWithEmailAndPassword` / `signOut` / `onIdTokenChanged`. `createUserWithEmailAndPassword` does not exist in the repo yet — it needs to be added as part of this feature (decision #5).
 - **`/coach/clients`** is a real, working page (`apps/web/app/coach/clients/page.tsx`, gates on COACH role, renders `GET /api/v1/athletes`) plus an athlete-detail subpage — not a placeholder. It is reached via a button in the `/coach/calendar` header row; there is no separate nav component to update.
@@ -402,7 +388,7 @@ One route, one client component, stepped local state — **no navigation away fo
 Each should be a named test.
 
 1. **Identity comes only from the verified Firebase ID token.** `firebaseUid`, `userId`, `coachId`, and `role` are never read from a request body or query string on any new endpoint. The redeem body carries exactly one field (`name`), used only for row creation.
-2. **Redeem is the only path that creates a `users` row**, and it hard-codes `role = 'ATHLETE'`. Role is never a client input.
+2. **Redeem is the only normal, HTTP-reachable path that creates or reconciles an athlete application user**, and it hard-codes `role = 'ATHLETE'`. Role is never a client input. (The operator-run `bootstrap` CLI job, §1, is a separate, non-HTTP, manifest-driven provisioning mechanism for initial pilot seeding — it is not reachable by any endpoint and is out of scope for this invariant's threat model.)
 3. **Role is never mutated by redemption.** A COACH's row can never be turned into an ATHLETE by this endpoint, and vice versa.
 4. **An invite belongs to exactly one coach**, set from the authenticated caller at creation; there is no update path that reassigns it.
 5. **The invite code is not an authentication credential** (#4). It never establishes a session and is never compared against a password.
@@ -425,10 +411,11 @@ Each should be a named test.
 - **Down migration guarded**, matching `0002`'s convention: refuses via `RAISE EXCEPTION` if `coach_invite_codes` holds any rows. Local convenience only, never a production rollback path.
 - **Verify script** (`verify_0003_coach_invite_codes.sql`): read-only, `\set ON_ERROR_STOP on`, asserts the table, all four CHECK constraints, and the index exist.
 - **Local proof required before merge**: apply `0001 → 0002 → 0003` against a clean database, run the verify script, run the guarded down, re-apply.
+- **Migration-loader naming compatibility, checked against real code**: `origin/claude/perf-coach-phase-0-inspection-ao1t2v`'s `internal/migrate.Load()` selects applied migrations with the regex `^(\d{4}_[a-zA-Z0-9_]+)\.up\.sql$`, deliberately excluding sibling `.down.sql` and `verify_*.sql` files from the applied sequence. `0003_coach_invite_codes.up.sql` / `.down.sql` / `verify_0003_coach_invite_codes.sql` (§4) already follow that exact convention, so this migration will be picked up correctly by the real `migrate` runner whenever that branch (or its equivalent) becomes the implementation base — no naming change needed.
 
 Ordered deployment (when this feature ships):
 
-1. Apply `0003` to Neon by hand (no runner exists yet, per §1) — safe ahead of any code since it's purely additive.
+1. Apply `0003`, either by hand against Neon (`origin/main` has no migration runner yet) or via the `migrate` entrypoint if the implementation base includes it (§1) — safe ahead of any other code since it's purely additive.
 2. Deploy the API (adds routes; touches no existing route or response shape).
 3. Deploy the web app.
 4. Smoke test: coach creates a code → athlete redeems from a phone → athlete lands on Today → coach sees the new row in Clients → coach removes the athlete → athlete's Today still shows prior history, coach's list no longer shows them.
@@ -565,7 +552,7 @@ Deferred as a result of locking the decisions above, with the reason and the reo
 | **Server-side athlete search/pagination** | Pilot rosters are small; client-side filtering avoids any contract change. |
 | **Extending/editing an existing code** | Revoke and create a new one — two clicks, zero code. |
 | **Distributed rate limiting** | In-process only, per-instance on Cloud Run — accepted pilot limitation (§5.6). |
-| **Bootstrap tooling** (deployment D1b/D3) | Confirmed still absent (§1). This feature removes the need for it on the athlete side only; coach provisioning stays manual. |
+| **Bootstrap tooling** (deployment D1b/D3) | Implemented (D1a/D1b) on `origin/claude/perf-coach-phase-0-inspection-ao1t2v`, not yet merged to `main`; D2–D6 actual execution against real Cloud Run/Neon remains unevidenced in any accessible ref (§1). Either way it's an operator/manifest tool for pilot seeding, not athlete self-service — this feature's redeem path is required regardless of whether/when that branch merges, and does not depend on or reuse bootstrap's HTTP-inaccessible code. |
 
 ---
 
