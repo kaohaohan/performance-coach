@@ -72,6 +72,37 @@ func (v *firebaseVerifier) VerifyIDToken(ctx context.Context, idToken string) (s
 	return token.UID, nil
 }
 
+// Identity is the verified-but-unreconciled Firebase identity attached by
+// FirebaseOnlyMiddleware. Unlike User, it carries no internal users row —
+// see FirebaseOnlyMiddleware's doc comment for why that relaxation exists
+// and where it is (and is not) used. Identity proves only what the
+// verified token itself asserts (the Firebase UID and its email claim);
+// it must never be treated as authorization on its own, and a
+// caller-supplied firebaseUid/role/coachId in a request body must never
+// be trusted in its place.
+type Identity struct {
+	UID   string
+	Email string
+}
+
+// IdentityVerifier verifies a Firebase ID token and returns its claims as
+// an Identity, without requiring a matching internal user. Satisfied by
+// the same concrete type NewVerifier returns; kept as a separate interface
+// from TokenVerifier so a caller's dependency is exactly "can verify a
+// token," not "can verify a token and also look up a users row."
+type IdentityVerifier interface {
+	VerifyIdentity(ctx context.Context, idToken string) (Identity, error)
+}
+
+func (v *firebaseVerifier) VerifyIdentity(ctx context.Context, idToken string) (Identity, error) {
+	token, err := v.client.VerifyIDToken(ctx, idToken)
+	if err != nil {
+		return Identity{}, err
+	}
+	email, _ := token.Claims["email"].(string)
+	return Identity{UID: token.UID, Email: email}, nil
+}
+
 type contextKey int
 
 const userContextKey contextKey = iota
@@ -81,6 +112,61 @@ const userContextKey contextKey = iota
 func UserFromContext(ctx context.Context) (User, bool) {
 	u, ok := ctx.Value(userContextKey).(User)
 	return u, ok
+}
+
+type identityContextKey int
+
+const firebaseIdentityContextKey identityContextKey = iota
+
+// IdentityFromContext returns the Identity attached by
+// FirebaseOnlyMiddleware. ok is false if no Identity was attached (i.e.
+// called outside a route using that middleware).
+func IdentityFromContext(ctx context.Context) (Identity, bool) {
+	id, ok := ctx.Value(firebaseIdentityContextKey).(Identity)
+	return id, ok
+}
+
+// FirebaseOnlyMiddleware verifies the Firebase ID token on each request
+// and attaches the resulting Identity to the request context. Unlike
+// Middleware, it does NOT look up or require a matching internal users
+// row — a newly-registered athlete redeeming an invite code is, by
+// definition, in exactly that state (see
+// docs/athlete-onboarding-invite-codes-v0.1.md §5.3). Missing, invalid,
+// or expired tokens still result in 401 UNAUTHENTICATED, identically to
+// Middleware.
+//
+// This is a second, narrower middleware, not a relaxation of Middleware:
+// every existing route stays behind the original users-row requirement,
+// completely unchanged by this function's addition. As of this phase,
+// FirebaseOnlyMiddleware is not wired to any route in cmd/api/main.go —
+// the redeem endpoint that will use it is a later phase.
+//
+// Identity's UID/Email come only from the verified token itself. A
+// handler built on this middleware must never substitute a
+// caller-supplied firebaseUid, role, or coachId from the request body in
+// their place, and must never reuse bootstrap's trusted-manifest
+// upsert semantics (apps/api/internal/bootstrap): that package's
+// ON CONFLICT ... DO UPDATE is safe only because its input is a
+// human-reviewed file, not an arbitrary HTTP caller.
+func FirebaseOnlyMiddleware(v IdentityVerifier) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token, ok := bearerToken(r)
+			if !ok {
+				writeUnauthenticated(w)
+				return
+			}
+
+			identity, err := v.VerifyIdentity(r.Context(), token)
+			if err != nil {
+				writeUnauthenticated(w)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), firebaseIdentityContextKey, identity)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
 
 // Middleware verifies the Firebase ID token on each request, resolves it to
