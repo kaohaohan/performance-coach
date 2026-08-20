@@ -1,0 +1,166 @@
+-- Seed: system_exercises_v1
+--
+-- Idempotent SYSTEM exercise catalog for the Coach Exercise Library.
+--
+-- All rows are inserted with owner_coach_id = NULL, i.e. the SYSTEM scope
+-- visible to every Coach (see 0001_init_schema.up.sql: exercises table and
+-- the unique_system_exercise_name index on lower(name) WHERE
+-- owner_coach_id IS NULL). This seed never touches Coach-private rows:
+-- owner_coach_id is always NULL here, so it cannot collide with, convert,
+-- or otherwise modify any owner_coach_id-scoped private exercise, even one
+-- that independently shares a name with a row below (private uniqueness is
+-- scoped per-coach by a separate index).
+--
+-- Safe to run more than once: the ON CONFLICT clause targets the same
+-- partial unique index the schema already enforces, so a name that is
+-- already present in the SYSTEM catalog (case-insensitively) is skipped
+-- rather than duplicated or erroring.
+--
+-- Usage (local):
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/seeds/system_exercises_v1.sql
+--
+-- This is a data seed, not a schema migration, and is intentionally not
+-- wired into apps/api/cmd/migrate — it does not alter DDL and does not
+-- need to run automatically on every deploy.
+
+BEGIN;
+
+INSERT INTO exercises (id, name, owner_coach_id, created_at)
+VALUES
+    (gen_random_uuid(), 'Back Squat', NULL, now()),
+    (gen_random_uuid(), 'Front Squat', NULL, now()),
+    (gen_random_uuid(), 'Box Squat', NULL, now()),
+    (gen_random_uuid(), 'Pause Squat', NULL, now()),
+    (gen_random_uuid(), 'Zercher Squat', NULL, now()),
+    (gen_random_uuid(), 'Barbell Split Squat', NULL, now()),
+    (gen_random_uuid(), 'Barbell Reverse Lunge', NULL, now()),
+    (gen_random_uuid(), 'Conventional Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Sumo Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Romanian Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Stiff-Leg Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Barbell Hip Thrust', NULL, now()),
+    (gen_random_uuid(), 'Barbell Glute Bridge', NULL, now()),
+    (gen_random_uuid(), 'Bench Press', NULL, now()),
+    (gen_random_uuid(), 'Incline Bench Press', NULL, now()),
+    (gen_random_uuid(), 'Close-Grip Bench Press', NULL, now()),
+    (gen_random_uuid(), 'Floor Press', NULL, now()),
+    (gen_random_uuid(), 'Overhead Press', NULL, now()),
+    (gen_random_uuid(), 'Push Press', NULL, now()),
+    (gen_random_uuid(), 'Barbell Row', NULL, now()),
+    (gen_random_uuid(), 'Pendlay Row', NULL, now()),
+    (gen_random_uuid(), 'Good Morning', NULL, now()),
+    (gen_random_uuid(), 'Hang High Pull', NULL, now()),
+    (gen_random_uuid(), 'Clean Pull', NULL, now()),
+    (gen_random_uuid(), 'Snatch-Grip Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Bench Press', NULL, now()),
+    (gen_random_uuid(), 'Incline Dumbbell Bench Press', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Floor Press', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Fly', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Shoulder Press', NULL, now()),
+    (gen_random_uuid(), 'Arnold Press', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Lateral Raise', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Front Raise', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Rear Delt Raise', NULL, now()),
+    (gen_random_uuid(), 'One-Arm Dumbbell Row', NULL, now()),
+    (gen_random_uuid(), 'Chest-Supported Dumbbell Row', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Pullover', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Goblet Squat', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Front Squat', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Split Squat', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Bulgarian Split Squat', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Reverse Lunge', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Walking Lunge', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Romanian Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Single-Leg Dumbbell Romanian Deadlift', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Step-Up', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Hip Thrust', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Biceps Curl', NULL, now()),
+    (gen_random_uuid(), 'Hammer Curl', NULL, now()),
+    (gen_random_uuid(), 'Dumbbell Triceps Extension', NULL, now()),
+    (gen_random_uuid(), 'Cable Chest Press', NULL, now()),
+    (gen_random_uuid(), 'Cable Fly', NULL, now()),
+    (gen_random_uuid(), 'Cable Incline Fly', NULL, now()),
+    (gen_random_uuid(), 'Cable Row', NULL, now()),
+    (gen_random_uuid(), 'Seated Cable Row', NULL, now()),
+    (gen_random_uuid(), 'One-Arm Cable Row', NULL, now()),
+    (gen_random_uuid(), 'Cable Lat Pulldown', NULL, now()),
+    (gen_random_uuid(), 'Straight-Arm Pulldown', NULL, now()),
+    (gen_random_uuid(), 'Cable Face Pull', NULL, now()),
+    (gen_random_uuid(), 'Cable Lateral Raise', NULL, now()),
+    (gen_random_uuid(), 'Cable Front Raise', NULL, now()),
+    (gen_random_uuid(), 'Cable Rear Delt Fly', NULL, now()),
+    (gen_random_uuid(), 'Cable Biceps Curl', NULL, now()),
+    (gen_random_uuid(), 'Cable Hammer Curl', NULL, now()),
+    (gen_random_uuid(), 'Cable Triceps Pushdown', NULL, now()),
+    (gen_random_uuid(), 'Cable Overhead Triceps Extension', NULL, now()),
+    (gen_random_uuid(), 'Cable Pull-Through', NULL, now()),
+    (gen_random_uuid(), 'Cable Wood Chop', NULL, now()),
+    (gen_random_uuid(), 'Cable Pallof Press', NULL, now()),
+    (gen_random_uuid(), 'Cable Hip Abduction', NULL, now()),
+    (gen_random_uuid(), 'Cable Hip Adduction', NULL, now()),
+    (gen_random_uuid(), 'Push-Up', NULL, now()),
+    (gen_random_uuid(), 'Incline Push-Up', NULL, now()),
+    (gen_random_uuid(), 'Decline Push-Up', NULL, now()),
+    (gen_random_uuid(), 'Pull-Up', NULL, now()),
+    (gen_random_uuid(), 'Chin-Up', NULL, now()),
+    (gen_random_uuid(), 'Neutral-Grip Pull-Up', NULL, now()),
+    (gen_random_uuid(), 'Inverted Row', NULL, now()),
+    (gen_random_uuid(), 'Bodyweight Squat', NULL, now()),
+    (gen_random_uuid(), 'Split Squat', NULL, now()),
+    (gen_random_uuid(), 'Bulgarian Split Squat', NULL, now()),
+    (gen_random_uuid(), 'Reverse Lunge', NULL, now()),
+    (gen_random_uuid(), 'Walking Lunge', NULL, now()),
+    (gen_random_uuid(), 'Step-Up', NULL, now()),
+    (gen_random_uuid(), 'Single-Leg Squat', NULL, now()),
+    (gen_random_uuid(), 'Pistol Squat', NULL, now()),
+    (gen_random_uuid(), 'Glute Bridge', NULL, now()),
+    (gen_random_uuid(), 'Single-Leg Glute Bridge', NULL, now()),
+    (gen_random_uuid(), 'Nordic Hamstring Curl', NULL, now()),
+    (gen_random_uuid(), 'Calf Raise', NULL, now()),
+    (gen_random_uuid(), 'Single-Leg Calf Raise', NULL, now()),
+    (gen_random_uuid(), 'Plank', NULL, now()),
+    (gen_random_uuid(), 'Side Plank', NULL, now()),
+    (gen_random_uuid(), 'Dead Bug', NULL, now()),
+    (gen_random_uuid(), 'Bird Dog', NULL, now()),
+    (gen_random_uuid(), 'Leg Press', NULL, now()),
+    (gen_random_uuid(), 'Hack Squat', NULL, now()),
+    (gen_random_uuid(), 'Pendulum Squat', NULL, now()),
+    (gen_random_uuid(), 'Belt Squat', NULL, now()),
+    (gen_random_uuid(), 'Leg Extension', NULL, now()),
+    (gen_random_uuid(), 'Seated Leg Curl', NULL, now()),
+    (gen_random_uuid(), 'Lying Leg Curl', NULL, now()),
+    (gen_random_uuid(), 'Standing Leg Curl', NULL, now()),
+    (gen_random_uuid(), 'Hip Abduction Machine', NULL, now()),
+    (gen_random_uuid(), 'Hip Adduction Machine', NULL, now()),
+    (gen_random_uuid(), 'Glute Drive', NULL, now()),
+    (gen_random_uuid(), 'Chest Press Machine', NULL, now()),
+    (gen_random_uuid(), 'Incline Chest Press Machine', NULL, now()),
+    (gen_random_uuid(), 'Shoulder Press Machine', NULL, now()),
+    (gen_random_uuid(), 'Lat Pulldown Machine', NULL, now()),
+    (gen_random_uuid(), 'Seated Row Machine', NULL, now()),
+    (gen_random_uuid(), 'High Row Machine', NULL, now()),
+    (gen_random_uuid(), 'Low Row Machine', NULL, now()),
+    (gen_random_uuid(), 'Pec Deck', NULL, now()),
+    (gen_random_uuid(), 'Reverse Pec Deck', NULL, now()),
+    (gen_random_uuid(), 'Assisted Pull-Up', NULL, now()),
+    (gen_random_uuid(), 'Biceps Curl Machine', NULL, now()),
+    (gen_random_uuid(), 'Triceps Extension Machine', NULL, now()),
+    (gen_random_uuid(), 'Seated Calf Raise', NULL, now()),
+    (gen_random_uuid(), 'Standing Calf Raise', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Bench Press', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Incline Press', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Decline Press', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Shoulder Press', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Wide Chest', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Row', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral High Row', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Low Row', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Iso-Lateral Front Lat Pulldown', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Ground Base Jammer', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Ground Base Squat', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Ground Base High Pull', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Linear Leg Press', NULL, now()),
+    (gen_random_uuid(), 'Hammer Strength Hack Squat', NULL, now())
+ON CONFLICT (lower(name)) WHERE owner_coach_id IS NULL DO NOTHING;
+
+COMMIT;
