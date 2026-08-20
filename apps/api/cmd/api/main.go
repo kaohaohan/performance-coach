@@ -21,6 +21,7 @@ import (
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/athlete"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/coachsignup"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
@@ -109,6 +110,7 @@ func run(logger *slog.Logger) error {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
+	mux.Handle("POST /api/v1/coach-signup", firebaseOnlyMiddleware(handleCoachSignup(pool)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
 	mux.Handle("DELETE /api/v1/athletes/{athleteId}", authMiddleware(handleRemoveAthlete(pool)))
 	mux.Handle("POST /api/v1/invite-codes", authMiddleware(handleCreateInviteCode(pool)))
@@ -226,6 +228,56 @@ func handleMe(w http.ResponseWriter, r *http.Request) {
 		"name": user.Name,
 		"role": user.Role,
 	})
+}
+
+// coachSignupRequest is the wire shape for a POST /api/v1/coach-signup
+// request body. name is the only field this endpoint accepts from the
+// client, used only when a brand-new users row is created — never reused
+// to overwrite an existing row's name. firebaseUid, role, coachId, and
+// athleteId are deliberately absent: identity comes solely from the
+// verified token attached by firebaseOnlyMiddleware, and role is always
+// hard-coded server-side to COACH.
+type coachSignupRequest struct {
+	Name string `json:"name"`
+}
+
+// handleCoachSignup is the self-service Coach registration entry point.
+// It sits behind firebaseOnlyMiddleware, not authMiddleware: the caller
+// may have no users row yet, which is the normal state for a brand-new
+// coach signing up, not an edge case — the same reasoning
+// handleRedeemInviteCode already documents for athletes.
+func handleCoachSignup(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := authn.IdentityFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req coachSignupRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		created, err := coachsignup.Signup(r.Context(), pool, identity, req.Name)
+		if err != nil {
+			var validationErr *coachsignup.ValidationError
+			switch {
+			case errors.Is(err, coachsignup.ErrAthleteConflict):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "firebase account is already registered as an athlete")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(created)
+	}
 }
 
 // handleAthletes returns the athletes connected to the caller, who must be
