@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 )
 
@@ -87,6 +89,20 @@ var ErrWorkoutNotFound = errors.New("scheduledworkout: workout not found or not 
 // whole batch is rejected when this occurs — no partial scheduling.
 var ErrAthletesNotConnected = errors.New("scheduledworkout: one or more athletes are not connected to caller")
 
+// ErrNotFound indicates the requested scheduled workout id does not parse,
+// does not exist, or does not belong to caller. Handlers map this to 404
+// NOT_FOUND — a resource-scoping check, not a role check, so it does not
+// reveal whether a ScheduledWorkout with this id exists for a different
+// coach or a different athlete.
+var ErrNotFound = errors.New("scheduledworkout: scheduled workout not found or not owned by caller")
+
+// ErrSessionStarted indicates Update was called for a ScheduledWorkout that
+// already has a WorkoutSession (ACTIVE or COMPLETED) — the editability
+// invariant (docs/mvp-specification.md, "Editing an Assigned Workout") only
+// allows editing a ScheduledWorkout before training starts. Handlers map
+// this to 409 CONFLICT.
+var ErrSessionStarted = errors.New("scheduledworkout: a session has already started for this scheduled workout and it can no longer be edited")
+
 // ErrInvalidStoredPrescription indicates that a persisted Workout template no
 // longer satisfies the prescription domain rules. It is deliberately distinct
 // from ValidationError: the client did not submit this data, so handlers must
@@ -140,11 +156,14 @@ type CreatedScheduledExercise struct {
 	Position                   int         `json:"position"`
 }
 
-// Created is one item of the POST /api/v1/scheduled-workouts response: a
-// newly created ScheduledWorkout with its frozen prescription snapshot
-// expanded, sufficient for frontend confirmation without a follow-up call.
-// Session is always null — a ScheduledWorkout has no session until training
-// starts.
+// Created is one item of the POST /api/v1/scheduled-workouts response, and
+// is also reused by PUT and GET /api/v1/scheduled-workouts/{id}: a
+// ScheduledWorkout with its frozen prescription snapshot expanded,
+// sufficient for frontend confirmation or prefill without a follow-up call.
+// From POST and PUT, Session is always nil — POST because a ScheduledWorkout
+// has no session until training starts, PUT because editing is only ever
+// allowed before training starts. GetForCoach is the one caller that can
+// return a non-nil Session, since it reads whatever currently exists.
 type Created struct {
 	ID            string                     `json:"id"`
 	ScheduledDate string                     `json:"scheduledDate"`
@@ -513,6 +532,367 @@ func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string
 	}
 
 	return prescriptions, nil
+}
+
+// UpdateExerciseInput is one exercise entry in an UpdateInput, mirroring
+// workout.CreateExerciseInput's shape (exercise identity by name, resolved
+// the same find-or-create way, plus a full authoring plan).
+type UpdateExerciseInput struct {
+	Name string
+	Plan prescription.Plan
+}
+
+// UpdateInput is the decoded, wire-format-independent request for Update.
+// There is no editable name here: a ScheduledWorkout has no name of its
+// own — the displayed name always comes from a live join to the reusable
+// Workout template (see Workout / ScheduledWorkout in ListForCoach), which
+// Update deliberately never touches.
+type UpdateInput struct {
+	Exercises []UpdateExerciseInput
+}
+
+// Update replaces scheduledWorkoutID's frozen prescription snapshot with
+// input's exercises, in one transaction (docs/mvp-specification.md,
+// "Editing an Assigned Workout"). It intentionally reuses Created as its
+// return shape: a full expansion of the new snapshot, exactly like a fresh
+// POST /scheduled-workouts response, so the frontend can confirm the save
+// without a follow-up GET.
+//
+// This is the one supported way to fix an accidentally-misprogrammed
+// assignment. It must never be reimplemented as "edit the Workout template
+// and re-snapshot every athlete" — that would silently rewrite every other
+// athlete (and every other date) the template was ever assigned to. Update
+// touches exactly one ScheduledWorkout's own snapshot rows and nothing else:
+// not workouts, not workout_exercises, not any other scheduled_workouts row.
+//
+// Authorization and state, checked in order:
+//  1. caller must be a COACH -> else ErrForbidden
+//  2. scheduledWorkoutID must be a well-formed UUID -> else *ValidationError
+//  3. input.Exercises must be non-empty with well-formed per-exercise names
+//     and valid prescription plans -> else *ValidationError. This runs
+//     before any DB access, same rationale as Create's early shape checks.
+//  4. the ScheduledWorkout must exist and belong to caller -> else
+//     ErrNotFound (not 403 — see ErrNotFound's doc comment)
+//  5. no WorkoutSession may exist yet for it (NOT_STARTED only) -> else
+//     ErrSessionStarted
+//
+// Steps 4-5 and every mutation happen inside a single transaction, with the
+// ScheduledWorkout row locked FOR UPDATE for the duration: a concurrent
+// Start (POST .../session) that has already committed is caught by step 5;
+// one racing in mid-edit blocks on that lock (workout_sessions.
+// scheduled_workout_id's foreign key needs a FOR KEY SHARE lock on the same
+// row to insert) until this transaction commits or rolls back, so Start
+// never observes a half-replaced snapshot and Update never commits over a
+// session that just started. If validation or any statement fails, nothing
+// is written — the original snapshot is left exactly as it was.
+func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduledWorkoutID string, input UpdateInput) (Created, error) {
+	if caller.Role != "COACH" {
+		return Created{}, ErrForbidden
+	}
+	if _, err := uuid.Parse(scheduledWorkoutID); err != nil {
+		return Created{}, &ValidationError{Message: "id must be a valid UUID"}
+	}
+
+	resolvedPlans, err := validateAndResolveUpdateExercises(input.Exercises)
+	if err != nil {
+		return Created{}, err
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return Created{}, fmt.Errorf("scheduledworkout: begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit succeeds
+
+	header, err := lookupOwnedScheduledWorkoutForUpdate(ctx, tx, caller.ID, scheduledWorkoutID)
+	if err != nil {
+		return Created{}, err
+	}
+
+	hasSession, err := scheduledWorkoutHasSession(ctx, tx, scheduledWorkoutID)
+	if err != nil {
+		return Created{}, err
+	}
+	if hasSession {
+		return Created{}, ErrSessionStarted
+	}
+
+	// Replace the frozen snapshot: planned sets first (they reference
+	// scheduled_workout_exercises), then the exercises themselves. Safe
+	// unconditionally — the hasSession check above guarantees no set_logs
+	// row can reference either table for this scheduled workout yet.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM scheduled_workout_planned_sets
+		 WHERE scheduled_workout_exercise_id IN (
+		     SELECT id FROM scheduled_workout_exercises WHERE scheduled_workout_id = $1
+		 )`,
+		scheduledWorkoutID,
+	); err != nil {
+		return Created{}, fmt.Errorf("scheduledworkout: delete planned sets: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM scheduled_workout_exercises WHERE scheduled_workout_id = $1`,
+		scheduledWorkoutID,
+	); err != nil {
+		return Created{}, fmt.Errorf("scheduledworkout: delete scheduled workout exercises: %w", err)
+	}
+
+	exercises := make([]CreatedScheduledExercise, 0, len(input.Exercises))
+	for i, ex := range input.Exercises {
+		exerciseID, exerciseName, err := exercise.FindOrCreateVisible(ctx, tx, caller.ID, ex.Name)
+		if err != nil {
+			return Created{}, fmt.Errorf("scheduledworkout: resolve exercise %q: %w", ex.Name, err)
+		}
+
+		position := i + 1
+		scheduledWorkoutExerciseID := uuid.NewString()
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO scheduled_workout_exercises
+				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			scheduledWorkoutExerciseID, scheduledWorkoutID, exerciseID, exerciseName, ex.Plan.Defaults.Unit,
+			ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote, ex.Plan.Defaults.RPE, position,
+		); err != nil {
+			return Created{}, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
+		}
+
+		plannedSets := make([]PlannedSet, 0, len(resolvedPlans[i]))
+		for _, set := range resolvedPlans[i] {
+			plannedSetID := uuid.NewString()
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO scheduled_workout_planned_sets
+					(id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rpe)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				plannedSetID, scheduledWorkoutExerciseID, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RPE,
+			); err != nil {
+				return Created{}, fmt.Errorf("scheduledworkout: insert scheduled_workout_planned_set: %w", err)
+			}
+
+			var unit *string
+			if set.Load != nil {
+				unit = ex.Plan.Defaults.Unit
+			}
+			plannedSets = append(plannedSets, PlannedSet{
+				ScheduledWorkoutPlannedSetID: plannedSetID,
+				Position:                     set.Position,
+				Reps:                         set.Reps,
+				PrescriptionNote:             set.PrescriptionNote,
+				Load:                         set.Load,
+				Unit:                         unit,
+				RPE:                          set.RPE,
+			})
+		}
+
+		exercises = append(exercises, CreatedScheduledExercise{
+			ScheduledWorkoutExerciseID: scheduledWorkoutExerciseID,
+			ExerciseID:                 exerciseID,
+			Name:                       exerciseName,
+			Plan:                       CreatedPlan{Sets: plannedSets},
+			Position:                   position,
+		})
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Created{}, fmt.Errorf("scheduledworkout: commit: %w", err)
+	}
+
+	return Created{
+		ID:            scheduledWorkoutID,
+		ScheduledDate: header.scheduledDate,
+		Athlete:       Athlete{ID: header.athleteID, Name: header.athleteName},
+		Workout:       Workout{ID: header.workoutID, Name: header.workoutName},
+		Session:       nil,
+		Exercises:     exercises,
+	}, nil
+}
+
+// validateAndResolveUpdateExercises checks input.Exercises shape (no DB
+// access) and resolves each plan via prescription.Resolve, returning the
+// resolved sets in request order for Update's insert loop to reuse without
+// re-validating. Mirrors workout.Create's per-exercise validate-then-resolve
+// pairing.
+func validateAndResolveUpdateExercises(exercises []UpdateExerciseInput) ([][]prescription.ResolvedPlannedSet, error) {
+	if len(exercises) == 0 {
+		return nil, &ValidationError{Message: "exercises must contain at least one entry"}
+	}
+	resolved := make([][]prescription.ResolvedPlannedSet, len(exercises))
+	for i, ex := range exercises {
+		if strings.TrimSpace(ex.Name) == "" {
+			return nil, &ValidationError{Message: fmt.Sprintf("exercises[%d].name is required", i)}
+		}
+		sets, err := prescription.Resolve(ex.Plan)
+		if err != nil {
+			var validationErr *prescription.ValidationError
+			if errors.As(err, &validationErr) {
+				return nil, &ValidationError{Message: fmt.Sprintf("exercises[%d].plan: %s", i, validationErr.Message)}
+			}
+			return nil, fmt.Errorf("scheduledworkout: resolve plan: %w", err)
+		}
+		resolved[i] = sets
+	}
+	return resolved, nil
+}
+
+// updateHeader is the pre-mutation identity of a ScheduledWorkout being
+// edited: everything Update's response needs that doesn't change.
+type updateHeader struct {
+	athleteID, athleteName string
+	workoutID, workoutName string
+	scheduledDate          string
+}
+
+// lookupOwnedScheduledWorkoutForUpdate locks scheduledWorkoutID's row FOR
+// UPDATE and returns its identity if it exists and belongs to coachID;
+// otherwise ErrNotFound. The lock is held for the rest of the caller's
+// transaction — see Update's doc comment for why that matters.
+func lookupOwnedScheduledWorkoutForUpdate(ctx context.Context, tx pgx.Tx, coachID, scheduledWorkoutID string) (updateHeader, error) {
+	const query = `
+		SELECT sw.athlete_id, u.name, sw.workout_id, w.name, sw.scheduled_date
+		FROM scheduled_workouts sw
+		JOIN users u ON u.id = sw.athlete_id
+		JOIN workouts w ON w.id = sw.workout_id
+		WHERE sw.id = $1 AND sw.coach_id = $2
+		FOR UPDATE OF sw`
+
+	var h updateHeader
+	var scheduledDate time.Time
+	err := tx.QueryRow(ctx, query, scheduledWorkoutID, coachID).Scan(
+		&h.athleteID, &h.athleteName, &h.workoutID, &h.workoutName, &scheduledDate,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return updateHeader{}, ErrNotFound
+		}
+		return updateHeader{}, fmt.Errorf("scheduledworkout: lookup scheduled workout for update: %w", err)
+	}
+	h.scheduledDate = scheduledDate.Format(dateLayout)
+	return h, nil
+}
+
+// scheduledWorkoutHasSession reports whether a workout_sessions row already
+// exists for scheduledWorkoutID, regardless of status — ACTIVE and
+// COMPLETED are both "already started" for editability purposes.
+func scheduledWorkoutHasSession(ctx context.Context, tx pgx.Tx, scheduledWorkoutID string) (bool, error) {
+	const query = `SELECT 1 FROM workout_sessions WHERE scheduled_workout_id = $1`
+	var exists int
+	err := tx.QueryRow(ctx, query, scheduledWorkoutID).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("scheduledworkout: check session: %w", err)
+	}
+	return true, nil
+}
+
+// GetForCoach returns one ScheduledWorkout belonging to caller, with its
+// frozen prescription snapshot and current session (if any) expanded — the
+// read side of Update: the Coach Calendar's Edit action uses this to prefill
+// the Build Workout form from the exact snapshot it is about to replace,
+// since GET /scheduled-workouts (the list) deliberately omits exercises
+// (see ListForCoach's doc comment).
+//
+// Authorization: only a COACH may call this; the ScheduledWorkout must
+// belong to caller -> else ErrNotFound (same resource-scoping convention as
+// Update, not a role check).
+func GetForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduledWorkoutID string) (Created, error) {
+	if caller.Role != "COACH" {
+		return Created{}, ErrForbidden
+	}
+	if _, err := uuid.Parse(scheduledWorkoutID); err != nil {
+		return Created{}, &ValidationError{Message: "id must be a valid UUID"}
+	}
+
+	const headerQuery = `
+		SELECT sw.scheduled_date, u.id, u.name, w.id, w.name, ws.id, ws.status
+		FROM scheduled_workouts sw
+		JOIN users u ON u.id = sw.athlete_id
+		JOIN workouts w ON w.id = sw.workout_id
+		LEFT JOIN workout_sessions ws ON ws.scheduled_workout_id = sw.id
+		WHERE sw.id = $1 AND sw.coach_id = $2`
+
+	var (
+		result                   Created
+		scheduledDate            time.Time
+		sessionID, sessionStatus *string
+	)
+	err := pool.QueryRow(ctx, headerQuery, scheduledWorkoutID, caller.ID).Scan(
+		&scheduledDate, &result.Athlete.ID, &result.Athlete.Name, &result.Workout.ID, &result.Workout.Name, &sessionID, &sessionStatus,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Created{}, ErrNotFound
+		}
+		return Created{}, fmt.Errorf("scheduledworkout: lookup scheduled workout: %w", err)
+	}
+	result.ID = scheduledWorkoutID
+	result.ScheduledDate = scheduledDate.Format(dateLayout)
+	if sessionID != nil {
+		result.Session = &Session{ID: *sessionID, Status: *sessionStatus}
+	}
+
+	const exercisesQuery = `
+		SELECT id, exercise_id, exercise_name, position
+		FROM scheduled_workout_exercises
+		WHERE scheduled_workout_id = $1
+		ORDER BY position`
+	exRows, err := pool.Query(ctx, exercisesQuery, scheduledWorkoutID)
+	if err != nil {
+		return Created{}, fmt.Errorf("scheduledworkout: list snapshot exercises: %w", err)
+	}
+	defer exRows.Close()
+
+	exerciseOrder := make([]string, 0)
+	indexByID := make(map[string]int)
+	exercises := make([]CreatedScheduledExercise, 0)
+	for exRows.Next() {
+		var ex CreatedScheduledExercise
+		var id string
+		if err := exRows.Scan(&id, &ex.ExerciseID, &ex.Name, &ex.Position); err != nil {
+			return Created{}, fmt.Errorf("scheduledworkout: scan snapshot exercise: %w", err)
+		}
+		ex.ScheduledWorkoutExerciseID = id
+		ex.Plan = CreatedPlan{Sets: make([]PlannedSet, 0)}
+		indexByID[id] = len(exercises)
+		exercises = append(exercises, ex)
+		exerciseOrder = append(exerciseOrder, id)
+	}
+	if err := exRows.Err(); err != nil {
+		return Created{}, fmt.Errorf("scheduledworkout: iterate snapshot exercises: %w", err)
+	}
+
+	if len(exerciseOrder) > 0 {
+		const plannedSetsQuery = `
+			SELECT p.scheduled_workout_exercise_id,
+			       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
+			       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
+			       p.target_rpe
+			FROM scheduled_workout_planned_sets p
+			JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
+			WHERE p.scheduled_workout_exercise_id = ANY($1)
+			ORDER BY p.scheduled_workout_exercise_id, p.planned_position`
+		setRows, err := pool.Query(ctx, plannedSetsQuery, exerciseOrder)
+		if err != nil {
+			return Created{}, fmt.Errorf("scheduledworkout: list snapshot planned sets: %w", err)
+		}
+		defer setRows.Close()
+
+		for setRows.Next() {
+			var exerciseID string
+			var set PlannedSet
+			if err := setRows.Scan(&exerciseID, &set.ScheduledWorkoutPlannedSetID, &set.Position, &set.Reps, &set.PrescriptionNote, &set.Load, &set.Unit, &set.RPE); err != nil {
+				return Created{}, fmt.Errorf("scheduledworkout: scan snapshot planned set: %w", err)
+			}
+			idx := indexByID[exerciseID]
+			exercises[idx].Plan.Sets = append(exercises[idx].Plan.Sets, set)
+		}
+		if err := setRows.Err(); err != nil {
+			return Created{}, fmt.Errorf("scheduledworkout: iterate snapshot planned sets: %w", err)
+		}
+	}
+
+	result.Exercises = exercises
+	return result, nil
 }
 
 // ListForCoach returns the caller's scheduled workouts with a

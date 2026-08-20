@@ -124,6 +124,8 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
+	mux.Handle("GET /api/v1/scheduled-workouts/{id}", authMiddleware(handleGetScheduledWorkout(pool)))
+	mux.Handle("PUT /api/v1/scheduled-workouts/{id}", authMiddleware(handleUpdateScheduledWorkout(pool)))
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
@@ -776,6 +778,112 @@ func handleCreateScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(created)
+	}
+}
+
+// handleGetScheduledWorkout returns one ScheduledWorkout belonging to the
+// caller, with its frozen prescription snapshot expanded. Coach only — used
+// by the Coach Calendar's Edit action to prefill the Build Workout form,
+// since GET /scheduled-workouts (the list) deliberately omits exercises.
+func handleGetScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		scheduledWorkoutID := r.PathValue("id")
+
+		got, err := scheduledworkout.GetForCoach(r.Context(), pool, user, scheduledWorkoutID)
+		if err != nil {
+			var validationErr *scheduledworkout.ValidationError
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, scheduledworkout.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "scheduled workout not found")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(got)
+	}
+}
+
+// updateScheduledWorkoutRequest is the wire shape for a PUT
+// /api/v1/scheduled-workouts/{id} request body. It intentionally reuses the
+// same per-exercise shape POST /workouts accepts (createWorkoutExerciseRequest)
+// rather than a separate type — the frontend prefills and edits this from
+// the same Build Workout form either way.
+type updateScheduledWorkoutRequest struct {
+	Exercises []createWorkoutExerciseRequest `json:"exercises"`
+}
+
+// handleUpdateScheduledWorkout decodes the request body, delegates
+// authorization, editability, and persistence to scheduledworkout.Update,
+// and maps its result to a status code. Coach only: replaces one
+// ScheduledWorkout's frozen prescription snapshot, never the reusable
+// Workout template and never another ScheduledWorkout (docs/mvp-
+// specification.md, "Editing an Assigned Workout"). Only permitted while
+// no WorkoutSession exists yet for it — see scheduledworkout.ErrSessionStarted.
+func handleUpdateScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		scheduledWorkoutID := r.PathValue("id")
+
+		var req updateScheduledWorkoutRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		input := scheduledworkout.UpdateInput{
+			Exercises: make([]scheduledworkout.UpdateExerciseInput, len(req.Exercises)),
+		}
+		for i, ex := range req.Exercises {
+			input.Exercises[i] = scheduledworkout.UpdateExerciseInput{
+				Name: ex.Name,
+				Plan: prescription.Plan{
+					SetCount:  ex.Plan.SetCount,
+					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RPE: ex.Plan.Defaults.RPE},
+					Overrides: mapWorkoutOverrides(ex.Plan.Overrides),
+				},
+			}
+		}
+
+		updated, err := scheduledworkout.Update(r.Context(), pool, user, scheduledWorkoutID, input)
+		if err != nil {
+			var validationErr *scheduledworkout.ValidationError
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, scheduledworkout.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "scheduled workout not found")
+			case errors.Is(err, scheduledworkout.ErrSessionStarted):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "this workout has already been started and can no longer be edited")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(updated)
 	}
 }
 

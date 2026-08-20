@@ -4,34 +4,49 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
+import {
+  clearDraft,
+  isDraftContentEmpty,
+  loadDraft,
+  saveDraft,
+  type DraftEditTarget,
+  type DraftExercise,
+  type DraftSetOverride,
+  type Exercise,
+  type PlannedUnit,
+  type PrescriptionMode,
+} from "./workout-draft";
 
 type Athlete = { id: string; name: string };
 type Workout = { id: string; name: string };
-type Exercise = { id: string; name: string; scope: "SYSTEM" | "PRIVATE" };
 type ProgrammingMode = "EXISTING" | "BUILD";
-type PrescriptionMode = "REPS" | "TEXT";
-type BuildStatus = "idle" | "creating" | "assigning" | "assignmentFailed";
-type PlannedUnit = "kg" | "lb";
-type DraftSetOverride = {
+type BuildStatus = "idle" | "creating" | "assigning" | "assignmentFailed" | "savingWorkout" | "savingChanges";
+// ScheduledWorkoutDetail is the wire shape of GET/PUT /api/v1/scheduled-workouts/{id}
+// (docs/go-backend-api-contract-v0.1.md §3.5) — used only to prefill and save
+// the Coach Calendar's Edit Assigned Workout flow (Problem B).
+type ScheduledWorkoutPlannedSetDTO = {
+  scheduledWorkoutPlannedSetId: string;
   position: number;
-  prescriptionMode?: PrescriptionMode;
-  reps?: string;
+  reps?: number;
   prescriptionNote?: string;
-  load?: string;
-  rpe?: string;
+  load?: number;
+  unit?: PlannedUnit;
+  rpe?: number;
 };
-type DraftExercise = {
-  exercise: Exercise;
-  setCount: string;
-  prescriptionMode: PrescriptionMode;
-  defaultReps: string;
-  defaultPrescriptionNote: string;
-  defaultLoad: string;
-  unit: PlannedUnit;
-  defaultRpe: string;
-  overrides: DraftSetOverride[];
-  customizationOpen: boolean;
-  editingPositions: number[];
+type ScheduledWorkoutExerciseDTO = {
+  scheduledWorkoutExerciseId: string;
+  exerciseId: string;
+  name: string;
+  plan: { sets: ScheduledWorkoutPlannedSetDTO[] };
+  position: number;
+};
+type ScheduledWorkoutDetail = {
+  id: string;
+  scheduledDate: string;
+  athlete: Athlete;
+  workout: Workout;
+  session: Session | null;
+  exercises: ScheduledWorkoutExerciseDTO[];
 };
 type BuildFieldErrors = {
   date?: string;
@@ -94,6 +109,84 @@ function resolveEffectivePrescription(item: DraftExercise, position: number): { 
 
 function fallbackWorkoutName(date: string): string {
   return `${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00`))} Workout`;
+}
+
+// buildExercisesPayload maps builder authoring state to the wire shape both
+// POST /workouts, PUT /scheduled-workouts/{id}, and (via POST /workouts)
+// Build & Assign accept — the same defaults+overrides shape prescription.Resolve
+// validates server-side. Pure/module-level: shared by Save Draft's siblings
+// (Save Workout, Build & Assign, Save Changes) rather than duplicated per handler.
+function buildExercisesPayload(items: DraftExercise[]) {
+  return items.map((item) => ({
+    name: item.exercise.name,
+    plan: {
+      setCount: Number(item.setCount),
+      defaults: {
+        ...(item.prescriptionMode === "REPS" ? { reps: Number(item.defaultReps) } : { prescriptionNote: item.defaultPrescriptionNote.trim() }),
+        ...(item.defaultLoad.trim() === "" ? {} : { load: Number(item.defaultLoad) }),
+        ...(item.defaultLoad.trim() === "" && !item.overrides.some((override) => override.load !== undefined) ? {} : { unit: item.unit }),
+        ...(item.defaultRpe.trim() === "" ? {} : { rpe: Number(item.defaultRpe) }),
+      },
+      overrides: item.overrides.map((override) => ({
+        position: override.position,
+        ...(override.reps === undefined ? {} : { reps: Number(override.reps) }),
+        ...(override.prescriptionNote === undefined ? {} : { prescriptionNote: override.prescriptionNote.trim() }),
+        ...(override.load === undefined ? {} : { load: Number(override.load) }),
+        ...(override.rpe === undefined ? {} : { rpe: Number(override.rpe) }),
+      })),
+    },
+  }));
+}
+
+// snapshotExerciseToDraft reconstructs a builder-editable DraftExercise from
+// a frozen, fully-resolved ScheduledWorkout snapshot exercise — the reverse
+// of buildExercisesPayload's resolve-on-submit direction. The frozen
+// snapshot has no defaults/overrides split (only per-position resolved
+// values), so this treats position 1 as the default and any later position
+// that differs as a sparse override, same shape the builder already edits.
+// A plan originally authored with an override on position 1 itself won't
+// round-trip byte-for-byte, but the resolved values it prefills are always
+// exactly what is currently scheduled.
+function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise {
+  const sets = [...ex.plan.sets].sort((left, right) => left.position - right.position);
+  const base = sets[0];
+  const baseMode: PrescriptionMode = base?.reps !== undefined ? "REPS" : "TEXT";
+
+  const overrides: DraftSetOverride[] = [];
+  for (const set of sets.slice(1)) {
+    const setMode: PrescriptionMode = set.reps !== undefined ? "REPS" : "TEXT";
+    const prescriptionDiffers = setMode !== baseMode || (setMode === "REPS" ? set.reps !== base?.reps : set.prescriptionNote !== base?.prescriptionNote);
+    const loadDiffers = (set.load ?? null) !== (base?.load ?? null);
+    const rpeDiffers = (set.rpe ?? null) !== (base?.rpe ?? null);
+    if (!prescriptionDiffers && !loadDiffers && !rpeDiffers) continue;
+
+    const override: DraftSetOverride = { position: set.position };
+    if (prescriptionDiffers) {
+      override.prescriptionMode = setMode;
+      if (setMode === "REPS") override.reps = set.reps !== undefined ? String(set.reps) : "";
+      else override.prescriptionNote = set.prescriptionNote ?? "";
+    }
+    if (loadDiffers) override.load = set.load !== undefined && set.load !== null ? String(set.load) : "";
+    if (rpeDiffers) override.rpe = set.rpe !== undefined && set.rpe !== null ? String(set.rpe) : "";
+    overrides.push(override);
+  }
+
+  return {
+    // Scope is cosmetic only (badge color) and not carried by the snapshot;
+    // submission identifies the exercise by name, the same as a fresh Add
+    // Exercise. Defaulting to SYSTEM keeps the badge neutral.
+    exercise: { id: ex.exerciseId, name: ex.name, scope: "SYSTEM" },
+    setCount: String(sets.length),
+    prescriptionMode: baseMode,
+    defaultReps: baseMode === "REPS" && base?.reps !== undefined ? String(base.reps) : "",
+    defaultPrescriptionNote: baseMode === "TEXT" ? (base?.prescriptionNote ?? "") : "",
+    defaultLoad: base?.load !== undefined && base?.load !== null ? String(base.load) : "",
+    unit: base?.unit ?? "kg",
+    defaultRpe: base?.rpe !== undefined && base?.rpe !== null ? String(base.rpe) : "",
+    overrides,
+    customizationOpen: false,
+    editingPositions: [],
+  };
 }
 
 function todayLocalISODate(): string {
@@ -207,6 +300,25 @@ export default function CoachCalendarPage() {
   const [calendarAthleteId, setCalendarAthleteId] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
 
+  // Problem A — browser-local Build Workout draft persistence. coachId
+  // scopes the localStorage key so multiple Coach accounts in the same
+  // browser never share a draft; the Firebase UID is already available from
+  // useAuth() without an extra /api/v1/me round trip.
+  const coachId = user?.uid ?? null;
+  const draftLoadedRef = useRef(false);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [draftRestoredNotice, setDraftRestoredNotice] = useState(false);
+  const [workoutSavedNotice, setWorkoutSavedNotice] = useState(false);
+
+  // Problem B — editing one NOT_STARTED ScheduledWorkout in place. Non-null
+  // while the builder below is prefilled from (and will PUT back to) one
+  // specific assignment, instead of authoring/assigning a new one.
+  const [editTarget, setEditTarget] = useState<DraftEditTarget | null>(null);
+  const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [saveChangesSuccess, setSaveChangesSuccess] = useState(false);
+
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
   }, [authLoading, user, router]);
@@ -293,6 +405,93 @@ export default function CoachCalendarPage() {
     };
   }, [idToken, pickerOpen, pickerQuery, programmingMode]);
 
+  // Restore a saved draft exactly once per Coach session, the first time a
+  // coachId is available. Reopens the builder in Build mode (including a
+  // resumed Edit Assigned Workout target, if the draft has one) so the
+  // Coach sees restored state immediately rather than a blank calendar.
+  useEffect(() => {
+    if (!coachId || draftLoadedRef.current) return;
+    draftLoadedRef.current = true;
+    const draft = loadDraft(coachId);
+    if (!draft || isDraftContentEmpty(draft)) return;
+
+    // Deferred (not called synchronously in the effect body) per
+    // react-hooks/set-state-in-effect.
+    Promise.resolve().then(() => {
+      setDraftName(draft.name);
+      setDraftExercises(draft.exercises);
+      setSelectedAthleteIds(draft.selectedAthleteIds);
+      if (isValidISODate(draft.scheduledDate)) setDate(draft.scheduledDate);
+      if (draft.selectedAthleteIds[0]) setCalendarAthleteId(draft.selectedAthleteIds[0]);
+      setEditTarget(draft.editTarget);
+      setProgrammingMode("BUILD");
+      setEditorOpen(true);
+      setDraftRestoredNotice(true);
+    });
+  }, [coachId]);
+
+  // Autosave: debounce briefly, then serialize the current builder state to
+  // localStorage. Only while actively authoring/editing in Build mode —
+  // Existing Workout mode has no builder state worth persisting. Skipped
+  // until the restore effect above has run once, so restoring a draft can
+  // never race writing it right back out with a stale empty value.
+  useEffect(() => {
+    if (!coachId || !draftLoadedRef.current || programmingMode !== "BUILD") return;
+    if (isDraftContentEmpty({ name: draftName, exercises: draftExercises, selectedAthleteIds })) return;
+
+    // Deferred (not called synchronously in the effect body) per
+    // react-hooks/set-state-in-effect.
+    Promise.resolve().then(() => setDraftStatus("saving"));
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      saveDraft(coachId, { name: draftName, exercises: draftExercises, selectedAthleteIds, scheduledDate: date, editTarget });
+      setDraftStatus("saved");
+    }, 600);
+    return () => {
+      if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    };
+  }, [coachId, programmingMode, draftName, draftExercises, selectedAthleteIds, date, editTarget]);
+
+  // Auto-dismiss the restored/saved notices after a few seconds — they
+  // confirm an action just happened, not an ongoing state, so they
+  // shouldn't linger indefinitely.
+  useEffect(() => {
+    if (!draftRestoredNotice) return;
+    const timeoutId = window.setTimeout(() => setDraftRestoredNotice(false), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [draftRestoredNotice]);
+
+  useEffect(() => {
+    if (!workoutSavedNotice) return;
+    const timeoutId = window.setTimeout(() => setWorkoutSavedNotice(false), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [workoutSavedNotice]);
+
+  useEffect(() => {
+    if (!saveChangesSuccess) return;
+    const timeoutId = window.setTimeout(() => setSaveChangesSuccess(false), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [saveChangesSuccess]);
+
+  function handleSaveDraft() {
+    if (!coachId) return;
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    saveDraft(coachId, { name: draftName, exercises: draftExercises, selectedAthleteIds, scheduledDate: date, editTarget });
+    setDraftStatus("saved");
+    setDraftRestoredNotice(false);
+  }
+
+  function handleDiscardDraft() {
+    if (!coachId) return;
+    if (!window.confirm("Discard this draft? Everything unsaved in the builder will be permanently deleted.")) return;
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    clearDraft(coachId);
+    resetBuilderDraft();
+    setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
+    setDraftStatus("idle");
+    setDraftRestoredNotice(false);
+  }
+
   async function refetchAssignments() {
     if (!idToken) return;
     const requestId = ++assignmentLoadId.current;
@@ -333,6 +532,11 @@ export default function CoachCalendarPage() {
     setPickerQuery("");
     setPickerExercises(null);
     setPickerError(null);
+    setEditTarget(null);
+    setEditLoadError(null);
+    setDraftStatus("idle");
+    setDraftRestoredNotice(false);
+    setWorkoutSavedNotice(false);
   }
 
   function changeProgrammingMode(mode: ProgrammingMode) {
@@ -406,10 +610,13 @@ export default function CoachCalendarPage() {
     });
   }
 
-  function validateBuildDraft(): BuildFieldErrors {
+  // validateExercisesDraft checks only the exercise/prescription authoring
+  // state — no date, no athletes. Save Workout and Save Changes both submit
+  // a prescription with no notion of a scheduled date or assignee, so they
+  // validate against this directly; Build & Assign additionally requires a
+  // date and at least one athlete (see validateBuildDraft below).
+  function validateExercisesDraft(): BuildFieldErrors {
     const errors = initialBuildErrors();
-    if (!isValidISODate(date)) errors.date = "Choose a valid date.";
-    if (selectedAthleteIds.length === 0) errors.athletes = "Select at least one athlete.";
     if (draftExercises.length === 0) errors.exercises = "Add at least one exercise.";
     draftExercises.forEach((item, index) => {
       const itemErrors: BuildFieldErrors["items"][number] = {};
@@ -443,6 +650,13 @@ export default function CoachCalendarPage() {
     return errors;
   }
 
+  function validateBuildDraft(): BuildFieldErrors {
+    const errors = validateExercisesDraft();
+    if (!isValidISODate(date)) errors.date = "Choose a valid date.";
+    if (selectedAthleteIds.length === 0) errors.athletes = "Select at least one athlete.";
+    return errors;
+  }
+
   async function schedulePendingBuild(payload: PendingAssignment) {
     if (!idToken) return;
     await apiFetch(idToken, "/api/v1/scheduled-workouts", {
@@ -457,6 +671,7 @@ export default function CoachCalendarPage() {
 
   async function completeBuildAssignment() {
     setPendingAssignment(null);
+    if (coachId) clearDraft(coachId);
     resetBuilderDraft();
     setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
     setProgrammingMode("EXISTING");
@@ -486,25 +701,7 @@ export default function CoachCalendarPage() {
           method: "POST",
           body: {
             name: draftName.trim() || fallbackWorkoutName(date),
-            exercises: draftExercises.map((item) => ({
-              name: item.exercise.name,
-              plan: {
-                setCount: Number(item.setCount),
-                defaults: {
-                  ...(item.prescriptionMode === "REPS" ? { reps: Number(item.defaultReps) } : { prescriptionNote: item.defaultPrescriptionNote.trim() }),
-                  ...(item.defaultLoad.trim() === "" ? {} : { load: Number(item.defaultLoad) }),
-                  ...(item.defaultLoad.trim() === "" && !item.overrides.some((override) => override.load !== undefined) ? {} : { unit: item.unit }),
-                  ...(item.defaultRpe.trim() === "" ? {} : { rpe: Number(item.defaultRpe) }),
-                },
-                overrides: item.overrides.map((override) => ({
-                  position: override.position,
-                  ...(override.reps === undefined ? {} : { reps: Number(override.reps) }),
-                  ...(override.prescriptionNote === undefined ? {} : { prescriptionNote: override.prescriptionNote.trim() }),
-                  ...(override.load === undefined ? {} : { load: Number(override.load) }),
-                  ...(override.rpe === undefined ? {} : { rpe: Number(override.rpe) }),
-                })),
-              },
-            })),
+            exercises: buildExercisesPayload(draftExercises),
           },
         });
       } catch (err) {
@@ -631,12 +828,121 @@ export default function CoachCalendarPage() {
 
   function openWorkoutEditor() {
     if (!calendarAthleteId || programmingControlsDisabled) return;
+    // "+ Add Workout" always starts a new assignment, never resumes a
+    // stale Edit Assigned Workout target left over from a previous session.
+    setEditTarget(null);
+    setEditLoadError(null);
     setSelectedAthleteIds((previous) => previous.includes(calendarAthleteId) ? previous : [calendarAthleteId, ...previous]);
     setProgrammingMode("EXISTING");
     setEditorOpen(true);
     setAssignError(null);
     setAssignSuccess(false);
     setBuildFieldErrors(initialBuildErrors());
+  }
+
+  // openEditWorkout fetches the frozen snapshot for one NOT_STARTED
+  // ScheduledWorkout and prefills the builder from it (§B4). If it became
+  // ACTIVE/COMPLETED between the card rendering and this click, the fetch
+  // still succeeds (GET has no editability gate) but returns a non-null
+  // session — surfaced the same way a 409 from Save Changes would be,
+  // without ever opening the builder over stale data.
+  async function openEditWorkout(assignment: ScheduledWorkoutSummary) {
+    if (!idToken || programmingControlsDisabled || editLoadingId) return;
+    setEditLoadError(null);
+    setEditLoadingId(assignment.id);
+    try {
+      const detail = await apiFetch<ScheduledWorkoutDetail>(idToken, `/api/v1/scheduled-workouts/${assignment.id}`);
+      if (detail.session !== null) {
+        setEditLoadError("This workout has already been started and can no longer be edited.");
+        await refetchAssignments();
+        return;
+      }
+
+      setDraftName("");
+      setDraftExercises(detail.exercises.map(snapshotExerciseToDraft));
+      setSelectedAthleteIds([detail.athlete.id]);
+      setCalendarAthleteId(detail.athlete.id);
+      setDate(detail.scheduledDate);
+      setEditTarget({
+        scheduledWorkoutId: detail.id,
+        athleteId: detail.athlete.id,
+        athleteName: detail.athlete.name,
+        workoutName: detail.workout.name,
+      });
+      setProgrammingMode("BUILD");
+      setEditorOpen(true);
+      setBuildFieldErrors(initialBuildErrors());
+      setBuildError(null);
+      setAssignError(null);
+      setAssignSuccess(false);
+    } catch (err) {
+      setEditLoadError(errorMessage(err));
+    } finally {
+      setEditLoadingId(null);
+    }
+  }
+
+  async function handleSaveWorkout() {
+    if (!idToken || buildInFlight.current || buildStatus !== "idle") return;
+    const errors = validateExercisesDraft();
+    setBuildFieldErrors(errors);
+    setBuildError(null);
+    if (errors.exercises || Object.keys(errors.items).length > 0) return;
+
+    buildInFlight.current = true;
+    setBuildStatus("savingWorkout");
+    try {
+      await apiFetch<Workout>(idToken, "/api/v1/workouts", {
+        method: "POST",
+        body: { name: draftName.trim() || fallbackWorkoutName(date), exercises: buildExercisesPayload(draftExercises) },
+      });
+      if (coachId) clearDraft(coachId);
+      resetBuilderDraft();
+      setProgrammingMode("EXISTING");
+      setEditorOpen(false);
+      setWorkoutSavedNotice(true);
+      await refetchWorkouts();
+    } catch (err) {
+      setBuildError(errorMessage(err));
+    } finally {
+      buildInFlight.current = false;
+      setBuildStatus("idle");
+    }
+  }
+
+  async function handleSaveChanges(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!idToken || !editTarget || buildInFlight.current || buildStatus !== "idle") return;
+
+    const errors = validateExercisesDraft();
+    setBuildFieldErrors(errors);
+    setBuildError(null);
+    if (errors.exercises || Object.keys(errors.items).length > 0) return;
+
+    buildInFlight.current = true;
+    setBuildStatus("savingChanges");
+    try {
+      await apiFetch(idToken, `/api/v1/scheduled-workouts/${editTarget.scheduledWorkoutId}`, {
+        method: "PUT",
+        body: { exercises: buildExercisesPayload(draftExercises) },
+      });
+      if (coachId) clearDraft(coachId);
+      resetBuilderDraft();
+      setEditorOpen(false);
+      setProgrammingMode("EXISTING");
+      setSaveChangesSuccess(true);
+      await refetchAssignments();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setBuildError("This workout has already been started and can no longer be edited.");
+        await refetchAssignments();
+      } else {
+        setBuildError(errorMessage(err));
+      }
+    } finally {
+      buildInFlight.current = false;
+      setBuildStatus("idle");
+    }
   }
 
   return (
@@ -705,13 +1011,19 @@ export default function CoachCalendarPage() {
             </div>
 
             {startError && <div className="mt-4"><Notice tone="error">{startError}</Notice></div>}
+            {editLoadError && <div className="mt-4"><Notice tone="error">{editLoadError}</Notice></div>}
+            {workoutSavedNotice && <div className="mt-4"><Notice tone="success">Workout saved to your library. It was not scheduled to any athlete.</Notice></div>}
+            {saveChangesSuccess && <div className="mt-4"><Notice tone="success">Changes saved. The athlete will see the updated prescription immediately.</Notice></div>}
             <div className="mt-5">
               {assignments === null ? <LoadingCard label="Loading scheduled training…" /> : dayAssignments?.length === 0 ? <EmptyCard title="No workouts scheduled" body="Add a workout to this athlete’s selected day." /> : (
                 <ul className="grid gap-3">
                   {dayAssignments?.map((assignment) => (
                     <li key={assignment.id} className="rounded-2xl border border-slate-200 bg-stone-50 p-4">
                       <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-500">{assignment.athlete.name}</p><p className="mt-1 text-lg font-bold">{assignment.workout.name}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusClass(assignment.session)}`}>{statusLabel(assignment.session)}</span></div>
-                      <div className="mt-4 flex justify-end border-t border-slate-200 pt-3">{assignment.session === null ? <button type="button" onClick={() => handleStart(assignment.id)} disabled={startingId === assignment.id} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white disabled:opacity-50">{startingId === assignment.id ? "Starting…" : "Start Session"}</button> : <button type="button" onClick={() => router.push(`/session/${assignment.session!.id}`)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white">{assignment.session.status === "ACTIVE" ? "Resume" : "Review"}</button>}</div>
+                      <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
+                        {assignment.session === null && <button type="button" onClick={() => openEditWorkout(assignment)} disabled={programmingControlsDisabled || editLoadingId === assignment.id} className="min-h-10 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-800 transition hover:bg-slate-100 disabled:opacity-50">{editLoadingId === assignment.id ? "Opening…" : "Edit"}</button>}
+                        {assignment.session === null ? <button type="button" onClick={() => handleStart(assignment.id)} disabled={startingId === assignment.id} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white disabled:opacity-50">{startingId === assignment.id ? "Starting…" : "Start Session"}</button> : <button type="button" onClick={() => router.push(`/session/${assignment.session!.id}`)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white">{assignment.session.status === "ACTIVE" ? "Resume" : "Review"}</button>}
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -719,17 +1031,18 @@ export default function CoachCalendarPage() {
             </div>
 
             {editorOpen && <div className="mt-6 rounded-2xl border border-slate-200 p-4 sm:p-5">
-              <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Add Workout</p><p className="mt-1 text-sm font-semibold text-slate-700">{calendarAthlete?.name} · {displayDate(date)}</p></div><button type="button" onClick={() => setEditorOpen(false)} disabled={programmingControlsDisabled} className="min-h-10 rounded-lg px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button></div>
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{editTarget ? "Edit Workout" : "Add Workout"}</p><p className="mt-1 text-sm font-semibold text-slate-700">{editTarget ? `${editTarget.athleteName} · ${editTarget.workoutName}` : `${calendarAthlete?.name} · ${displayDate(date)}`}</p></div><button type="button" onClick={() => setEditorOpen(false)} disabled={programmingControlsDisabled} className="min-h-10 rounded-lg px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button></div>
+
+              {!editTarget && <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 <ProgrammingModeButton active={programmingMode === "EXISTING"} onClick={() => changeProgrammingMode("EXISTING")} disabled={programmingControlsDisabled}>Existing Workout</ProgrammingModeButton>
                 <ProgrammingModeButton active={programmingMode === "BUILD"} onClick={() => changeProgrammingMode("BUILD")} disabled={programmingControlsDisabled}>Build New Workout</ProgrammingModeButton>
-              </div>
+              </div>}
 
-              <fieldset className="mt-4 rounded-xl bg-stone-50 p-3">
+              {editTarget ? <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-medium text-amber-900 ring-1 ring-amber-600/15">Editing <span className="font-bold">{editTarget.athleteName}</span>&apos;s assigned workout. This replaces only this one assignment — the reusable Workout template and any other athlete&apos;s copy of it are unaffected.</p> : <fieldset className="mt-4 rounded-xl bg-stone-50 p-3">
                 <legend className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Assign to</legend>
                 <div className="mt-1 flex flex-wrap gap-2">{athletes?.map((athlete) => { const selected = selectedAthleteIds.includes(athlete.id); return <label key={athlete.id} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-semibold ${selected ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600"}`}><input type="checkbox" checked={selected} onChange={() => toggleAthlete(athlete.id)} disabled={programmingControlsDisabled || athlete.id === calendarAthleteId} className="accent-teal-600" />{athlete.name}</label>; })}</div>
                 {buildFieldErrors.athletes && <FieldError>{buildFieldErrors.athletes}</FieldError>}
-              </fieldset>
+              </fieldset>}
 
               <div className="mt-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Workout</p>
@@ -752,11 +1065,13 @@ export default function CoachCalendarPage() {
                 {assigning ? "Assigning workout…" : `Assign to ${selectedCount || ""} athlete${selectedCount === 1 ? "" : "s"}`}
               </button>
             </div> : (
-              <form onSubmit={handleBuildAndAssign} className="mt-4 grid gap-4">
-                <label className="block">
+              <form onSubmit={editTarget ? handleSaveChanges : handleBuildAndAssign} className="mt-4 grid gap-4">
+                {draftRestoredNotice && <Notice tone="success">Draft restored from your last session.</Notice>}
+
+                {!editTarget && <label className="block">
                   <span className="mb-1.5 block text-sm font-semibold text-slate-700">Add Workout Name <span className="font-normal text-slate-500">optional</span></span>
                   <input value={draftName} onChange={(event) => setDraftName(event.target.value)} placeholder="Add Workout Name" disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:cursor-not-allowed disabled:bg-slate-100" />
-                </label>
+                </label>}
 
                 <div>
                   <div className="flex items-baseline justify-between gap-3">
@@ -773,13 +1088,29 @@ export default function CoachCalendarPage() {
                   {!pickerOpen ? <button type="button" onClick={() => { setPickerOpen(true); setPickerError(null); }} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border border-dashed border-teal-600 bg-teal-50 px-5 text-base font-bold text-teal-800 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50">+ Add Exercise</button> : <ExercisePicker query={pickerQuery} exercises={pickerExercises} loading={pickerLoading} error={pickerError} selectedIds={new Set(draftExercises.map((item) => item.exercise.id))} disabled={programmingControlsDisabled} onQueryChange={setPickerQuery} onAdd={addExercise} onClose={() => setPickerOpen(false)} onOpenLibrary={() => router.push("/coach/exercises")} />}
                 </div>
 
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                  <p className="text-xs font-medium text-slate-500" aria-live="polite">
+                    {draftStatus === "saving" ? "Saving…" : draftStatus === "saved" ? "Draft saved" : " "}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={handleSaveDraft} disabled={programmingControlsDisabled} className="min-h-10 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Save Draft</button>
+                    <button type="button" onClick={handleDiscardDraft} disabled={programmingControlsDisabled} className="min-h-10 rounded-xl border border-red-200 px-3 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">Discard Draft</button>
+                  </div>
+                </div>
+
                 {buildStatus === "assignmentFailed" && pendingAssignment ? <div className="grid gap-3">
                   <Notice tone="error"><span className="font-bold">Workout was created, but it was not assigned.</span>{buildError ? ` ${buildError}` : ""}</Notice>
                   <button type="button" onClick={handleRetryAssignment} className="min-h-14 w-full rounded-2xl bg-amber-500 px-5 text-base font-bold text-slate-950 shadow-sm transition hover:bg-amber-400">Retry Assignment</button>
                 </div> : buildError ? <Notice tone="error">{buildError}</Notice> : null}
 
+                {!editTarget && <button type="button" onClick={handleSaveWorkout} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border-2 border-teal-600 bg-white px-5 text-base font-bold text-teal-700 shadow-sm transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:border-slate-200 disabled:text-slate-400">
+                  {buildStatus === "savingWorkout" ? "Saving workout…" : "Save Workout"}
+                </button>}
+
                 <button type="submit" disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
-                  {buildStatus === "creating" ? "Creating workout…" : buildStatus === "assigning" ? "Assigning workout…" : "Build & Assign"}
+                  {editTarget
+                    ? (buildStatus === "savingChanges" ? "Saving changes…" : "Save Changes")
+                    : (buildStatus === "creating" ? "Creating workout…" : buildStatus === "assigning" ? "Assigning workout…" : "Build & Assign")}
                 </button>
               </form>
             )}
