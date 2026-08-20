@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  createUserWithEmailAndPassword,
   onIdTokenChanged,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
@@ -28,6 +29,11 @@ type AuthContextValue = {
   // callers that need a token immediately after signing in (e.g. login's
   // role lookup) would otherwise race that state update.
   signIn: (email: string, password: string) => Promise<string>;
+  // signUp mirrors signIn but creates a new Firebase account
+  // (createUserWithEmailAndPassword). Used only by the join flow
+  // (docs/athlete-onboarding-invite-codes-v0.1.md §7.6) — it does not
+  // create a PostgreSQL `users` row by itself; that happens on redeem.
+  signUp: (email: string, password: string) => Promise<string>;
   signOut: () => Promise<void>;
 };
 
@@ -72,13 +78,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return credential.user.getIdToken();
   }
 
+  async function signUp(email: string, password: string): Promise<string> {
+    const auth = getFirebaseAuth();
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
+    // Same reasoning as signIn: return the token directly rather than
+    // racing the onIdTokenChanged update above.
+    return credential.user.getIdToken();
+  }
+
   async function signOut() {
     const auth = getFirebaseAuth();
     await firebaseSignOut(auth);
   }
 
   return (
-    <AuthContext.Provider value={{ user, idToken, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, idToken, loading, signIn, signUp, signOut }}>
       {children}
     </AuthContext.Provider>
   );
