@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 
@@ -25,19 +26,30 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // A verified Firebase sign-in with no PostgreSQL `users` row is reachable
+  // now that /join/[code] lets athletes create Firebase accounts without
+  // necessarily having redeemed an invite yet — point them at /join
+  // instead of the old dead-end generic error
+  // (docs/athlete-onboarding-invite-codes-v0.1.md §7.7).
+  const [noAccount, setNoAccount] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setNoAccount(false);
     setSubmitting(true);
     try {
       const token = await signIn(email, password);
       let me: Me;
       try {
         me = await apiFetch<Me>(token, "/api/v1/me");
-      } catch {
-        setError("Sign in failed. Please try again.");
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          setNoAccount(true);
+        } else {
+          setError("Sign in failed. Please try again.");
+        }
         return;
       }
       if (me.role === "COACH") router.replace("/coach/calendar");
@@ -68,8 +80,16 @@ export default function LoginPage() {
             <label><span className="mb-1.5 block text-sm font-semibold text-slate-700">Password</span><input type="password" required autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" /></label>
           </div>
           {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{error}</p>}
+          {noAccount && (
+            <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">
+              We couldn&apos;t find an account for that sign-in. Have an invite code? <Link href="/join" className="underline">Join a coach</Link>.
+            </p>
+          )}
           <button type="submit" disabled={submitting} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Signing in…" : "Sign In"}</button>
         </form>
+        <p className="mt-5 text-center text-sm text-slate-600">
+          Have an invite code? <Link href="/join" className="font-bold text-teal-700 hover:text-teal-800">Join a coach</Link>
+        </p>
       </div>
     </main>
   );
