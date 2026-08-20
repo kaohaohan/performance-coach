@@ -87,6 +87,7 @@ export default function LoginPage() {
           )}
           <button type="submit" disabled={submitting} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Signing in…" : "Sign In"}</button>
         </form>
+        <Link href="/coach/signup" className="mt-4 flex min-h-14 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white text-base font-bold text-slate-900 shadow-sm transition hover:bg-stone-50">Create Coach Account</Link>
         <p className="mt-5 text-center text-sm text-slate-600">
           Have an invite code? <Link href="/join" className="font-bold text-teal-700 hover:text-teal-800">Join a coach</Link>
         </p>
