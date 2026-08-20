@@ -4,14 +4,27 @@
 // (docs/athlete-onboarding-invite-codes-v0.1.md §7.6). One route, one
 // stepped local state machine — auth happens inline here, never a redirect
 // to /login, which is what makes "login-return-to-invite" a non-problem.
+// Google sign-in uses a popup for the same reason: the invite code never
+// has to survive a navigation, so it cannot be lost or mixed up with
+// another one.
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiFetch, publicApiFetch } from "@/lib/api";
+import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
 
 type Preview = { code: string; coachName: string; description: string | null };
 type Redeemed = { user: { id: string; name: string; role: "ATHLETE" }; coach: { name: string } };
-type Step = "loading" | "invalid" | "confirming" | "authenticating" | "redeeming" | "onboarded";
+type Me = { id: string; name: string; role: "COACH" | "ATHLETE" };
+type Step =
+  | "loading"
+  | "invalid"
+  | "confirming"
+  | "checkingSession"
+  | "coachSignedIn"
+  | "authenticating"
+  | "redeeming"
+  | "onboarded";
 
 function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
@@ -42,7 +55,7 @@ export default function JoinCodePage() {
   const params = useParams<{ code: string }>();
   const code = params.code;
   const router = useRouter();
-  const { idToken, loading: authLoading, signIn, signUp } = useAuth();
+  const { user, loading: authLoading, signIn, signUp, signInWithGoogle, signOut } = useAuth();
 
   const [step, setStep] = useState<Step>("loading");
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -51,13 +64,13 @@ export default function JoinCodePage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [googlePending, setGooglePending] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [redeemed, setRedeemed] = useState<Redeemed | null>(null);
-  // A freshly minted Firebase ID token, taken directly from the sign-in /
-  // sign-up credential (or from an already-live session) so redeem doesn't
-  // have to race auth-context's async onIdTokenChanged update.
-  const [freshToken, setFreshToken] = useState<string | null>(null);
+  // Display name of the COACH currently signed in, shown on the
+  // coachSignedIn step so it is obvious whose session is in the way.
+  const [signedInCoachName, setSignedInCoachName] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,58 +88,156 @@ export default function JoinCodePage() {
     return () => { cancelled = true; };
   }, [code]);
 
-  async function runRedeem(token: string) {
+  // freshToken mints a token from the live Firebase user at the moment it
+  // is needed, rather than replaying one captured earlier. Retrying redeem
+  // with a stored token is what turned a single rejected attempt into an
+  // endless loop before; there is no stored token here to go stale.
+  async function freshToken(): Promise<string | null> {
+    return user ? user.getIdToken() : null;
+  }
+
+  async function runRedeem(token: string, athleteName: string) {
     setStep("redeeming");
     setRedeemError(null);
     try {
       const result = await apiFetch<Redeemed>(token, `/api/v1/invite-codes/${encodeURIComponent(code)}/redeem`, {
         method: "POST",
-        body: { name: name.trim() },
+        body: { name: athleteName },
       });
       setRedeemed(result);
       setStep("onboarded");
     } catch (error) {
+      // 403 is the API's "a coach account cannot redeem an invite code".
+      // Retrying cannot change that, so route to the sign-out step instead
+      // of offering a retry that is guaranteed to fail the same way.
+      if (error instanceof ApiError && error.status === 403) {
+        setStep("coachSignedIn");
+        return;
+      }
       setRedeemError(errorMessage(error));
       setStep("authenticating");
     }
   }
 
-  // Already has a live Firebase session (e.g. resuming after abandoning
-  // mid-flow, or signed in from another tab) — skip straight to redeem
-  // instead of asking them to authenticate again
-  // (docs/athlete-onboarding-invite-codes-v0.1.md §6, "Athlete abandons
-  // after Firebase signup, before redeem").
-  function handleContinue() {
-    if (idToken) {
-      setFreshToken(idToken);
-      runRedeem(idToken);
-      return;
+  // resolveExistingRole asks the API who a verified Firebase identity
+  // already is, *before* trying to redeem with it. A 401 means the token is
+  // valid but no application user exists yet — the normal state for someone
+  // who signed up and abandoned before redeeming, and for every brand-new
+  // Google identity. Redeem is exactly what provisions those, so "NEW" is a
+  // green light, not an error.
+  async function resolveExistingRole(token: string): Promise<"COACH" | "ATHLETE" | "NEW"> {
+    try {
+      const me = await apiFetch<Me>(token, "/api/v1/me");
+      if (me.role === "COACH") setSignedInCoachName(me.name);
+      return me.role;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return "NEW";
+      throw err;
     }
-    setStep("authenticating");
   }
 
-  function handleRetryRedeem() {
-    const token = freshToken ?? idToken;
-    if (token) runRedeem(token);
+  // continueWithToken is the single gate every authenticated path goes
+  // through — the already-live session, and both fresh sign-ins. A Coach
+  // never reaches redeem.
+  async function continueWithToken(token: string, athleteName: string) {
+    const role = await resolveExistingRole(token);
+    if (role === "COACH") {
+      setStep("coachSignedIn");
+      return;
+    }
+    await runRedeem(token, athleteName);
+  }
+
+  // Already has a live Firebase session (e.g. resuming after abandoning
+  // mid-flow, signed in from another tab, or still signed in as a Coach) —
+  // resolve who that is before doing anything with it
+  // (docs/athlete-onboarding-invite-codes-v0.1.md §6, "Athlete abandons
+  // after Firebase signup, before redeem").
+  async function handleContinue() {
+    const token = await freshToken();
+    if (!token) {
+      setStep("authenticating");
+      return;
+    }
+    setStep("checkingSession");
+    setRedeemError(null);
+    try {
+      await continueWithToken(token, name.trim());
+    } catch (error) {
+      setRedeemError(errorMessage(error));
+      setStep("confirming");
+    }
+  }
+
+  async function handleRetryRedeem() {
+    const token = await freshToken();
+    if (!token) {
+      setRedeemError(null);
+      setStep("authenticating");
+      return;
+    }
+    await runRedeem(token, name.trim());
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (redeemError) {
-      handleRetryRedeem();
+      await handleRetryRedeem();
       return;
     }
     setAuthSubmitting(true);
     setAuthError(null);
     try {
       const token = authMode === "create" ? await signUp(email, password) : await signIn(email, password);
-      setFreshToken(token);
-      await runRedeem(token);
+      await continueWithToken(token, name.trim());
     } catch (err) {
-      setAuthError(firebaseAuthErrorMessage(err));
+      // An ApiError here came from the /me role check, not from Firebase —
+      // don't describe it with the Firebase-auth-code mapper.
+      setAuthError(err instanceof ApiError ? errorMessage(err) : firebaseAuthErrorMessage(err));
+      setStep("authenticating");
     } finally {
       setAuthSubmitting(false);
     }
+  }
+
+  async function handleGoogleJoin() {
+    setGooglePending(true);
+    setAuthError(null);
+    setRedeemError(null);
+    try {
+      const { idToken, user: googleUser } = await signInWithGoogle();
+      // Name is only used when redeem creates a brand-new ATHLETE row; an
+      // athlete who already exists keeps the name they have. Prefer what
+      // they typed, fall back to Google's display name.
+      const athleteName = name.trim() || googleUser.displayName?.trim() || "";
+      await continueWithToken(idToken, athleteName);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setAuthError(errorMessage(err));
+      } else {
+        const message = googleAuthErrorMessage(err);
+        if (message) setAuthError(message);
+      }
+      setStep("authenticating");
+    } finally {
+      setGooglePending(false);
+    }
+  }
+
+  // Signing the Coach out returns the browser to a clean slate so the
+  // athlete can authenticate as themselves — with Google or with
+  // email/password.
+  async function handleSignOutAndContinue() {
+    setSignedInCoachName(null);
+    setRedeemError(null);
+    setAuthError(null);
+    try {
+      await signOut();
+    } catch {
+      // Nothing actionable to show: the next sign-in re-authenticates from
+      // scratch either way.
+    }
+    setStep("authenticating");
   }
 
   if (step === "loading") {
@@ -161,14 +272,37 @@ export default function JoinCodePage() {
       {preview.description && <p className="mt-3 rounded-2xl bg-stone-50 px-4 py-3 text-sm leading-6 text-slate-600">{preview.description}</p>}
 
       {step === "confirming" && (
-        <div className="mt-6 flex gap-3">
-          <button type="button" onClick={() => router.push("/join")} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">Use another code</button>
-          <button type="button" onClick={handleContinue} disabled={authLoading} className="min-h-14 flex-1 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">Continue</button>
+        <>
+          {redeemError && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{redeemError}</p>}
+          <div className="mt-6 flex gap-3">
+            <button type="button" onClick={() => router.push("/join")} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">Use another code</button>
+            <button type="button" onClick={handleContinue} disabled={authLoading} className="min-h-14 flex-1 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">Continue</button>
+          </div>
+        </>
+      )}
+
+      {step === "checkingSession" && (
+        <p className="mt-6 text-sm font-medium text-slate-500">Checking your account…</p>
+      )}
+
+      {step === "coachSignedIn" && (
+        <div className="mt-6">
+          <p className="text-base font-semibold text-slate-900">
+            You&apos;re currently signed in as a Coach{signedInCoachName ? ` (${signedInCoachName})` : ""}.
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Sign out to join {preview.coachName} with an Athlete account. Your Coach account isn&apos;t changed by this.
+          </p>
+          <button type="button" onClick={handleSignOutAndContinue} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">Sign out and continue</button>
+          <button type="button" onClick={() => router.push("/coach/calendar")} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900">Stay signed in as a Coach</button>
         </div>
       )}
 
       {(step === "authenticating" || step === "redeeming") && (
         <div className="mt-6">
+          <GoogleSignInButton onClick={handleGoogleJoin} pending={googlePending} disabled={authSubmitting || step === "redeeming"} />
+          <AuthDivider />
+
           <div className="flex gap-2" role="tablist" aria-label="Sign in or create account">
             <button type="button" role="tab" aria-selected={authMode === "create"} onClick={() => { setAuthMode("create"); setAuthError(null); }} className={`min-h-11 flex-1 rounded-xl text-sm font-bold transition ${authMode === "create" ? "bg-slate-950 text-white" : "bg-stone-100 text-slate-600 hover:bg-stone-200"}`}>Create account</button>
             <button type="button" role="tab" aria-selected={authMode === "signin"} onClick={() => { setAuthMode("signin"); setAuthError(null); }} className={`min-h-11 flex-1 rounded-xl text-sm font-bold transition ${authMode === "signin" ? "bg-slate-950 text-white" : "bg-stone-100 text-slate-600 hover:bg-stone-200"}`}>Sign in</button>
@@ -192,7 +326,7 @@ export default function JoinCodePage() {
 
             {(authError || redeemError) && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{authError ?? redeemError}</p>}
 
-            <button type="submit" disabled={authSubmitting || step === "redeeming"} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+            <button type="submit" disabled={authSubmitting || googlePending || step === "redeeming"} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
               {step === "redeeming" ? "Connecting…" : redeemError ? "Try again" : authSubmitting ? (authMode === "create" ? "Creating account…" : "Signing in…") : authMode === "create" ? "Create account" : "Sign in"}
             </button>
           </form>
