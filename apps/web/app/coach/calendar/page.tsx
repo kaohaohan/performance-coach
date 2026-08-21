@@ -409,8 +409,14 @@ export default function CoachCalendarPage() {
   // coachId is available. Reopens the builder in Build mode (including a
   // resumed Edit Assigned Workout target, if the draft has one) so the
   // Coach sees restored state immediately rather than a blank calendar.
+  //
+  // Waits for the athlete list (and its default calendarAthleteId, set by
+  // the fetch effect above) to resolve first: the athlete *selection* below
+  // is always derived fresh from the current calendarAthleteId, never
+  // replayed verbatim from storage, so a real current value must be ready
+  // to derive it from.
   useEffect(() => {
-    if (!coachId || draftLoadedRef.current) return;
+    if (!coachId || draftLoadedRef.current || athletes === null) return;
     draftLoadedRef.current = true;
     const draft = loadDraft(coachId);
     if (!draft || isDraftContentEmpty(draft)) return;
@@ -420,15 +426,30 @@ export default function CoachCalendarPage() {
     Promise.resolve().then(() => {
       setDraftName(draft.name);
       setDraftExercises(draft.exercises);
-      setSelectedAthleteIds(draft.selectedAthleteIds);
       if (isValidISODate(draft.scheduledDate)) setDate(draft.scheduledDate);
-      if (draft.selectedAthleteIds[0]) setCalendarAthleteId(draft.selectedAthleteIds[0]);
+      if (draft.editTarget) {
+        // Resuming an Edit Assigned Workout target: the athlete picker is
+        // hidden and Save Changes never reads selectedAthleteIds — the
+        // athlete is fixed by the scheduled workout being edited, so
+        // restoring it here is inert, not a new assignment decision.
+        setSelectedAthleteIds([draft.editTarget.athleteId]);
+        setCalendarAthleteId(draft.editTarget.athleteId);
+      } else {
+        // A fresh new-workout draft's athlete selection is NEVER replayed
+        // verbatim: silently re-checking whoever was selected in a prior,
+        // unrelated session would re-arm Build & Assign against them
+        // without the Coach choosing that just now. Default to only the
+        // current calendar athlete instead — identical to a brand-new
+        // "+ Add Workout" click — so assigning to anyone else requires a
+        // deliberate re-selection.
+        setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
+      }
       setEditTarget(draft.editTarget);
       setProgrammingMode("BUILD");
       setEditorOpen(true);
       setDraftRestoredNotice(true);
     });
-  }, [coachId]);
+  }, [coachId, athletes, calendarAthleteId]);
 
   // Autosave: debounce briefly, then serialize the current builder state to
   // localStorage. Only while actively authoring/editing in Build mode —
@@ -1066,7 +1087,7 @@ export default function CoachCalendarPage() {
               </button>
             </div> : (
               <form onSubmit={editTarget ? handleSaveChanges : handleBuildAndAssign} className="mt-4 grid gap-4">
-                {draftRestoredNotice && <Notice tone="success">Draft restored from your last session.</Notice>}
+                {draftRestoredNotice && <Notice tone="success">{editTarget ? "Draft restored from your last session." : "Draft restored from your last session. Please re-check who this should be assigned to."}</Notice>}
 
                 {!editTarget && <label className="block">
                   <span className="mb-1.5 block text-sm font-semibold text-slate-700">Add Workout Name <span className="font-normal text-slate-500">optional</span></span>

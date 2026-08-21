@@ -13,6 +13,15 @@
 // server-generated id that isn't already a stable Exercise id the builder
 // requires anyway (exercise.id is looked up/created independently of this
 // draft, same as a normal Add Exercise).
+//
+// selectedAthleteIds is stored for shape completeness but is deliberately
+// NOT replayed verbatim on restore (see the restore effect in page.tsx):
+// blindly re-checking whoever was selected in a prior session could arm
+// Build & Assign against athletes the Coach never chose in *this* session.
+// The page instead re-derives a safe default (just the current calendar
+// athlete) unless the draft is resuming an Edit Assigned Workout target,
+// whose single athlete is fixed and inert (the picker is hidden and Save
+// Changes never reads this field).
 "use client";
 
 export type ExerciseScope = "SYSTEM" | "PRIVATE";
