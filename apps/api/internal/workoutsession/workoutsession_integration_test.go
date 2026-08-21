@@ -225,6 +225,69 @@ func TestCreateSetLogConcurrency(t *testing.T) {
 	}
 }
 
+// TestStartSerializesWithConcurrentScheduledWorkoutLock covers the
+// concurrency guarantee documented on Start: it locks the same
+// scheduled_workouts row `FOR UPDATE OF sw` that scheduledworkout.Update
+// locks, so the two can never interleave. Rather than racing against
+// Update's own (fast, hard-to-pause) transaction, this test holds that
+// exact lock directly — simulating Update mid-flight — and asserts Start
+// blocks for as long as the lock is held, then proceeds the moment it is
+// released.
+func TestStartSerializesWithConcurrentScheduledWorkoutLock(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach, athlete := integrationUser(t, "COACH"), integrationUser(t, "ATHLETE")
+	integrationConnect(t, coach, athlete)
+	reps := 5
+	w, err := workout.Create(ctx, integrationPool, coach, workout.CreateInput{
+		Name:      integrationPrefix + " lock",
+		Exercises: []workout.CreateExerciseInput{{Name: integrationPrefix + " lock exercise", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := scheduledworkout.Create(ctx, integrationPool, coach, scheduledworkout.CreateInput{WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduledWorkoutID := created[0].ID
+
+	lockTx, err := integrationPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lockedAthleteID string
+	if err := lockTx.QueryRow(ctx, `SELECT athlete_id FROM scheduled_workouts WHERE id = $1 FOR UPDATE`, scheduledWorkoutID).Scan(&lockedAthleteID); err != nil {
+		t.Fatal(err)
+	}
+
+	startReturned := make(chan error, 1)
+	go func() {
+		_, _, err := workoutsession.Start(context.Background(), integrationPool, athlete, scheduledWorkoutID)
+		startReturned <- err
+	}()
+
+	select {
+	case err := <-startReturned:
+		t.Fatalf("Start returned (err=%v) while a concurrent transaction still held the scheduled_workouts row lock", err)
+	case <-time.After(300 * time.Millisecond):
+		// Expected: Start is blocked waiting for the lock.
+	}
+
+	if err := lockTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-startReturned:
+		if err != nil {
+			t.Fatalf("Start after lock release: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start did not proceed after the competing lock was released")
+	}
+}
+
 func TestGetClassifiesLegacyLinkedAndExtraLogs(t *testing.T) {
 	requireIntegrationDB(t)
 	ctx := context.Background()
