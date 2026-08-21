@@ -1444,7 +1444,12 @@ export default function CoachCalendarPage() {
                       : " "}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={handleSaveDraft} disabled={programmingControlsDisabled} className="min-h-10 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Save Draft</button>
+                    {/* The confirmation lands on the button itself. Autosave
+                        has usually already written the status line to the
+                        left, so changing only that line reads as "nothing
+                        happened" — it is small, grey, in a corner, and not
+                        where the Coach is looking when they click. */}
+                    <button type="button" onClick={handleSaveDraft} disabled={programmingControlsDisabled} className={`min-h-10 rounded-xl border px-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${draftJustSaved ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}>{draftJustSaved ? "Saved ✓" : "Save Draft"}</button>
                     <button type="button" onClick={handleDiscardDraft} disabled={programmingControlsDisabled} className="min-h-10 rounded-xl border border-red-200 px-3 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">Discard Draft</button>
                   </div>
                 </div>
