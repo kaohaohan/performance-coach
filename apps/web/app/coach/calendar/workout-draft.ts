@@ -115,15 +115,23 @@ export function loadDraft(coachId: string): WorkoutBuilderDraft | null {
 // current time. Callers debounce their own autosave calls; this function
 // itself never debounces so it also serves the explicit "Save Draft"
 // action, which must write synchronously.
-export function saveDraft(coachId: string, content: WorkoutBuilderDraftContent): void {
-  if (typeof window === "undefined") return;
-  const draft: WorkoutBuilderDraft = { ...content, version: DRAFT_VERSION, savedAt: new Date().toISOString() };
+//
+// Returns the ISO timestamp it stamped, or null if the write did not happen.
+// Callers use the timestamp to show when the draft was last saved, and the
+// null to tell the Coach their browser is refusing to store it — which was
+// previously silent, leaving a Coach who believed their work was safe.
+export function saveDraft(coachId: string, content: WorkoutBuilderDraftContent): string | null {
+  if (typeof window === "undefined") return null;
+  const savedAt = new Date().toISOString();
+  const draft: WorkoutBuilderDraft = { ...content, version: DRAFT_VERSION, savedAt };
   try {
     window.localStorage.setItem(draftKey(coachId), JSON.stringify(draft));
+    return savedAt;
   } catch {
     // localStorage can throw (quota exceeded, private browsing, disabled
     // storage). Draft persistence degrades to in-memory-only in that case;
     // it must never break the builder itself.
+    return null;
   }
 }
 
