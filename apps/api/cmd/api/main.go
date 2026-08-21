@@ -1,15 +1,17 @@
-// Command api is the Performance Coach Go API entrypoint.
-//
-// V0.1 scope: process lifecycle, a verified PostgreSQL connection pool, and
-// /health + /ready endpoints. No domain routes yet.
+// Command api is the Performance Coach Go API entrypoint. It is one of
+// three entrypoints built from this module (api, migrate, bootstrap;
+// docs/deployment-architecture-v0.2.md §9) and is the only one that serves
+// HTTP traffic or verifies Firebase ID tokens. It never runs schema
+// migrations or bootstrap data creation itself.
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -19,9 +21,14 @@ import (
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/athlete"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/coachsignup"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/config"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/db"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/httprate"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/invitecode"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
@@ -29,39 +36,88 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	// Built first, before config.LoadAPI(): a missing/invalid environment
+	// variable is then reported as one structured ERROR line like every
+	// other startup fact, instead of a plain-text log.Fatal.
+	logger := logging.New(os.Stdout)
+	slog.SetDefault(logger)
+
+	if err := run(logger); err != nil {
+		logger.Error("fatal startup error", "error", err.Error())
+		os.Exit(1)
 	}
 }
 
-func run() error {
-	cfg, err := config.Load()
+func run(logger *slog.Logger) error {
+	cfg, err := config.LoadAPI()
 	if err != nil {
 		return err
 	}
 
-	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Separate timeout budgets: DB connectivity and Firebase Admin SDK setup
+	// are independent dependencies. On a Cloud Run cold start, a slow Cloud
+	// SQL connector handshake must not starve Firebase's own budget (or vice
+	// versa) by sharing one deadline between two unrelated sequential calls.
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dbCancel()
 
-	pool, err := db.NewPool(startupCtx, cfg.DatabaseURL)
+	pool, err := db.NewPool(dbCtx, cfg.DatabaseURL, db.DefaultMaxConns)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	log.Println("database connection verified")
+	// Best-effort: never fails startup (docs/deployment-architecture-v0.2.md
+	// §12 "the migration ledger version if applicable"). See
+	// migrate.LatestAppliedVersion's doc comment for what "best-effort"
+	// covers — no ledger table yet is not an error, but a real query
+	// failure is at least surfaced at WARNING rather than silently dropped.
+	migrationVersion, migrationKnown, err := migrate.LatestAppliedVersion(dbCtx, pool)
+	if err != nil {
+		logger.Warn("could not determine migration ledger version", "error", err.Error())
+	}
 
-	verifier, err := authn.NewVerifier(startupCtx, cfg.FirebaseProjectID)
+	bootFields := []any{
+		"port", cfg.Port,
+		"firebase_project_id", cfg.FirebaseProjectID,
+		"db_ping", "ok",
+	}
+	if migrationKnown {
+		bootFields = append(bootFields, "migration_version", migrationVersion)
+	}
+	logger.Info("api starting", bootFields...)
+
+	firebaseCtx, firebaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer firebaseCancel()
+
+	verifier, err := authn.NewVerifier(firebaseCtx, cfg.FirebaseProjectID)
 	if err != nil {
 		return err
 	}
 	authMiddleware := authn.Middleware(verifier, pool)
+	firebaseOnlyMiddleware := authn.FirebaseOnlyMiddleware(verifier)
+
+	// Preview and redeem are the only publicly (or Firebase-only)
+	// reachable domain routes; both get a per-IP token bucket
+	// (docs/athlete-onboarding-invite-codes-v0.1.md §5.6). Rates match the
+	// doc's suggestion; redeem's burst is an implementer choice (the doc
+	// only pinned its steady rate) — kept lower than preview's since
+	// redeem does real writes.
+	previewLimiter := httprate.New(20, 10)
+	redeemLimiter := httprate.New(10, 5)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
+	mux.Handle("POST /api/v1/coach-signup", firebaseOnlyMiddleware(handleCoachSignup(pool)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
+	mux.Handle("DELETE /api/v1/athletes/{athleteId}", authMiddleware(handleRemoveAthlete(pool)))
+	mux.Handle("POST /api/v1/invite-codes", authMiddleware(handleCreateInviteCode(pool)))
+	mux.Handle("GET /api/v1/invite-codes", authMiddleware(handleListInviteCodes(pool)))
+	mux.Handle("POST /api/v1/invite-codes/{id}/revoke", authMiddleware(handleRevokeInviteCode(pool)))
+	mux.Handle("GET /api/v1/invite-codes/{code}/preview", previewLimiter.Middleware(handleInviteCodePreview(pool)))
+	mux.Handle("POST /api/v1/invite-codes/{code}/redeem", redeemLimiter.Middleware(firebaseOnlyMiddleware(handleRedeemInviteCode(pool))))
 	mux.Handle("GET /api/v1/exercises", authMiddleware(handleListExercises(pool)))
 	mux.Handle("POST /api/v1/exercises", authMiddleware(handleCreateExercise(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
@@ -74,9 +130,42 @@ func run() error {
 	mux.Handle("POST /api/v1/sessions/{sessionId}/complete", authMiddleware(handleCompleteSession(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/set-logs", authMiddleware(handleCreateSetLog(pool)))
 
+	// requestTimeout bounds the worst case for a single request end to end,
+	// including any in-flight database call. Without this, main.go had no
+	// deadline of its own: a handler's r.Context() is canceled on client
+	// disconnect or when the handler returns, not on a query simply taking
+	// too long, so a slow query could otherwise hold a pooled connection
+	// (and a Cloud Run concurrency slot) indefinitely
+	// (docs/deployment-architecture-v0.2.md §7). http.TimeoutHandler cancels
+	// the handler's context when it fires, so a database call using
+	// r.Context() is canceled along with the response. Verify this bound
+	// under D6 load rather than assuming it is generous enough.
+	const requestTimeout = 10 * time.Second
+	handler := http.TimeoutHandler(mux, requestTimeout, `{"error":{"code":"DEADLINE_EXCEEDED","message":"request timed out"}}`)
+
+	// logging.Middleware must wrap outside TimeoutHandler, not inside the
+	// mux it wraps: TimeoutHandler discards headers set by the inner
+	// handler when it fires, but a header already set on the
+	// ResponseWriter it was given survives both the timeout and the happy
+	// path. Wrapping it here is what keeps X-Request-Id present on a
+	// request that times out.
+	handler = logging.Middleware(logger)(handler)
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: mux,
+		Handler: handler,
+		// Without this, a client that opens a connection and sends headers
+		// slowly can hold it open indefinitely (slowloris). On Cloud Run
+		// that connection also occupies one of the instance's Concurrency
+		// slots, so an unbounded header read can crowd out real requests.
+		ReadHeaderTimeout: 5 * time.Second,
+		// ReadTimeout/WriteTimeout are a second, connection-level backstop
+		// behind the per-request TimeoutHandler above: they bound the whole
+		// request/response cycle at the transport level regardless of
+		// handler behavior. Set comfortably above requestTimeout so the
+		// handler-level timeout is normally what fires.
+		ReadTimeout:  requestTimeout + 5*time.Second,
+		WriteTimeout: requestTimeout + 5*time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -84,7 +173,7 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		log.Printf("listening on :%s", cfg.Port)
+		logger.Info("listening", "port", cfg.Port)
 		serveErr <- srv.ListenAndServe()
 	}()
 
@@ -94,7 +183,7 @@ func run() error {
 			return err
 		}
 	case <-ctx.Done():
-		log.Println("shutdown signal received")
+		logger.Info("shutdown signal received")
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
@@ -141,6 +230,56 @@ func handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// coachSignupRequest is the wire shape for a POST /api/v1/coach-signup
+// request body. name is the only field this endpoint accepts from the
+// client, used only when a brand-new users row is created — never reused
+// to overwrite an existing row's name. firebaseUid, role, coachId, and
+// athleteId are deliberately absent: identity comes solely from the
+// verified token attached by firebaseOnlyMiddleware, and role is always
+// hard-coded server-side to COACH.
+type coachSignupRequest struct {
+	Name string `json:"name"`
+}
+
+// handleCoachSignup is the self-service Coach registration entry point.
+// It sits behind firebaseOnlyMiddleware, not authMiddleware: the caller
+// may have no users row yet, which is the normal state for a brand-new
+// coach signing up, not an edge case — the same reasoning
+// handleRedeemInviteCode already documents for athletes.
+func handleCoachSignup(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := authn.IdentityFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req coachSignupRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		created, err := coachsignup.Signup(r.Context(), pool, identity, req.Name)
+		if err != nil {
+			var validationErr *coachsignup.ValidationError
+			switch {
+			case errors.Is(err, coachsignup.ErrAthleteConflict):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "firebase account is already registered as an athlete")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(created)
+	}
+}
+
 // handleAthletes returns the athletes connected to the caller, who must be
 // a COACH. Authorization (role check) happens in athlete.ListForCoach, not
 // here; this handler only decodes/encodes and picks the status code.
@@ -158,13 +297,228 @@ func handleAthletes(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 				return
 			}
-			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			authn.WriteInternalError(w, r, err)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(athletes)
+	}
+}
+
+// createInviteCodeRequest is the wire shape for a POST /api/v1/invite-codes
+// request body (docs/athlete-onboarding-invite-codes-v0.1.md §5.1). Both
+// fields are optional: an omitted description means no description, and an
+// omitted expiresInDays defaults to 30.
+type createInviteCodeRequest struct {
+	Description   *string `json:"description"`
+	ExpiresInDays *int    `json:"expiresInDays"`
+}
+
+// handleCreateInviteCode creates one reusable invite code owned by the
+// caller. Coach only.
+func handleCreateInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req createInviteCodeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		created, err := invitecode.Create(r.Context(), pool, user, invitecode.CreateInput{
+			Description:   req.Description,
+			ExpiresInDays: req.ExpiresInDays,
+		})
+		if err != nil {
+			var validationErr *invitecode.ValidationError
+			switch {
+			case errors.Is(err, invitecode.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(created)
+	}
+}
+
+// handleListInviteCodes returns the caller's own invite codes, newest
+// first, including expired and revoked ones. Coach only.
+func handleListInviteCodes(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		codes, err := invitecode.ListForCoach(r.Context(), pool, user)
+		if err != nil {
+			if errors.Is(err, invitecode.ErrForbidden) {
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+				return
+			}
+			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(codes)
+	}
+}
+
+// handleRevokeInviteCode revokes one invite code owned by the caller.
+// Revocation is forward-only and idempotent: re-revoking an already
+// revoked code returns 200, not an error. An unknown id or another
+// coach's id both produce 404 — one indistinguishable response, per
+// docs/athlete-onboarding-invite-codes-v0.1.md §5.1. Coach only.
+func handleRevokeInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		id := r.PathValue("id")
+
+		revoked, err := invitecode.Revoke(r.Context(), pool, user, id)
+		if err != nil {
+			switch {
+			case errors.Is(err, invitecode.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.Is(err, invitecode.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code not found")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(revoked)
+	}
+}
+
+// handleInviteCodePreview returns the public preview for an invite code.
+// Unauthenticated — not wrapped in authMiddleware or
+// firebaseOnlyMiddleware. Unknown, malformed, expired, and revoked codes
+// all produce the identical 404, so this endpoint cannot be used to
+// confirm a code once existed
+// (docs/athlete-onboarding-invite-codes-v0.1.md §5.2).
+func handleInviteCodePreview(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		preview, err := invitecode.PreviewInviteCode(r.Context(), pool, r.PathValue("code"))
+		if err != nil {
+			if errors.Is(err, invitecode.ErrNotFound) {
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code is not valid")
+				return
+			}
+			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(preview)
+	}
+}
+
+// redeemInviteCodeRequest is the wire shape for a POST
+// /api/v1/invite-codes/{code}/redeem request body
+// (docs/athlete-onboarding-invite-codes-v0.1.md §5.3). name is the only
+// field this endpoint accepts from the client, and it is display profile
+// data used only when a brand-new users row is created — never identity,
+// never role, never reused to overwrite an existing row. firebaseUid,
+// role, coachId, and athleteId are deliberately absent: identity comes
+// solely from the verified token attached by firebaseOnlyMiddleware, and
+// role/coachId/athleteId are derived entirely server-side.
+type redeemInviteCodeRequest struct {
+	Name string `json:"name"`
+}
+
+// handleRedeemInviteCode redeems an invite code for the Firebase-verified
+// caller. This handler sits behind firebaseOnlyMiddleware, not
+// authMiddleware: the caller may have no users row yet, which is the
+// normal state for a brand-new athlete, not an edge case
+// (docs/athlete-onboarding-invite-codes-v0.1.md §5.3).
+func handleRedeemInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := authn.IdentityFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req redeemInviteCodeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		redeemed, err := invitecode.Redeem(r.Context(), pool, identity, r.PathValue("code"), invitecode.RedeemInput{Name: req.Name})
+		if err != nil {
+			var validationErr *invitecode.ValidationError
+			switch {
+			case errors.Is(err, invitecode.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code is not valid")
+			case errors.Is(err, invitecode.ErrCoachCannotRedeem):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "a coach account cannot redeem an invite code")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(redeemed)
+	}
+}
+
+// handleRemoveAthlete detaches the caller coach's coach_athletes
+// relationship with one athlete. It never deletes the athlete's users row
+// and never touches Firebase (docs/athlete-onboarding-invite-codes-v0.1.md
+// §5.4, decision #10).
+func handleRemoveAthlete(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		err := athlete.Remove(r.Context(), pool, user, r.PathValue("athleteId"))
+		if err != nil {
+			switch {
+			case errors.Is(err, athlete.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.Is(err, athlete.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
+			default:
+				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -189,7 +543,7 @@ func handleListExercises(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 				return
 			}
-			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			authn.WriteInternalError(w, r, err)
 			return
 		}
 
@@ -228,7 +582,7 @@ func handleCreateExercise(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.As(err, &conflictErr):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", conflictErr.Error())
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -331,7 +685,7 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -358,7 +712,7 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
 				return
 			}
-			authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+			authn.WriteInternalError(w, r, err)
 			return
 		}
 
@@ -414,7 +768,7 @@ func handleCreateScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, scheduledworkout.ErrAthletesNotConnected):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "one or more athletes are not connected to caller")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -471,7 +825,7 @@ func handleListScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, scheduledworkout.ErrAthleteNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -509,7 +863,7 @@ func handleListMyScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, scheduledworkout.ErrForbidden):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not an athlete")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -546,7 +900,7 @@ func handleStartSession(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrCompleted):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session already completed")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -587,7 +941,7 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -624,7 +978,7 @@ func handleCompleteSession(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrCompleted):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session already completed")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}
@@ -702,7 +1056,7 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, workoutsession.ErrPlannedSetAlreadyLogged):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "scheduled planned set already logged")
 			default:
-				authn.WriteError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+				authn.WriteInternalError(w, r, err)
 			}
 			return
 		}

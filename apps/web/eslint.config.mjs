@@ -9,6 +9,9 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // A local mobile-LAN dev server may use this alternate Next.js output.
+    // Like `.next`, it is generated and must never be linted as source.
+    ".next-mobile/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

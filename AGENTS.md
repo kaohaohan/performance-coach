@@ -17,7 +17,8 @@ Before implementing any feature, read only:
 3. docs/go-backend-api-contract-v0.1.md when backend/API work is involved
 4. docs/database-schema-relationships.md when data/schema work is involved
 5. docs/frontend-ui-spec.md when frontend/UX work is involved
-6. Files directly related to the task being modified
+6. The active Task Doc (`docs/tasks/YYYY-MM-DD-<slug>.md`, see §9) once one exists for the task
+7. Files directly related to the task being modified
 
 Do not scan the whole repository unless required.
 
@@ -306,6 +307,8 @@ Typical full-stack split:
 
 Do not implement all phases at once unless explicitly requested.
 
+For L/XL tasks, record the sub-task breakdown in the Task Doc's Estimate section (§9) — do not leave it only in chat.
+
 ---
 
 ## 8. Phase Gate Protocol
@@ -344,7 +347,55 @@ Do not continue until the user approves.
 
 ---
 
-## 9. Small Task Exception
+## 9. Task Documentation Requirement
+
+Every task that goes through the Phase Gate Protocol (§8) — i.e. everything except tasks qualifying for the Small Task Exception (§11) — requires a committed Task Doc before implementation starts.
+
+Create the doc at:
+
+```
+docs/tasks/YYYY-MM-DD-<slug>.md
+```
+
+using `docs/tasks/_template.md`. It must contain, in this order:
+
+1. **Feasibility Analysis** — the options considered, their trade-offs, which one was selected and why, plus risks/unknowns and dependencies. This section evaluates; it does not design.
+2. **Technical Design** — the detailed design of the selected option: data flow, schema changes, API changes, state transitions, frontend state impact, backward compatibility. Only the subsections the task actually touches.
+3. **Estimate** — size per §7 (S/M/L/XL); for L/XL, the ordered sub-task breakdown.
+4. **Progress Tracker** — a checklist/table of phases or sub-tasks with status (Not Started / In Progress / Blocked / Done).
+
+Sections 1 and 2 are deliberately separate. Choosing an approach and designing it are different decisions, and collapsing them hides the reasoning behind the choice.
+
+Rules:
+
+- The Phase 0 report (§8) links to this Task Doc instead of restating its contents.
+- The Progress Tracker must be kept current as work proceeds, not written once and abandoned.
+- The Completion Report (§21) must reflect the final state of the Progress Tracker, including any deviations from the original plan.
+- The doc is committed to git alongside, or just ahead of, the implementation change so it persists as project history — it is not a chat-only artifact.
+
+Do not begin implementation without an existing Task Doc, except under the Small Task Exception (§11).
+
+---
+
+## 10. AI Session & Model Discipline
+
+This applies to both Claude Code and Codex sessions working in this repository.
+
+**Planning session** — Phase 0 inspection (§8) and authoring the Task Doc (§9): use the strongest available reasoning configuration — the highest-capability model and highest effort/thinking level the tool offers.
+
+**Implementation session** — writing the actual code once the Task Doc is approved: run as a separate session from planning. This session may use a lower-cost model and/or lower effort setting, since scope and approach are already constrained by the approved Task Doc.
+
+If unknowns surface mid-implementation that require re-architecting rather than just executing the plan:
+
+1. Stop.
+2. Return to a high-effort planning session to update the Task Doc.
+3. Do not improvise a new approach inside the low-effort implementation session.
+
+Rationale: reserve expensive deep reasoning for architecture and risk decisions. Routine execution of an already-approved plan does not need it.
+
+---
+
+## 11. Small Task Exception
 
 Phase Gate may be skipped only when all are true:
 
@@ -366,7 +417,7 @@ Examples:
 
 ---
 
-## 10. Working Tree Safety
+## 12. Working Tree Safety
 
 Before editing:
 
@@ -395,7 +446,7 @@ rewrite history
 
 ---
 
-## 11. Environment Safety
+## 13. Environment Safety
 
 Never expose or commit:
 
@@ -414,7 +465,7 @@ Secrets belong in environment variables.
 
 ---
 
-## 12. Database Safety
+## 14. Database Safety
 
 For local development:
 
@@ -441,7 +492,7 @@ reset production DB
 
 ---
 
-## 13. Cloud Safety
+## 15. Cloud Safety
 
 Do not modify production cloud resources unless explicitly requested.
 
@@ -461,7 +512,7 @@ Deployment comes only after the local core loop works.
 
 ---
 
-## 14. AI / LLM Safety Contract
+## 16. AI / LLM Safety Contract
 
 Voice and video AI are adapters around the application domain.
 
@@ -509,7 +560,7 @@ Coach corrections must be preserved when implemented.
 
 ---
 
-## 15. Verification Rules
+## 17. Verification Rules
 
 Never mark work complete because:
 
@@ -563,7 +614,7 @@ Use the smallest relevant test set first.
 
 ---
 
-## 16. Definition of Done
+## 18. Definition of Done
 
 A task is complete only when:
 
@@ -578,7 +629,7 @@ Do not call work complete if verification failed.
 
 ---
 
-## 17. Documentation Rules
+## 19. Documentation Rules
 
 Update documentation only when necessary.
 
@@ -605,7 +656,7 @@ Do not rewrite unrelated documentation.
 
 ---
 
-## 18. Output Discipline
+## 20. Output Discipline
 
 Do not restate the entire architecture after every task.
 
@@ -624,7 +675,9 @@ over reproducing the whole file.
 
 ---
 
-## 19. Completion Report
+## 21. Completion Report
+
+Before reporting, update the Task Doc's Progress Tracker (§9) to reflect the final state, including any deviations from the original plan.
 
 At the end of each approved implementation phase, report only:
 
@@ -652,7 +705,7 @@ Then stop.
 
 ---
 
-## 20. Engineering Principle
+## 22. Engineering Principle
 
 Optimize for:
 
@@ -680,7 +733,7 @@ The MVP should leave reasonable extension points without implementing future fea
 
 ---
 
-## 21. Founder Constraint
+## 23. Founder Constraint
 
 This repository exists to validate a real product, not merely demonstrate engineering complexity.
 

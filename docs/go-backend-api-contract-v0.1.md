@@ -1,6 +1,6 @@
 # DontWorkout — Go Backend API Contract (V0.1)
 
-Status: **V0.7 — approved planned-set contract; implementation pending coordinated migration**
+Status: **V0.8 — approved planned-set contract; implementation pending coordinated migration**
 
 Target: 2026-08-16
 
@@ -9,6 +9,9 @@ Target: 2026-08-16
 Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
+
+> V0.8 變更（D1c — structured logging，`docs/deployment-architecture-v0.2.md` §12）：所有 response 新增 `X-Request-Id` header，純附加，不影響任何既有 route/request/response shape/status code，錯誤 body 仍是 `{"error":{"code","message"}}`。詳見上方 Base 一節。
+>
 
 > V0.7 architecture decision: V0.1 uses a hybrid planned-set model. Workout templates author exercise defaults plus sparse per-position overrides; scheduling resolves them into fully expanded, immutable planned-set snapshot rows; normal SetLogs explicitly reference one snapshot planned set while `setNumber` remains actual chronology. Extra SetLogs are allowed without a planned-set reference; incomplete planned positions have no SetLog and no persisted skipped row.
 
@@ -41,6 +44,7 @@ Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 
 - 所有時間: RFC 3339 UTC（`2026-08-13T00:00:00Z`）；`scheduledDate` 為純日期 `2026-08-13`
 - ID: UUID v4 (string)
 - JSON 欄位: `camelCase`（Go struct 用 json tag 對應）
+- Response header `X-Request-Id`：V0.8 新增，每個 response（含 timeout/503）都會帶。純附加，不改變任何既有 route/request/response shape/status code；一律由伺服器產生，不採信 inbound 的 `X-Request-Id`。用於對照 Cloud Logging 中對應的請求日誌（`docs/deployment-architecture-v0.2.md` §12）。錯誤格式（下方）維持 `{"error":{"code","message"}}` 不變，請求 id 不進入 body。
 
 ## Authentication
 

@@ -7,18 +7,35 @@ import { useAuth } from "@/lib/auth-context";
 
 type Role = "COACH" | "ATHLETE";
 type Exercise = { id: string; name: string; scope: "SYSTEM" | "PRIVATE" };
-type Plan = { sets: number; reps?: number; prescriptionNote?: string; rpe?: number };
+type PrescriptionMode = "REPS" | "TEXT";
+type PlannedUnit = "kg" | "lb";
+type PlanDefaults = { reps?: number; prescriptionNote?: string; load?: number; unit?: PlannedUnit; rpe?: number };
+type PlanOverride = { position: number; reps?: number; prescriptionNote?: string; load?: number; rpe?: number };
+type Plan = { setCount: number; defaults: PlanDefaults; overrides: PlanOverride[] };
 type WorkoutExercise = { workoutExerciseId: string; exerciseId: string; name: string; plan: Plan; position: number };
 type Workout = { id: string; name: string; exercises: WorkoutExercise[] };
+type DraftSetOverride = {
+  position: number;
+  prescriptionMode?: PrescriptionMode;
+  reps?: string;
+  prescriptionNote?: string;
+  load?: string;
+  rpe?: string;
+};
 type DraftExercise = {
   exercise: Exercise;
-  targetSets: string;
-  prescriptionMode: "REPS" | "TEXT";
-  targetReps: string;
-  targetPrescriptionNote: string;
-  targetRpe: string;
+  setCount: string;
+  prescriptionMode: PrescriptionMode;
+  defaultReps: string;
+  defaultPrescriptionNote: string;
+  defaultLoad: string;
+  unit: PlannedUnit;
+  defaultRpe: string;
+  overrides: DraftSetOverride[];
+  customizationOpen: boolean;
+  editingPositions: number[];
 };
-type FieldErrors = { name?: string; exercises?: string; items: Record<number, Partial<Record<"sets" | "reps" | "note" | "rpe", string>>> };
+type FieldErrors = { name?: string; exercises?: string; items: Record<number, Partial<Record<"sets" | "reps" | "note" | "load" | "rpe" | "overrides", string>>> };
 
 const initialErrors = (): FieldErrors => ({ items: {} });
 
@@ -26,9 +43,37 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
 }
 
+function compactOverride(override: DraftSetOverride): DraftSetOverride | null {
+  const next: DraftSetOverride = { position: override.position };
+  if (override.prescriptionMode !== undefined) next.prescriptionMode = override.prescriptionMode;
+  if (override.reps !== undefined && override.reps !== "") next.reps = override.reps;
+  if (override.prescriptionNote !== undefined && override.prescriptionNote.trim() !== "") next.prescriptionNote = override.prescriptionNote;
+  if (override.load !== undefined && override.load !== "") next.load = override.load;
+  if (override.rpe !== undefined && override.rpe !== "") next.rpe = override.rpe;
+  return Object.keys(next).length === 1 ? null : next;
+}
+
+function updateDraftOverride(overrides: DraftSetOverride[], position: number, update: Partial<DraftSetOverride>): DraftSetOverride[] {
+  const existing = overrides.find((override) => override.position === position) ?? { position };
+  const next = compactOverride({ ...existing, ...update, position });
+  return next === null
+    ? overrides.filter((override) => override.position !== position)
+    : [...overrides.filter((override) => override.position !== position), next].sort((left, right) => left.position - right.position);
+}
+
+function clearDraftOverrideProperty(overrides: DraftSetOverride[], position: number, property: "prescription" | "load" | "rpe"): DraftSetOverride[] {
+  if (property === "prescription") return updateDraftOverride(overrides, position, { prescriptionMode: undefined, reps: undefined, prescriptionNote: undefined });
+  return updateDraftOverride(overrides, position, { [property]: undefined });
+}
+
 function planLabel(plan: Plan): string {
-  const prescription = plan.reps ? `${plan.sets} × ${plan.reps}` : `${plan.sets} set${plan.sets === 1 ? "" : "s"} · ${plan.prescriptionNote}`;
-  return plan.rpe ? `${prescription} · RPE ${plan.rpe}` : prescription;
+  const defaults = plan.defaults;
+  const prescription = defaults.reps === undefined ? `${plan.setCount} set${plan.setCount === 1 ? "" : "s"} · ${defaults.prescriptionNote ?? ""}` : `${plan.setCount} × ${defaults.reps}`;
+  const details = [prescription];
+  if (defaults.load !== undefined) details.push(`${defaults.load}${defaults.unit ? ` ${defaults.unit}` : ""}`);
+  if (defaults.rpe !== undefined) details.push(`RPE ${defaults.rpe}`);
+  if (plan.overrides.length > 0) details.push(`${plan.overrides.length} custom set${plan.overrides.length === 1 ? "" : "s"}`);
+  return details.filter(Boolean).join(" · ");
 }
 
 export default function CoachWorkoutsPage() {
@@ -155,11 +200,16 @@ export default function CoachWorkoutsPage() {
     if (draftExercises.some((item) => item.exercise.id === exercise.id)) return;
     setDraftExercises((previous) => [...previous, {
       exercise,
-      targetSets: "",
+      setCount: "",
       prescriptionMode: "REPS",
-      targetReps: "",
-      targetPrescriptionNote: "",
-      targetRpe: "",
+      defaultReps: "",
+      defaultPrescriptionNote: "",
+      defaultLoad: "",
+      unit: "kg",
+      defaultRpe: "",
+      overrides: [],
+      customizationOpen: false,
+      editingPositions: [],
     }]);
     setFieldErrors((previous) => ({ ...previous, exercises: undefined }));
     setPickerOpen(false);
@@ -170,6 +220,22 @@ export default function CoachWorkoutsPage() {
   function updateExercise(index: number, update: Partial<DraftExercise>) {
     setDraftExercises((previous) => previous.map((item, itemIndex) => itemIndex === index ? { ...item, ...update } : item));
     setFieldErrors((previous) => ({ ...previous, items: { ...previous.items, [index]: {} } }));
+  }
+
+  function updateSetCount(index: number, value: string) {
+    const nextCount = Number(value);
+    const item = draftExercises[index];
+    if (Number.isInteger(nextCount) && nextCount > 0 && item.overrides.some((override) => override.position > nextCount)) {
+      setFieldErrors((previous) => ({
+        ...previous,
+        items: {
+          ...previous.items,
+          [index]: { ...previous.items[index], sets: "Remove overrides above the new set count before reducing sets." },
+        },
+      }));
+      return;
+    }
+    updateExercise(index, { setCount: value, editingPositions: item.editingPositions.filter((position) => position <= nextCount) });
   }
 
   function removeExercise(index: number) {
@@ -193,10 +259,19 @@ export default function CoachWorkoutsPage() {
     if (draftExercises.length === 0) errors.exercises = "Add at least one exercise.";
     draftExercises.forEach((item, index) => {
       const itemErrors: FieldErrors["items"][number] = {};
-      if (!/^\d+$/.test(item.targetSets) || Number(item.targetSets) < 1) itemErrors.sets = "Enter a whole number of at least 1.";
-      if (item.prescriptionMode === "REPS" && (!/^\d+$/.test(item.targetReps) || Number(item.targetReps) < 1)) itemErrors.reps = "Enter a whole number of at least 1.";
-      if (item.prescriptionMode === "TEXT" && item.targetPrescriptionNote.trim() === "") itemErrors.note = "Instruction is required.";
-      if (item.targetRpe.trim() !== "" && (!Number.isFinite(Number(item.targetRpe)) || Number(item.targetRpe) < 1 || Number(item.targetRpe) > 10)) itemErrors.rpe = "RPE must be between 1 and 10.";
+      if (!/^\d+$/.test(item.setCount) || Number(item.setCount) < 1) itemErrors.sets = "Enter a whole number of at least 1.";
+      if (item.prescriptionMode === "REPS" && (!/^\d+$/.test(item.defaultReps) || Number(item.defaultReps) < 1)) itemErrors.reps = "Enter a whole number of at least 1.";
+      if (item.prescriptionMode === "TEXT" && item.defaultPrescriptionNote.trim() === "") itemErrors.note = "Instruction is required.";
+      if (item.defaultLoad.trim() !== "" && (!Number.isFinite(Number(item.defaultLoad)) || Number(item.defaultLoad) < 0)) itemErrors.load = "Load must be 0 or greater.";
+      if (item.defaultRpe.trim() !== "" && (!Number.isFinite(Number(item.defaultRpe)) || Number(item.defaultRpe) < 1 || Number(item.defaultRpe) > 10)) itemErrors.rpe = "RPE must be between 1 and 10.";
+      item.overrides.forEach((override) => {
+        if (override.position < 1 || override.position > Number(item.setCount)) itemErrors.overrides = "Each individual override must be within the set count.";
+        if ((override.reps === undefined && override.prescriptionNote === undefined && override.prescriptionMode !== undefined) || (override.reps !== undefined && override.prescriptionNote !== undefined)) itemErrors.overrides = "Each individual set needs either reps or text, not both.";
+        if (override.reps !== undefined && (!/^\d+$/.test(override.reps) || Number(override.reps) < 1)) itemErrors.overrides = "Individual reps must be a whole number of at least 1.";
+        if (override.prescriptionNote !== undefined && override.prescriptionNote.trim() === "") itemErrors.overrides = "Individual text instruction is required.";
+        if (override.load !== undefined && (!Number.isFinite(Number(override.load)) || Number(override.load) < 0)) itemErrors.overrides = "Individual load must be 0 or greater.";
+        if (override.rpe !== undefined && (!Number.isFinite(Number(override.rpe)) || Number(override.rpe) < 1 || Number(override.rpe) > 10)) itemErrors.overrides = "Individual RPE must be between 1 and 10.";
+      });
       if (Object.keys(itemErrors).length > 0) errors.items[index] = itemErrors;
     });
     return errors;
@@ -219,11 +294,22 @@ export default function CoachWorkoutsPage() {
           name: draftName.trim(),
           exercises: draftExercises.map((item) => ({
             name: item.exercise.name,
-            targetSets: Number(item.targetSets),
-            ...(item.prescriptionMode === "REPS"
-              ? { targetReps: Number(item.targetReps) }
-              : { targetPrescriptionNote: item.targetPrescriptionNote.trim() }),
-            ...(item.targetRpe.trim() === "" ? {} : { targetRpe: Number(item.targetRpe) }),
+            plan: {
+              setCount: Number(item.setCount),
+              defaults: {
+                ...(item.prescriptionMode === "REPS" ? { reps: Number(item.defaultReps) } : { prescriptionNote: item.defaultPrescriptionNote.trim() }),
+                ...(item.defaultLoad.trim() === "" ? {} : { load: Number(item.defaultLoad) }),
+                ...(item.defaultLoad.trim() === "" && !item.overrides.some((override) => override.load !== undefined) ? {} : { unit: item.unit }),
+                ...(item.defaultRpe.trim() === "" ? {} : { rpe: Number(item.defaultRpe) }),
+              },
+              overrides: item.overrides.map((override) => ({
+                position: override.position,
+                ...(override.reps === undefined ? {} : { reps: Number(override.reps) }),
+                ...(override.prescriptionNote === undefined ? {} : { prescriptionNote: override.prescriptionNote.trim() }),
+                ...(override.load === undefined ? {} : { load: Number(override.load) }),
+                ...(override.rpe === undefined ? {} : { rpe: Number(override.rpe) }),
+              })),
+            },
           })),
         },
       });
@@ -274,7 +360,7 @@ export default function CoachWorkoutsPage() {
               </div>
               {fieldErrors.exercises && <div className="mb-3"><Notice>{fieldErrors.exercises}</Notice></div>}
               <div className="grid gap-4">
-                {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={fieldErrors.items[index]} saving={saving} onChange={(update) => updateExercise(index, update)} onMove={moveExercise} onRemove={removeExercise} />)}
+                {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={fieldErrors.items[index]} saving={saving} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} />)}
               </div>
             </section>
 
@@ -302,17 +388,41 @@ function WorkoutLibrary({ workouts, loadError, onCreate }: { workouts: Workout[]
   </>;
 }
 
-function DraftExerciseCard({ item, index, total, errors, saving, onChange, onMove, onRemove }: { item: DraftExercise; index: number; total: number; errors?: FieldErrors["items"][number]; saving: boolean; onChange: (update: Partial<DraftExercise>) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void }) {
+function DraftExerciseCard({ item, index, total, errors, saving, onChange, onSetCountChange, onMove, onRemove }: { item: DraftExercise; index: number; total: number; errors?: FieldErrors["items"][number]; saving: boolean; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void }) {
   const textMode = item.prescriptionMode === "TEXT";
+  const setCount = /^\d+$/.test(item.setCount) ? Number(item.setCount) : 0;
+  const effectivePrescription = (position: number) => {
+    const override = item.overrides.find((candidate) => candidate.position === position);
+    const mode = override?.prescriptionMode ?? (override?.reps !== undefined ? "REPS" : override?.prescriptionNote !== undefined ? "TEXT" : textMode ? "TEXT" : "REPS");
+    return mode === "REPS" ? { mode, value: override?.reps ?? (textMode ? "" : item.defaultReps) } : { mode, value: override?.prescriptionNote ?? (textMode ? item.defaultPrescriptionNote : "") };
+  };
+  const effectiveValue = (position: number, property: "load" | "rpe") => item.overrides.find((candidate) => candidate.position === position)?.[property] ?? (property === "load" ? item.defaultLoad : item.defaultRpe);
+  const updateOverride = (position: number, update: Partial<DraftSetOverride>) => onChange({ overrides: updateDraftOverride(item.overrides, position, update) });
+  const clearOverride = (position: number, property: "prescription" | "load" | "rpe") => onChange({ overrides: clearDraftOverrideProperty(item.overrides, position, property) });
+  const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? item.editingPositions.filter((candidate) => candidate !== position) : [...item.editingPositions, position] });
+
   return <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
     <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Exercise {index + 1}</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{item.exercise.name}</h3></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${item.exercise.scope === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{item.exercise.scope}</span></div>
     <div className="mt-5 grid gap-4 sm:grid-cols-2">
-      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Sets</span><input type="number" inputMode="numeric" min="1" step="1" value={item.targetSets} onChange={(event) => onChange({ targetSets: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>
-      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.targetRpe} onChange={(event) => onChange({ targetRpe: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>
+      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Sets</span><input type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
+      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Target RPE <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
     </div>
-    <div className="mt-2 grid gap-2 sm:grid-cols-2">{errors?.sets && <FieldError>{errors.sets}</FieldError>}{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</div>
     <fieldset className="mt-5"><legend className="text-sm font-semibold text-slate-700">Prescription</legend><div className="mt-2 flex flex-wrap gap-2"><ModeButton active={!textMode} onClick={() => onChange({ prescriptionMode: "REPS" })} disabled={saving}>Reps</ModeButton><ModeButton active={textMode} onClick={() => onChange({ prescriptionMode: "TEXT" })} disabled={saving}>Text</ModeButton></div></fieldset>
-    {textMode ? <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Instruction</span><input value={item.targetPrescriptionNote} onChange={(event) => onChange({ targetPrescriptionNote: event.target.value })} disabled={saving} placeholder="AMAP, 30 sec, 10–12" className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.note && <FieldError>{errors.note}</FieldError>}</label> : <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Reps</span><input type="number" inputMode="numeric" min="1" step="1" value={item.targetReps} onChange={(event) => onChange({ targetReps: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.reps && <FieldError>{errors.reps}</FieldError>}</label>}
+    {textMode ? <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Instruction</span><input value={item.defaultPrescriptionNote} onChange={(event) => onChange({ defaultPrescriptionNote: event.target.value })} disabled={saving} placeholder="AMAP, 30 sec, 10–12" className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.note && <FieldError>{errors.note}</FieldError>}</label> : <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Reps</span><input type="number" inputMode="numeric" min="1" step="1" value={item.defaultReps} onChange={(event) => onChange({ defaultReps: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.reps && <FieldError>{errors.reps}</FieldError>}</label>}
+    <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Planned Load <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Unit</span><select value={item.unit} onChange={(event) => onChange({ unit: event.target.value as PlannedUnit })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
+    <div className="mt-5 border-t border-slate-100 pt-4"><button type="button" onClick={() => onChange({ customizationOpen: !item.customizationOpen })} disabled={saving || setCount < 1} className="min-h-11 rounded-xl border border-teal-600 px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50">{item.customizationOpen ? "Hide individual sets" : "Customize individual sets"}</button>
+      {item.customizationOpen && <div className="mt-3 grid gap-2">{Array.from({ length: setCount }, (_, offset) => offset + 1).map((position) => {
+        const prescription = effectivePrescription(position);
+        const load = effectiveValue(position, "load");
+        const rpe = effectiveValue(position, "rpe");
+        const override = item.overrides.find((candidate) => candidate.position === position);
+        const editing = item.editingPositions.includes(position);
+        return <div key={position} className="rounded-xl border border-slate-200 p-3"><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="font-semibold text-slate-800">Set {position}</p><p className="mt-0.5 text-sm text-slate-600">{prescription.mode === "REPS" ? `${prescription.value} reps` : prescription.value}{load !== "" && ` · ${load} ${item.unit}`}{rpe !== "" && ` · RPE ${rpe}`}</p></div><button type="button" onClick={() => toggleSetEditor(position)} disabled={saving} className="min-h-10 rounded-lg px-3 text-sm font-bold text-teal-700 hover:bg-teal-50 disabled:opacity-50">{editing ? "Done" : "Edit"}</button></div>
+          {editing && <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3"><fieldset><legend className="text-sm font-semibold text-slate-700">Prescription</legend><div className="mt-2 flex gap-2"><ModeButton active={prescription.mode === "REPS"} onClick={() => updateOverride(position, { prescriptionMode: "REPS", reps: prescription.mode === "REPS" ? prescription.value : "", prescriptionNote: undefined })} disabled={saving}>Reps</ModeButton><ModeButton active={prescription.mode === "TEXT"} onClick={() => updateOverride(position, { prescriptionMode: "TEXT", reps: undefined, prescriptionNote: prescription.mode === "TEXT" ? prescription.value : "" })} disabled={saving}>Text</ModeButton>{(override?.reps !== undefined || override?.prescriptionNote !== undefined || override?.prescriptionMode !== undefined) && <button type="button" onClick={() => clearOverride(position, "prescription")} disabled={saving} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Use default</button>}</div></fieldset>
+            {prescription.mode === "REPS" ? <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Reps</span><input type="number" inputMode="numeric" min="1" step="1" value={prescription.value} onChange={(event) => updateOverride(position, { prescriptionMode: "REPS", reps: event.target.value, prescriptionNote: undefined })} disabled={saving} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label> : <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Instruction</span><input value={prescription.value} onChange={(event) => updateOverride(position, { prescriptionMode: "TEXT", reps: undefined, prescriptionNote: event.target.value })} disabled={saving} placeholder="AMAP, 30 sec, 10–12" className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>}
+            <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Load</span><input type="number" inputMode="decimal" min="0" step="0.5" value={load} onChange={(event) => updateOverride(position, { load: event.target.value })} disabled={saving} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{override?.load !== undefined && <button type="button" onClick={() => clearOverride(position, "load")} disabled={saving} className="mt-1 text-sm font-bold text-slate-600 hover:text-teal-700 disabled:opacity-50">Use default load</button>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE</span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={rpe} onChange={(event) => updateOverride(position, { rpe: event.target.value })} disabled={saving} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{override?.rpe !== undefined && <button type="button" onClick={() => clearOverride(position, "rpe")} disabled={saving} className="mt-1 text-sm font-bold text-slate-600 hover:text-teal-700 disabled:opacity-50">Use default RPE</button>}</label></div></div>}</div>;
+      })}</div>}
+      {errors?.overrides && <FieldError>{errors.overrides}</FieldError>}</div>
     <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4"><button type="button" onClick={() => onMove(index, -1)} disabled={saving || index === 0} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Move Up</button><button type="button" onClick={() => onMove(index, 1)} disabled={saving || index === total - 1} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Move Down</button><button type="button" onClick={() => onRemove(index)} disabled={saving} className="min-h-11 rounded-xl border border-red-200 px-3 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">Remove</button></div>
   </article>;
 }
