@@ -124,10 +124,10 @@
 | Phase 6 — Cloud Run staging API | Done | Deployed `performance-coach-api-staging` revision `performance-coach-api-staging-00001-6hc` in `asia-southeast1`; `/health`, `/ready`, and unauthenticated registered-route JSON 401 checks passed. No Production service or traffic changes. |
 | Phase 7 — Vercel feature-branch wiring | Done | Preview-only branch override deployed on `f08675c`; its `/backend/api/v1/scheduled-workouts/{id}` proxy returned the staging API's JSON 401 authentication envelope and request ID, not the legacy bare 404. |
 | Phase 8 — End-to-end verification and records | In Progress | Cloud and proxy smoke tests passed; authenticated Coach acceptance (load, save, validation/authorization behavior, and staging-only data change) remains. |
-| Phase 9 — Incremental staging merge | Not Started | Only after user confirms Preview acceptance. |
+| Phase 9 — Incremental staging merge | Done | User accepted the feature Preview. Merge commit `2592189` brings the deployment records into lowercase `staging`; its Preview-only `BACKEND_BASE_URL` override now targets the verified staging API. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress.
-- Deviations from plan: None yet.
+- Final status: Completed pending normal staging Preview monitoring.
+- Deviations from plan: The feature code was already merged into `staging` at `5e7e3b4`; this accepted merge added only the bounded preview-backend deployment records.
 - Follow-ups: Full Firebase isolation remains a separate staging-platform task before this environment is used with real-user data.
