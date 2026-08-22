@@ -16,6 +16,16 @@ function requireEnv(value: string | undefined, name: string): string {
 }
 
 function createApp(): FirebaseApp {
+  // authDomain is the domain signInWithPopup opens to run the OAuth
+  // handshake (https://<authDomain>/__/auth/handler), so Google sign-in
+  // needs it. It stays optional rather than required: local development
+  // runs against the Auth Emulator, which serves its own sign-in handler
+  // and ignores authDomain entirely, and every other route in the app
+  // works without it. Omitting it in a deployed environment surfaces as
+  // auth/auth-domain-config-required on the first Google click, which
+  // components/google-sign-in-button.tsx maps to actionable copy.
+  const authDomain = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN;
+
   const config = {
     apiKey: requireEnv(
       process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -25,6 +35,7 @@ function createApp(): FirebaseApp {
       process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
       "NEXT_PUBLIC_FIREBASE_PROJECT_ID",
     ),
+    ...(authDomain ? { authDomain } : {}),
   };
 
   const existing = getApps();

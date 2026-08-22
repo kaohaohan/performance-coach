@@ -225,7 +225,7 @@ Create a separate migration-job service account with its own least-privilege dat
 
 Never commit, copy, mount, or bake a Firebase/GCP service-account JSON into the repository or container. Do not set `GOOGLE_APPLICATION_CREDENTIALS` in Cloud Run. Local development may use its existing safe local credential arrangement independently; its files remain outside version control.
 
-In Firebase production setup, configure the production Firebase project/web app and ensure the Vercel hostname (and later custom hostname) is an authorized domain when Firebase Auth providers or email action flows require it. `NEXT_PUBLIC_FIREBASE_API_KEY` is a public Firebase web configuration value, not a server secret; restrict its API key and monitor quotas in Firebase/Google Cloud.
+In Firebase production setup, configure the production Firebase project/web app and ensure the Vercel hostname (and later custom hostname) is an authorized domain when Firebase Auth providers or email action flows require it. Google sign-in additionally requires the Google provider to be enabled under Authentication → Sign-in method, and the account-linking setting under Authentication → Settings to be **One account per email address**. That setting is what keeps an existing Gmail/password user on the same Firebase UID — and therefore the same `users.firebase_uid` and history — when they switch to Google; "Multiple accounts per email address" would mint a second Firebase identity and the invite flow would provision a duplicate `users` row. See `docs/tasks/2026-08-20-google-signin-account-continuity.md` §6. `NEXT_PUBLIC_FIREBASE_API_KEY` is a public Firebase web configuration value, not a server secret; restrict its API key and monitor quotas in Firebase/Google Cloud.
 
 ## 7. Neon database and connectivity
 
@@ -265,6 +265,7 @@ No actual values belong in this document, source control, Docker image layers, l
 | --- | --- | --- | --- |
 | `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | PUBLIC | Vercel production environment | Firebase web configuration. |
 | `NEXT_PUBLIC_FIREBASE_API_KEY` | PUBLIC | Vercel production environment | Public Firebase API key; restrict it. |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | PUBLIC | Vercel production **and** Preview environments | Domain serving the Google sign-in popup handler (`<project>.firebaseapp.com`). Required for "Continue with Google"; unset locally, where the Auth Emulator serves its own handler. |
 | `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` | LOCAL ONLY | Not set in Vercel production | Never point production browsers to an emulator. |
 | `BACKEND_BASE_URL` | SERVER CONFIG | Vercel production environment | Cloud Run HTTPS URL; no trailing slash. |
 | `DATABASE_URL` | SECRET | Secret Manager, injected into Cloud Run service and migration job | **Revised by ADR-001**: Neon connection string (`postgres://user:pass@<endpoint>.aws.neon.tech/db?sslmode=require`), not a Cloud SQL socket URL. |
