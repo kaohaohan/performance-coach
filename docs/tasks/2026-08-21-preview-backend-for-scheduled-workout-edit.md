@@ -119,11 +119,11 @@
 | Phase 1 — Task Doc | Done | Design and approval gates recorded in an isolated worktree on `claude/workout-draft-persistence-edit-2m93wo`. |
 | Phase 2 — Local backend verification | Done | Scheduled-workout tests, full `go test ./...`, and `go vet ./...` passed against a freshly migrated isolated local database. |
 | Phase 3 — Neon staging branch | Done | Created persistent child `staging` (`br-gentle-mouse-aziy6y8w`) from `main`; verified copied roles and current schema tables. |
-| Phase 4 — GCP staging secret and identity | In Progress | Empty staging secret, dedicated keyless service account, and secret-scoped IAM are done; awaiting action-time confirmation to stream the opaque DSN into secret version 1. |
-| Phase 5 — Immutable image build | Not Started | Build exact pushed feature SHA and record digest. |
-| Phase 6 — Cloud Run staging API | Not Started | No Production service or traffic changes. |
-| Phase 7 — Vercel feature-branch wiring | Not Started | Preview-only branch override and redeploy. |
-| Phase 8 — End-to-end verification and records | Not Started | User acceptance follows technical smoke tests. |
+| Phase 4 — GCP staging secret and identity | Done | Created secret `performance-coach-staging-api-database-url`, keyless runtime SA, resource-scoped Secret Accessor grant, and opaque DSN version 1. |
+| Phase 5 — Immutable image build | Done | Cloud Build `dd4d7bbd-07c9-4a08-a3b6-448ee49635db` built source `1bff00b0bd9d07f955f16d75fe481990c39b0133`; deployed digest `sha256:7b1da260ff07a8c18f113fee0bac5bbd42dce0040a335fe8ebe7fff802f9cde9`. |
+| Phase 6 — Cloud Run staging API | Done | Deployed `performance-coach-api-staging` revision `performance-coach-api-staging-00001-6hc` in `asia-southeast1`; `/health`, `/ready`, and unauthenticated registered-route JSON 401 checks passed. No Production service or traffic changes. |
+| Phase 7 — Vercel feature-branch wiring | In Progress | Added a Preview-only `BACKEND_BASE_URL` override scoped to `claude/workout-draft-persistence-edit-2m93wo`; this commit triggers the required fresh branch deployment. |
+| Phase 8 — End-to-end verification and records | In Progress | Cloud smoke tests passed; proxy and authenticated Coach acceptance remain after the new Preview is ready. |
 | Phase 9 — Incremental staging merge | Not Started | Only after user confirms Preview acceptance. |
 
 ## 5. Outcome (filled at completion)
