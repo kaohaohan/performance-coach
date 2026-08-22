@@ -18,6 +18,16 @@ Target: 2026-08-18
 
 Source of truth: this document for this feature's product/schema/API/frontend decisions until its first implementation PR folds the relevant pieces into `docs/mvp-specification.md`, `docs/frontend-ui-spec.md`, `docs/go-backend-api-contract-v0.1.md`, and `docs/database-schema-relationships.md` per `AGENTS.md` §17. Where this document and those four disagree today, this document wins for this feature only — it exists precisely because those four currently say the mechanism is "undecided."
 
+> **Superseded, 2026-08-22.** The precedence rule above applied only while
+> this feature was unimplemented and unreconciled with the four canonical
+> docs it names. Invite/onboarding is now implemented, and
+> `mvp-specification.md`, `go-backend-api-contract-v0.1.md`,
+> `database-schema-relationships.md`, and `frontend-ui-spec.md` have all
+> been reconciled to the shipped behavior. This document no longer wins on
+> conflict: each canonical doc is authoritative for its own domain, and
+> this document is retained only as the implementation/design record — see
+> the banner at the top of this file.
+
 This doc supersedes the exploratory options in the prior read-only Phase 0 report (10 numbered decisions, D1–D10) with one locked design. Where a locked decision below differs from that report's *recommendation*, it's called out explicitly.
 
 ---
