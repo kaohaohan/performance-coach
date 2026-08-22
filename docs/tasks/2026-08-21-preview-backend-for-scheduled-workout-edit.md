@@ -122,8 +122,8 @@
 | Phase 4 — GCP staging secret and identity | Done | Created secret `performance-coach-staging-api-database-url`, keyless runtime SA, resource-scoped Secret Accessor grant, and opaque DSN version 1. |
 | Phase 5 — Immutable image build | Done | Cloud Build `dd4d7bbd-07c9-4a08-a3b6-448ee49635db` built source `1bff00b0bd9d07f955f16d75fe481990c39b0133`; deployed digest `sha256:7b1da260ff07a8c18f113fee0bac5bbd42dce0040a335fe8ebe7fff802f9cde9`. |
 | Phase 6 — Cloud Run staging API | Done | Deployed `performance-coach-api-staging` revision `performance-coach-api-staging-00001-6hc` in `asia-southeast1`; `/health`, `/ready`, and unauthenticated registered-route JSON 401 checks passed. No Production service or traffic changes. |
-| Phase 7 — Vercel feature-branch wiring | In Progress | Added a Preview-only `BACKEND_BASE_URL` override scoped to `claude/workout-draft-persistence-edit-2m93wo`; this commit triggers the required fresh branch deployment. |
-| Phase 8 — End-to-end verification and records | In Progress | Cloud smoke tests passed; proxy and authenticated Coach acceptance remain after the new Preview is ready. |
+| Phase 7 — Vercel feature-branch wiring | Done | Preview-only branch override deployed on `f08675c`; its `/backend/api/v1/scheduled-workouts/{id}` proxy returned the staging API's JSON 401 authentication envelope and request ID, not the legacy bare 404. |
+| Phase 8 — End-to-end verification and records | In Progress | Cloud and proxy smoke tests passed; authenticated Coach acceptance (load, save, validation/authorization behavior, and staging-only data change) remains. |
 | Phase 9 — Incremental staging merge | Not Started | Only after user confirms Preview acceptance. |
 
 ## 5. Outcome (filled at completion)
