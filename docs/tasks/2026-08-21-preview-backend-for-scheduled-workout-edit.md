@@ -117,9 +117,9 @@
 | --- | --- | --- |
 | Phase 0 read-only inspection | Done | Confirmed endpoint code, old live image, Vercel Production/Preview variable sharing, one Neon main branch, and absence of staging API/database resources. |
 | Phase 1 — Task Doc | Done | Design and approval gates recorded in an isolated worktree on `claude/workout-draft-persistence-edit-2m93wo`. |
-| Phase 2 — Local backend verification | Not Started | Separate implementation session required by AGENTS.md §10. |
-| Phase 3 — Neon staging branch | Not Started | Requires disposable-data gate and write approval. |
-| Phase 4 — GCP staging secret and identity | Not Started | DSN transfer requires action-time confirmation; value remains opaque. |
+| Phase 2 — Local backend verification | Done | Scheduled-workout tests, full `go test ./...`, and `go vet ./...` passed against a freshly migrated isolated local database. |
+| Phase 3 — Neon staging branch | Done | Created persistent child `staging` (`br-gentle-mouse-aziy6y8w`) from `main`; verified copied roles and current schema tables. |
+| Phase 4 — GCP staging secret and identity | In Progress | Empty staging secret, dedicated keyless service account, and secret-scoped IAM are done; awaiting action-time confirmation to stream the opaque DSN into secret version 1. |
 | Phase 5 — Immutable image build | Not Started | Build exact pushed feature SHA and record digest. |
 | Phase 6 — Cloud Run staging API | Not Started | No Production service or traffic changes. |
 | Phase 7 — Vercel feature-branch wiring | Not Started | Preview-only branch override and redeploy. |
