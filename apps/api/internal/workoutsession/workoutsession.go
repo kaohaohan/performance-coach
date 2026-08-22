@@ -86,14 +86,28 @@ func (e *ValidationError) Error() string { return e.Message }
 // CONFLICT DO NOTHING lets exactly one caller's INSERT return a row (the
 // creator, 201); the other gets no row back and falls through to the
 // existing-row SELECT below, converging on the same idempotent-resume path
-// (200) an ordinary second call would take. No transaction, lock, or
-// elevated isolation level is used or needed.
+// (200) an ordinary second call would take.
+//
+// Start also runs inside a transaction that takes the same `FOR UPDATE OF
+// sw` lock on the scheduled_workouts row that scheduledworkout.Update takes
+// (Problem B — editing a NOT_STARTED assignment). That is the mutual-
+// exclusion boundary between the two: whichever of a concurrent Start/
+// Update pair locks the row first runs to completion before the other
+// proceeds, so Update's "no session yet" check can never be stale by the
+// time it commits, and Start can never insert a session referencing a
+// half-replaced snapshot.
 func Start(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduledWorkoutID string) (Session, bool, error) {
 	if _, err := uuid.Parse(scheduledWorkoutID); err != nil {
 		return Session{}, false, &ValidationError{Message: "id must be a valid UUID"}
 	}
 
-	athleteID, err := lookupAccessibleScheduledWorkout(ctx, pool, caller, scheduledWorkoutID)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return Session{}, false, fmt.Errorf("workoutsession: begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit succeeds
+
+	athleteID, err := lookupAccessibleScheduledWorkout(ctx, tx, caller, scheduledWorkoutID)
 	if err != nil {
 		return Session{}, false, err
 	}
@@ -105,26 +119,39 @@ func Start(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduled
 		RETURNING id, status`
 
 	var session Session
-	err = pool.QueryRow(ctx, insert, uuid.NewString(), scheduledWorkoutID, athleteID).Scan(&session.ID, &session.Status)
-	if err == nil {
-		return session, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	var created bool
+	err = tx.QueryRow(ctx, insert, uuid.NewString(), scheduledWorkoutID, athleteID).Scan(&session.ID, &session.Status)
+	switch {
+	case err == nil:
+		created = true
+	case errors.Is(err, pgx.ErrNoRows):
+		// ON CONFLICT DO NOTHING fired: a session already exists (either
+		// from a prior call, or a concurrent Start that just won the
+		// race). Look it up and branch on its status.
+		const existing = `SELECT id, status FROM workout_sessions WHERE scheduled_workout_id = $1`
+		if err := tx.QueryRow(ctx, existing, scheduledWorkoutID).Scan(&session.ID, &session.Status); err != nil {
+			return Session{}, false, fmt.Errorf("workoutsession: lookup existing session: %w", err)
+		}
+	default:
 		return Session{}, false, fmt.Errorf("workoutsession: insert session: %w", err)
 	}
 
-	// ON CONFLICT DO NOTHING fired: a session already exists (either from a
-	// prior call, or a concurrent Start that just won the race). Look it up
-	// and branch on its status.
-	const existing = `SELECT id, status FROM workout_sessions WHERE scheduled_workout_id = $1`
-	if err := pool.QueryRow(ctx, existing, scheduledWorkoutID).Scan(&session.ID, &session.Status); err != nil {
-		return Session{}, false, fmt.Errorf("workoutsession: lookup existing session: %w", err)
-	}
-
-	if session.Status == "COMPLETED" {
+	if !created && session.Status == "COMPLETED" {
 		return Session{}, false, ErrCompleted
 	}
-	return session, false, nil
+
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, false, fmt.Errorf("workoutsession: commit: %w", err)
+	}
+	return session, created, nil
+}
+
+// querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting
+// lookupAccessibleScheduledWorkout run either as a standalone read or (as
+// Start uses it) inside a transaction that also holds the row lock its
+// query takes.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // lookupAccessibleScheduledWorkout returns scheduledWorkoutID's athlete_id
@@ -133,11 +160,14 @@ func Start(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduled
 // coach_athletes); otherwise ErrNotFound. Deliberately does not export or
 // reuse scheduledworkout.isConnected — this is a small, local lookup
 // specific to this endpoint's authorization needs.
-func lookupAccessibleScheduledWorkout(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduledWorkoutID string) (string, error) {
-	const query = `SELECT athlete_id FROM scheduled_workouts WHERE id = $1`
+//
+// The scheduled_workouts row is locked FOR UPDATE — see Start's concurrency
+// comment above for why.
+func lookupAccessibleScheduledWorkout(ctx context.Context, q querier, caller authn.User, scheduledWorkoutID string) (string, error) {
+	const query = `SELECT athlete_id FROM scheduled_workouts WHERE id = $1 FOR UPDATE`
 
 	var athleteID string
-	err := pool.QueryRow(ctx, query, scheduledWorkoutID).Scan(&athleteID)
+	err := q.QueryRow(ctx, query, scheduledWorkoutID).Scan(&athleteID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrNotFound
@@ -152,7 +182,7 @@ func lookupAccessibleScheduledWorkout(ctx context.Context, pool *pgxpool.Pool, c
 	if caller.Role == "COACH" {
 		const connectedQuery = `SELECT 1 FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2`
 		var exists int
-		err := pool.QueryRow(ctx, connectedQuery, caller.ID, athleteID).Scan(&exists)
+		err := q.QueryRow(ctx, connectedQuery, caller.ID, athleteID).Scan(&exists)
 		if err == nil {
 			return athleteID, nil
 		}
