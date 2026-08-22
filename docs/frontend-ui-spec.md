@@ -45,6 +45,13 @@ This is a frontend information-architecture decision. It introduces no new backe
 |---|---|---|---|
 | `/session/[id]` | Coach (connected) + Athlete (self) | `POST /scheduled-workouts/{id}/session`, `GET /sessions/{id}`, `POST/PATCH/DELETE /sessions/{id}/set-logs`, `POST /sessions/{id}/complete` | The Training Session UI. Both roles use the same screen/domain: start or resume a session, log/edit/delete SetLogs, view plan vs. actual, complete the session. This is what makes Story 2 (Coach runs a live 1:1 session) possible without a separate coach-only UI. |
 
+### Onboarding (unauthenticated)
+
+| Route | Role | Backs onto | Purpose |
+|---|---|---|---|
+| `/join` | Unauthenticated | none | Manual invite-code entry. Normalizes input and routes to `/join/[code]`. |
+| `/join/[code]` | Unauthenticated | `GET /invite-codes/{code}/preview`, `POST /invite-codes/{code}/redeem` | Preview → confirm → auth (embedded, no redirect to `/login`) → redeem → `/today`. Product behavior is defined in `docs/mvp-specification.md`, "Coach & Athlete Onboarding — Implemented (V0.1)". |
+
 ---
 
 ## 3. Product Rules
