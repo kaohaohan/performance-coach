@@ -50,7 +50,7 @@
   - Create global Workload Identity Pool `github-actions` and provider `performance-coach`.
   - Map `google.subject`, `attribute.repository`, `attribute.ref`, and `attribute.repository_owner` from the GitHub OIDC assertion.
   - Require the provider attribute condition `assertion.repository == 'kaohaohan/performance-coach' && assertion.ref == 'refs/heads/staging'`.
-  - Create keyless deploy service account `performance-coach-github-staging@dontworkout.iam.gserviceaccount.com`. It is a deployment identity only and must not replace the Cloud Run runtime identity.
+  - Create keyless deploy service account `pc-github-staging-deploy@dontworkout.iam.gserviceaccount.com`. It is a deployment identity only and must not replace the Cloud Run runtime identity.
   - Allow only the `kaohaohan/performance-coach` repository principal set to impersonate the deploy service account with `roles/iam.workloadIdentityUser`; the provider condition additionally restricts admission to the lowercase `staging` ref.
   - Grant the deploy service account:
     - `roles/artifactregistry.writer` on Artifact Registry repository `performance-coach` in `asia-east1`;
@@ -111,7 +111,7 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Confirmed stale staging revision/image, existing CI/Docker context, no WIF pool, and no staging migration Job. |
 | Phase 1 — Task Doc | Done | Approved design documented and committed before implementation. |
-| Phase 2 — WIF and least-privilege IAM | Not Started | GCP mutation requires the approved implementation phase. |
+| Phase 2 — WIF and least-privilege IAM | Done | Created active pool/provider, keyless deploy identity, and exact repository/service/runtime-identity bindings; verified no user-managed keys. |
 | Phase 3 — workflow and ignore rules | Not Started | No implementation edits before the Task Doc commit. |
 | Phase 4 — local/static verification | Not Started | Validate workflow shape and review only task files. |
 | Phase 5 — first staging deployment | Not Started | Requires the workflow commit to reach lowercase `staging`. |
@@ -120,5 +120,5 @@
 ## 5. Outcome (filled at completion)
 
 - Final status: In progress.
-- Deviations from plan: None.
+- Deviations from plan: The planned service account ID `performance-coach-github-staging` exceeded GCP's 30-character account-ID limit, so the equivalent keyless identity was created as `pc-github-staging-deploy`; scope and permissions are unchanged.
 - Follow-ups: Add a staging-specific migration identity, secret, Cloud Run Job, and explicit migration gate before allowing migration-bearing pushes to auto-deploy; design Production CI/CD separately with manual approval.
