@@ -1717,6 +1717,7 @@ export default function CoachCalendarPage() {
                   assignments={assignmentsByDate.get(gridDate) ?? []}
                   workoutsById={workoutsById}
                   disabled={programmingControlsDisabled}
+                  hasDraftContent={hasDraftContent}
                   onSelect={selectCalendarDate}
                   onAddWorkout={openWorkoutEditorOn}
                   onCopy={openCopyWizard}
