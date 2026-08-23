@@ -46,8 +46,14 @@ jobs:
     env:
       # The test harness asserts this URL targets performance_coach_test, so a
       # misconfigured CI can never point the suite at a real database.
+      #
+      # DATABASE_URL is deliberately NOT set here. Several suites (athlete,
+      # coachsignup, exercise, invitecode) skip themselves when DATABASE_URL
+      # resolves to the same database as TEST_DATABASE_URL, so that
+      # destructive tests can never run against a development or production
+      # database. Setting both job-wide tripped exactly that guard and
+      # silently skipped 29 tests. It is scoped to the migrate step instead.
       TEST_DATABASE_URL: postgres://performance:performance@localhost:5432/performance_coach_test?sslmode=disable
-      DATABASE_URL: postgres://performance:performance@localhost:5432/performance_coach_test?sslmode=disable
 
     defaults:
       run:
@@ -83,6 +89,9 @@ jobs:
       - name: Apply migrations
         # The same entrypoint used in deployment, not a test-only schema path,
         # so a migration that cannot apply from empty fails here first.
+        # DATABASE_URL is set only here — see the env block above.
+        env:
+          DATABASE_URL: postgres://performance:performance@localhost:5432/performance_coach_test?sslmode=disable
         run: go run ./cmd/migrate
 
       - name: go test
@@ -126,15 +135,21 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        # `next build` type-checks too, but running tsc on its own reports
-        # every error rather than stopping at the first, which is what makes a
-        # red build actionable.
-        run: npx tsc --noEmit
-
       - name: Build
+        # Must precede the typecheck: `next build` generates .next/types,
+        # which is where Next 16 puts the global route types app/layout.tsx
+        # relies on (LayoutProps). Running tsc first fails with
+        # "Cannot find name 'LayoutProps'" — invisible locally, because a
+        # developer's .next already exists from a previous run.
+        #
         # No NEXT_PUBLIC_FIREBASE_* values are provided on purpose: the build
         # must not depend on runtime configuration, and this proves it stays
         # that way. Firebase config is read in the browser, and AuthProvider
         # already fails closed when it is absent.
         run: npm run build
+
+      - name: Typecheck
+        # `next build` type-checks too, but running tsc on its own reports
+        # every error rather than stopping at the first, which is what makes a
+        # red build actionable.
+        run: npx tsc --noEmit
