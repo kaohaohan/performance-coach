@@ -115,11 +115,11 @@
 | Phase 2 — WIF and least-privilege IAM | Done | Created active pool/provider, keyless deploy identity, and exact repository/service/runtime-identity bindings; verified no user-managed keys. |
 | Phase 3 — workflow and ignore rules | Done | Added staging-only WIF deployment, cumulative migration guard, digest deployment, zero-traffic candidate smoke test, revision-pinned promotion, and credential exclusions. |
 | Phase 4 — local/static verification | Done | Docker image build succeeded; YAML/dependency gate, ignore rule, cumulative migration guard, diff, and final worktree checks passed. |
-| Phase 5 — first staging deployment | Not Started | Requires the workflow commit to reach lowercase `staging`. |
+| Phase 5 — first staging deployment | In Progress | Commits pushed to `feat/calendar-day-week-month`; PR creation through local `gh` is blocked by an invalid GitHub CLI token, so the workflow has not reached `staging`. |
 | Phase 6 — live verification and deployment record | Not Started | Record SHA, digest, revision, smoke checks, and proxy proof. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress.
+- Final status: In progress; waiting for the reviewed feature branch to merge into lowercase `staging`.
 - Deviations from plan: The planned service account ID `performance-coach-github-staging` exceeded GCP's 30-character account-ID limit, so the equivalent keyless identity was created as `pc-github-staging-deploy`; scope and permissions are unchanged.
-- Follow-ups: Add a staging-specific migration identity, secret, Cloud Run Job, and explicit migration gate before allowing migration-bearing pushes to auto-deploy; design Production CI/CD separately with manual approval.
+- Follow-ups: Merge `feat/calendar-day-week-month` into `staging` and observe the first deployment; add a staging-specific migration identity, secret, Cloud Run Job, and explicit migration gate before allowing migration-bearing pushes to auto-deploy; design Production CI/CD separately with manual approval.
