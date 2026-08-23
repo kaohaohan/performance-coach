@@ -37,7 +37,7 @@ import type { Workout } from "./types";
 
 type Athlete = { id: string; name: string };
 type ProgrammingMode = "EXISTING" | "BUILD";
-type BuildStatus = "idle" | "creating" | "assigning" | "assignmentFailed" | "savingWorkout" | "savingChanges";
+type BuildStatus = "idle" | "creating" | "assigning" | "assignmentFailed" | "savingChanges";
 // ScheduledWorkoutDetail is the wire shape of GET/PUT /api/v1/scheduled-workouts/{id}
 // (docs/go-backend-api-contract-v0.1.md §3.5) — used only to prefill and save
 // the Coach Calendar's Edit Assigned Workout flow (Problem B).
@@ -507,7 +507,6 @@ export default function CoachCalendarPage() {
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [draftRestoredNotice, setDraftRestoredNotice] = useState(false);
-  const [workoutSavedNotice, setWorkoutSavedNotice] = useState(false);
   // builderDate is the date the builder is authoring FOR — the value that gets
   // persisted as the draft's scheduledDate and submitted as the assignment's
   // date. It is null exactly when no draft session exists.
@@ -736,12 +735,6 @@ export default function CoachCalendarPage() {
   }, [draftRestoredNotice]);
 
   useEffect(() => {
-    if (!workoutSavedNotice) return;
-    const timeoutId = window.setTimeout(() => setWorkoutSavedNotice(false), 5000);
-    return () => window.clearTimeout(timeoutId);
-  }, [workoutSavedNotice]);
-
-  useEffect(() => {
     if (!saveChangesSuccess) return;
     const timeoutId = window.setTimeout(() => setSaveChangesSuccess(false), 5000);
     return () => window.clearTimeout(timeoutId);
@@ -912,7 +905,6 @@ export default function CoachCalendarPage() {
     setEditLoadError(null);
     setDraftStatus("idle");
     setDraftRestoredNotice(false);
-    setWorkoutSavedNotice(false);
     // The only place builderDate is cleared: the draft session is over, so
     // the next "+ Add Workout" starts fresh on whatever day is being browsed.
     setBuilderDate(null);
@@ -1410,34 +1402,6 @@ export default function CoachCalendarPage() {
     }
   }
 
-  async function handleSaveWorkout() {
-    if (!idToken || buildInFlight.current || buildStatus !== "idle") return;
-    const errors = validateExercisesDraft();
-    setBuildFieldErrors(errors);
-    setBuildError(null);
-    if (hasBuildErrors(errors)) return;
-
-    buildInFlight.current = true;
-    setBuildStatus("savingWorkout");
-    try {
-      await apiFetch<Workout>(idToken, "/api/v1/workouts", {
-        method: "POST",
-        body: { name: draftName.trim() || fallbackWorkoutName(authoringDate), exercises: buildExercisesPayload(draftExercises) },
-      });
-      if (coachId) clearDraft(coachId);
-      resetBuilderDraft();
-      setProgrammingMode("EXISTING");
-      setEditorOpen(false);
-      setWorkoutSavedNotice(true);
-      await refetchWorkouts();
-    } catch (err) {
-      setBuildError(errorMessage(err));
-    } finally {
-      buildInFlight.current = false;
-      setBuildStatus("idle");
-    }
-  }
-
   async function handleSaveChanges(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!idToken || !editTarget || buildInFlight.current || buildStatus !== "idle") return;
@@ -1569,10 +1533,6 @@ export default function CoachCalendarPage() {
                     <button type="button" onClick={handleRetryAssignment} className="min-h-14 w-full rounded-2xl bg-amber-500 px-5 text-base font-bold text-slate-950 shadow-sm transition hover:bg-amber-400">Retry Assignment</button>
                   </div> : buildError ? <Notice tone="error">{buildError}</Notice> : null}
 
-                  {!editTarget && <button type="button" onClick={handleSaveWorkout} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border-2 border-teal-600 bg-white px-5 text-base font-bold text-teal-700 shadow-sm transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:border-slate-200 disabled:text-slate-400">
-                    {buildStatus === "savingWorkout" ? "Saving workout…" : "Save Workout"}
-                  </button>}
-
                   <button type="submit" disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                     {editTarget
                       ? (buildStatus === "savingChanges" ? "Saving changes…" : "Save Changes")
@@ -1681,7 +1641,6 @@ export default function CoachCalendarPage() {
 
             {startError && <div className="mt-4"><Notice tone="error">{startError}</Notice></div>}
             {editLoadError && <div className="mt-4"><Notice tone="error">{editLoadError}</Notice></div>}
-            {workoutSavedNotice && <div className="mt-4"><Notice tone="success">Workout saved to your library. It was not scheduled to any athlete.</Notice></div>}
             {saveChangesSuccess && <div className="mt-4"><Notice tone="success">Changes saved. The athlete will see the updated prescription immediately.</Notice></div>}
             <div className="mt-5">
               {assignments === null ? <LoadingCard label="Loading scheduled training…" /> : dayAssignments?.length === 0 ? <EmptyCard title="No workouts scheduled" body="Add a workout to this athlete’s selected day." /> : (
