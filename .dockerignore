@@ -4,6 +4,7 @@
 .git
 .env
 .env.*
+gha-creds-*.json
 **/node_modules
 apps/web/.next
 apps/web/.next-mobile

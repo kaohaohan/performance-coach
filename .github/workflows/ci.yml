@@ -153,3 +153,216 @@ jobs:
         # every error rather than stopping at the first, which is what makes a
         # red build actionable.
         run: npx tsc --noEmit
+
+  deploy-api-staging:
+    name: deploy api (staging)
+    needs: [api, web]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+
+    # OIDC is granted only to this staging deploy job. Pull requests cannot
+    # reach the job because of the condition above, and the GCP provider also
+    # independently restricts tokens to this repository's staging ref.
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT_ID: dontworkout
+      GCP_REGION: asia-southeast1
+      GAR_HOST: asia-east1-docker.pkg.dev
+      IMAGE_URI: asia-east1-docker.pkg.dev/dontworkout/performance-coach/api
+      SERVICE_NAME: performance-coach-api-staging
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The migration guard compares the complete push range, not just the
+          # final commit. A shallow checkout could silently miss an earlier
+          # migration in a multi-commit push.
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: dontworkout
+          workload_identity_provider: projects/33959430194/locations/global/workloadIdentityPools/github-actions/providers/performance-coach
+          service_account: pc-github-staging-deploy@dontworkout.iam.gserviceaccount.com
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Refuse automatic schema changes
+        env:
+          # The first staging revision predates CI labels. Its source SHA is
+          # recorded in docs/deployment-checkpoint.md; every revision created
+          # by this workflow carries its own commit-sha label afterward.
+          INITIAL_DEPLOYED_SHA: 1bff00b0bd9d07f955f16d75fe481990c39b0133
+        run: |
+          service_json=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --format=json)
+          serving_revision=$(jq -r \
+            'first(.status.traffic[] | select((.percent // 0) == 100) | .revisionName) // empty' \
+            <<< "$service_json")
+
+          if [ -z "$serving_revision" ]; then
+            echo "::error::Cannot identify the revision currently serving 100% of staging traffic."
+            exit 1
+          fi
+
+          revision_json=$(gcloud run revisions describe "$serving_revision" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --format=json)
+          deployed_sha=$(jq -r '.metadata.labels["commit-sha"] // empty' <<< "$revision_json")
+
+          if [ -z "$deployed_sha" ]; then
+            deployed_sha="$INITIAL_DEPLOYED_SHA"
+            echo "Using the recorded source SHA for the pre-CI staging revision."
+          fi
+
+          if [[ ! "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The serving revision does not contain a valid source SHA."
+            exit 1
+          fi
+          if ! git cat-file -e "$deployed_sha^{commit}"; then
+            echo "::error::The deployed source SHA is not present in repository history."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$deployed_sha" "$GITHUB_SHA"; then
+            echo "::error::The deployed source SHA is not an ancestor of this staging commit."
+            exit 1
+          fi
+
+          migration_files=$(git diff --name-only "$deployed_sha" "$GITHUB_SHA" -- apps/api/migrations)
+          if [ -n "$migration_files" ]; then
+            echo "::error::Staging migrations are not automated yet; refusing to deploy an API that may require a newer schema."
+            echo "$migration_files"
+            exit 1
+          fi
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker "$GAR_HOST" --quiet
+
+      - name: Build and push API image
+        run: |
+          docker build --file apps/api/Dockerfile --tag "$IMAGE_URI:$GITHUB_SHA" .
+          docker push "$IMAGE_URI:$GITHUB_SHA"
+
+      - name: Resolve immutable image digest
+        id: image
+        run: |
+          digest=$(gcloud artifacts docker images describe "$IMAGE_URI:$GITHUB_SHA" \
+            --project="$GCP_PROJECT_ID" \
+            --format='value(image_summary.digest)')
+
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Artifact Registry returned an invalid image digest."
+            exit 1
+          fi
+
+          echo "image=$IMAGE_URI@$digest" >> "$GITHUB_OUTPUT"
+          echo "Deploying immutable image $IMAGE_URI@$digest"
+
+      - name: Name candidate tag
+        id: candidate-name
+        run: echo "tag=candidate-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy candidate revision without traffic
+        env:
+          CANDIDATE_TAG: ${{ steps.candidate-name.outputs.tag }}
+        run: |
+          gcloud run deploy "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --image="${{ steps.image.outputs.image }}" \
+            --no-traffic \
+            --tag="$CANDIDATE_TAG" \
+            --update-labels="managed-by=github-actions,commit-sha=$GITHUB_SHA" \
+            --quiet
+
+      - name: Resolve candidate URL
+        id: candidate
+        env:
+          CANDIDATE_TAG: ${{ steps.candidate-name.outputs.tag }}
+        run: |
+          service_json=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --format=json)
+          candidate_url=$(jq -r --arg tag "$CANDIDATE_TAG" \
+            'first(.status.traffic[] | select(.tag == $tag) | .url) // empty' <<< "$service_json")
+          candidate_revision=$(jq -r --arg tag "$CANDIDATE_TAG" \
+            'first(.status.traffic[] | select(.tag == $tag) | .revisionName) // empty' <<< "$service_json")
+
+          if [ -z "$candidate_url" ] || [ -z "$candidate_revision" ]; then
+            echo "::error::Cloud Run did not return a URL and revision for the candidate tag."
+            exit 1
+          fi
+
+          echo "url=$candidate_url" >> "$GITHUB_OUTPUT"
+          echo "revision=$candidate_revision" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test candidate
+        env:
+          CANDIDATE_URL: ${{ steps.candidate.outputs.url }}
+        run: |
+          for attempt in {1..12}; do
+            health_ok=false
+            ready_ok=false
+
+            if curl --fail --silent --show-error "$CANDIDATE_URL/health" >/dev/null; then
+              health_ok=true
+            fi
+            if curl --fail --silent --show-error "$CANDIDATE_URL/ready" >/dev/null; then
+              ready_ok=true
+            fi
+
+            if [ "$health_ok" = true ] && [ "$ready_ok" = true ]; then
+              echo "Candidate passed /health and /ready."
+              exit 0
+            fi
+
+            echo "Candidate not ready (attempt $attempt/12)."
+            sleep 5
+          done
+
+          echo "::error::Candidate failed staging smoke tests; existing traffic was not changed."
+          exit 1
+
+      - name: Promote candidate to staging traffic
+        env:
+          CANDIDATE_REVISION: ${{ steps.candidate.outputs.revision }}
+        run: |
+          gcloud run services update-traffic "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --to-revisions="$CANDIDATE_REVISION=100" \
+            --quiet
+
+      - name: Verify serving URL
+        run: |
+          service_url=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --format='value(status.url)')
+
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors "$service_url/health" >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors "$service_url/ready" >/dev/null
+          echo "Staging API is healthy at $service_url"
+
+      - name: Remove successful candidate tag
+        env:
+          CANDIDATE_TAG: ${{ steps.candidate-name.outputs.tag }}
+        run: |
+          gcloud run services update-traffic "$SERVICE_NAME" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --remove-tags="$CANDIDATE_TAG" \
+            --quiet

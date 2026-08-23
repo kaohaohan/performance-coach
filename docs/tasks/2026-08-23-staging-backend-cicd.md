@@ -25,7 +25,7 @@
   - Production deployment is explicitly excluded. It will be a separate task using a protected GitHub Environment or equivalent manual approval gate.
 - Risks & unknowns:
   - There is no staging-specific Cloud Run migration Job. Automatically deploying an image that requires a new schema could make the API incompatible with the staging database.
-  - The first version therefore fails closed when a push changes `apps/api/migrations/**`. It does not build, push, migrate, or deploy that commit. A dedicated staging migration identity, secret, Job, and gate remain a separate task.
+  - The first version therefore fails closed when `apps/api/migrations/**` differs between the source SHA currently serving staging and the candidate SHA. It does not build, push, migrate, or deploy that commit. A dedicated staging migration identity, secret, Job, and gate remain a separate task.
   - A Cloud Run deployment must preserve the existing staging runtime identity, Secret Manager reference, Firebase configuration, resource limits, scaling caps, probe, and public-invoker policy. The workflow changes only the image/revision and traffic.
   - WIF and IAM changes can take several minutes to propagate, so the first authentication attempt may transiently fail even when configuration is correct.
   - The local `gh` authentication token is currently invalid. This does not block the selected design because provider and service-account identifiers are non-secret and may be referenced directly in the workflow; no GitHub secret is required.
@@ -61,8 +61,9 @@
   - Add a `deploy-api-staging` job to the existing CI workflow.
   - Set `needs: [api, web]` and an explicit condition requiring a `push` event on `refs/heads/staging`. Pull requests never authenticate to GCP or deploy.
   - Give only this job `contents: read` and `id-token: write` permissions.
-  - Checkout full history so the migration guard can compare `github.event.before` with `github.sha` across all commits included by the push.
-  - If `apps/api/migrations/**` changed, stop with a clear GitHub Actions error before authentication, build, push, or deployment.
+  - Checkout full history so the migration guard can compare the source SHA currently serving staging with `github.sha`, including migrations carried across an earlier blocked push.
+  - Authenticate through WIF, identify the revision serving 100% traffic, and read its `commit-sha` label. The pre-CI revision falls back once to its recorded source `1bff00b0bd9d07f955f16d75fe481990c39b0133`; every workflow revision records its own label.
+  - If the deployed SHA is invalid, absent from Git history, not an ancestor of the candidate, or differs under `apps/api/migrations/**`, stop with a clear error before build, push, or deployment.
 - Image build and provenance:
   - Authenticate with `google-github-actions/auth@v3` through WIF, then configure the current `gcloud` CLI with `google-github-actions/setup-gcloud@v3`.
   - Add `gha-creds-*.json` to both `.gitignore` and `.dockerignore`. The auth action creates a short-lived credential file in the workspace; it must never enter Git history or the repository-root Docker build context.
@@ -72,9 +73,9 @@
   - Resolve the pushed tag to its Artifact Registry digest and pass `.../api@sha256:...` to Cloud Run. A mutable tag is never the deployment record.
 - Deployment and state transitions:
   1. Current serving revision remains at 100% traffic while CI, migration guard, authentication, build, and push run.
-  2. Deploy the digest as a candidate revision with a stable `candidate` traffic tag and no normal traffic.
+  2. Deploy the digest as a candidate revision with a source-specific `candidate-<short-sha>` traffic tag and no normal traffic.
   3. Smoke-test the candidate-tag URL at `/health` and `/ready`, with bounded retry for Cloud Run startup.
-  4. If both checks succeed, move 100% staging traffic to the `candidate` tag/revision.
+  4. If both checks succeed, move 100% staging traffic to the candidate's explicit revision name, verify the normal serving URL, and remove the temporary tag.
   5. If either check fails, leave the existing serving revision at 100%, fail the job, and retain the candidate revision for diagnosis. No database or secret state is changed.
   - Deployment must target only project `dontworkout`, service `performance-coach-api-staging`, and region `asia-southeast1`.
   - The deploy command supplies only the immutable image, no-traffic/tag behavior, project, region, and quiet/non-interactive flags. It must not supply or overwrite environment variables, secrets, service account, ingress, scaling, CPU, memory, concurrency, or probes.
@@ -112,7 +113,7 @@
 | Phase 0 — read-only inspection | Done | Confirmed stale staging revision/image, existing CI/Docker context, no WIF pool, and no staging migration Job. |
 | Phase 1 — Task Doc | Done | Approved design documented and committed before implementation. |
 | Phase 2 — WIF and least-privilege IAM | Done | Created active pool/provider, keyless deploy identity, and exact repository/service/runtime-identity bindings; verified no user-managed keys. |
-| Phase 3 — workflow and ignore rules | Not Started | No implementation edits before the Task Doc commit. |
+| Phase 3 — workflow and ignore rules | Done | Added staging-only WIF deployment, cumulative migration guard, digest deployment, zero-traffic candidate smoke test, revision-pinned promotion, and credential exclusions. |
 | Phase 4 — local/static verification | Not Started | Validate workflow shape and review only task files. |
 | Phase 5 — first staging deployment | Not Started | Requires the workflow commit to reach lowercase `staging`. |
 | Phase 6 — live verification and deployment record | Not Started | Record SHA, digest, revision, smoke checks, and proxy proof. |
