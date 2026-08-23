@@ -45,6 +45,14 @@ func (e *ConflictError) Error() string { return e.Message }
 // ListForCoach returns visible system and caller-private Exercises. A trimmed,
 // empty query returns all visible records; non-empty queries are
 // case-insensitive literal substring searches.
+//
+// Ordering is system-before-private, then within each block: an earlier
+// match position ranks above a later one (a no-op when the query is empty),
+// then this coach's own usage count (via scheduled_workout_exercises →
+// scheduled_workouts) descending, most-recently-used first, then
+// alphabetical. This surfaces exercises the coach actually programs above
+// ones that merely sort earlier, without requiring any exercise
+// category/tag field.
 func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, rawQuery string) ([]Exercise, error) {
 	if caller.Role != "COACH" {
 		return nil, ErrForbidden
@@ -52,12 +60,25 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, ra
 
 	query := strings.TrimSpace(rawQuery)
 	const listQuery = `
-		SELECT id, name, owner_coach_id IS NULL AS is_system
-		FROM exercises
-		WHERE (owner_coach_id IS NULL OR owner_coach_id = $1)
-		  AND ($2 = '' OR strpos(lower(name), lower($2)) > 0)
-		ORDER BY CASE WHEN owner_coach_id IS NULL THEN 0 ELSE 1 END,
-		         lower(name), id`
+		SELECT e.id, e.name, e.owner_coach_id IS NULL AS is_system
+		FROM exercises e
+		LEFT JOIN (
+			SELECT swe.exercise_id,
+			       count(*) AS uses,
+			       max(sw.scheduled_date) AS last_used
+			FROM scheduled_workout_exercises swe
+			JOIN scheduled_workouts sw ON sw.id = swe.scheduled_workout_id
+			WHERE sw.coach_id = $1
+			GROUP BY swe.exercise_id
+		) usage ON usage.exercise_id = e.id
+		WHERE (e.owner_coach_id IS NULL OR e.owner_coach_id = $1)
+		  AND ($2 = '' OR strpos(lower(e.name), lower($2)) > 0)
+		ORDER BY CASE WHEN e.owner_coach_id IS NULL THEN 0 ELSE 1 END,
+		         CASE WHEN $2 = '' THEN 0 ELSE strpos(lower(e.name), lower($2)) END,
+		         COALESCE(usage.uses, 0) DESC,
+		         usage.last_used DESC NULLS LAST,
+		         lower(e.name),
+		         e.id`
 
 	rows, err := pool.Query(ctx, listQuery, caller.ID, query)
 	if err != nil {
