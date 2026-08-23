@@ -56,6 +56,7 @@
     - `roles/artifactregistry.writer` on Artifact Registry repository `performance-coach` in `asia-east1`;
     - `roles/run.developer` on Cloud Run service `performance-coach-api-staging` in `asia-southeast1`;
     - `roles/iam.serviceAccountUser` on runtime service account `performance-coach-api-staging@dontworkout.iam.gserviceaccount.com`.
+  - Also grant `roles/run.developer` at project scope with an IAM condition matching only the full `performance-coach-api-staging` service resource name. This constrained project-level binding covers the Cloud Run deploy upsert permission path while preserving service-level scope; it must not be an unconditional project-wide grant.
   - Do not grant Owner, Editor, Cloud Run Admin, Secret Manager Secret Accessor, Production service access, or user-managed service-account keys.
 - Workflow trigger and gating:
   - Add a `deploy-api-staging` job to the existing CI workflow.
@@ -112,7 +113,7 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Confirmed stale staging revision/image, existing CI/Docker context, no WIF pool, and no staging migration Job. |
 | Phase 1 — Task Doc | Done | Approved design documented and committed before implementation. |
-| Phase 2 — WIF and least-privilege IAM | Done | Created active pool/provider, keyless deploy identity, and exact repository/service/runtime-identity bindings; verified no user-managed keys. |
+| Phase 2 — WIF and least-privilege IAM | Done | Initial bindings plus a resource-conditioned project-level Cloud Run Developer binding verified; no user-managed keys or unconditional project-wide deploy role. |
 | Phase 3 — workflow and ignore rules | Done | Added staging-only WIF deployment, cumulative migration guard, digest deployment, zero-traffic candidate smoke test, revision-pinned promotion, and credential exclusions. |
 | Phase 4 — local/static verification | Done | Docker image build succeeded; YAML/dependency gate, ignore rule, cumulative migration guard, diff, and final worktree checks passed. |
 | Phase 5 — first staging deployment | In Progress | Commits pushed to `feat/calendar-day-week-month`; PR creation through local `gh` is blocked by an invalid GitHub CLI token, so the workflow has not reached `staging`. |
@@ -121,5 +122,5 @@
 ## 5. Outcome (filled at completion)
 
 - Final status: In progress; waiting for the reviewed feature branch to merge into lowercase `staging`.
-- Deviations from plan: The planned service account ID `performance-coach-github-staging` exceeded GCP's 30-character account-ID limit, so the equivalent keyless identity was created as `pc-github-staging-deploy`; scope and permissions are unchanged.
+- Deviations from plan: The planned service account ID `performance-coach-github-staging` exceeded GCP's 30-character account-ID limit, so the equivalent keyless identity was created as `pc-github-staging-deploy`. The first deploy identity run showed the service-level Cloud Run Developer binding did not cover the deploy upsert path; a project-level binding constrained to the staging service resource is being added. No unconditional project-wide deploy role or Cloud Run Admin role is used.
 - Follow-ups: Merge `feat/calendar-day-week-month` into `staging` and observe the first deployment; add a staging-specific migration identity, secret, Cloud Run Job, and explicit migration gate before allowing migration-bearing pushes to auto-deploy; design Production CI/CD separately with manual approval.
