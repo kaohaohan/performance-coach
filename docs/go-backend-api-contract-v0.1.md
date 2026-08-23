@@ -1,6 +1,6 @@
 # DontWorkout — Go Backend API Contract (V0.1)
 
-Status: **V0.8 — approved planned-set contract; implementation pending coordinated migration**
+Status: **V0.8 — implemented.** Planned-set contract shipped in migration `0002_planned_set_prescription`; onboarding and invite codes in `0003_coach_invite_codes`.
 
 Target: 2026-08-16
 
@@ -48,11 +48,30 @@ Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 
 
 ## Authentication
 
-- 所有 endpoint（除 health check）都需要 `Authorization: Bearer <Firebase ID Token>`
-- Go middleware 驗 JWT → 取 `uid` → 查 `users` 表得到 internal user + role
-- 找不到 user → `401 UNAUTHENTICATED`
+### Route protection modes
 
-**Authentication ≠ Authorization。**Firebase 只負責「你是誰」，application identity（`users.id`）與角色權限一律由本系統決定。
+每條 route 屬於下列三種之一：
+
+| Mode | Middleware 行為 | Route |
+| --- | --- | --- |
+| **Public** | 不檢查 `Authorization` | health check、`GET /invite-codes/{code}/preview` |
+| **Firebase-authenticated (app account optional)** | 驗 JWT 取 `uid`；**不要求** `users` 有對應 row | `POST /coach-signup`、`POST /invite-codes/{code}/redeem` |
+| **Application-user authenticated** | 驗 JWT 取 `uid` → 查 `users` 得 internal user + role；查不到 → `401 UNAUTHENTICATED` | 其餘所有 endpoint |
+
+Firebase-authenticated (app account optional) 的 route **不得**因為 `users` 沒有 row 就回 `401`：這兩條 endpoint 同時要服務「還沒有帳號」與「已經有帳號」兩種 caller，前者是它們的正常輸入。
+
+### Caller states
+
+權限矩陣（§4）以下列四種 caller state 表達：
+
+| Caller state | 判定 |
+| --- | --- |
+| **Unauthenticated** | 無 `Authorization` header，或 token 無效 |
+| **Firebase-authenticated, no app account** | Token 驗證通過，`users` 尚無對應 row |
+| **Coach** | Token 通過且 `users.role = COACH` |
+| **Athlete** | Token 通過且 `users.role = ATHLETE` |
+
+**Authentication ≠ Authorization。**Firebase 只負責「你是誰」，application identity（`users.id`）與角色權限一律由本系統決定。Role 於建立帳號時決定，之後永不變更。
 
 ## 錯誤格式（全 API 統一）
 
@@ -161,7 +180,7 @@ Authoring defaults and each effective snapshot position contain exactly one of n
 
 # 3. Endpoints
 
-> **Coordinated breaking migration:** the shapes in this section are the approved target `/api/v1` contract. The current code still implements the older scalar shapes and must not be called compliant until migration, backend, and frontend phases land together. There is no parallel V2 contract.
+> **Implemented contract.** The shapes in this section match the shipped `/api/v1` implementation after migrations `0002_planned_set_prescription` and `0003_coach_invite_codes`. There is no parallel V2 contract.
 
 ## 3.1 Me
 
@@ -170,6 +189,32 @@ Authoring defaults and each effective snapshot position contain exactly one of n
 ```json
 { "id": "...", "name": "Kevin", "role": "ATHLETE" }
 ```
+
+### POST /api/v1/coach-signup — Firebase-authenticated (app account optional)
+
+自助建立 Coach 帳號，取代「由 operator 手動執行 bootstrap」作為產品路徑；bootstrap 僅保留給緊急/維運用途。
+
+Request：
+
+```json
+{ "name": "Kao" }
+```
+
+Response `200`：
+
+```json
+{ "id": "...", "name": "Kao", "role": "COACH" }
+```
+
+| 情況 | 結果 |
+| --- | --- |
+| 該 Firebase uid 尚無 `users` row | 建立 `role = COACH` 的帳號 |
+| 已存在且 `role = COACH` | 冪等回傳既有 row，**不覆寫 `name`** |
+| 已存在且 `role = ATHLETE` | `409 CONFLICT` |
+| 建立路徑上 `name` 為空或超過 80 字元 | `400 INVALID_ARGUMENT` |
+
+`name` 僅在建立路徑必填；既有 coach 重複呼叫可省略。
+Firebase uid 只取自已驗證 token；request body 不含也不接受 `firebaseUid`、`role` 或任何 id。
 
 ---
 
@@ -359,7 +404,90 @@ Soft delete（`archived_at`）。已封存的 workout 不出現在清單，也�
 
 ## 3.4 Coach–Athlete Relationship
 
-MVP 可先用 seed 建立關係，但查詢 endpoint 必須有：
+關係由**邀請碼**建立：Coach 產生可重複使用的碼，Athlete 自行兌換。Coach 無法單方面建立關係。Seed 僅供測試與維運。
+
+### POST /invite-codes — Coach only
+
+Request：
+
+```json
+{ "description": "Fall squad", "expiresInDays": 30 }
+```
+
+`description` 與 `expiresInDays` 皆可為 `null` 或省略；`expiresInDays` 省略時預設 30。
+
+Response `201`：
+
+```json
+{
+  "id": "...",
+  "code": "...",
+  "description": "Fall squad",
+  "status": "ACTIVE",
+  "expiresAt": "...",
+  "revokedAt": null,
+  "createdAt": "..."
+}
+```
+
+`status` ∈ `ACTIVE` / `EXPIRED` / `REVOKED`，於讀取時依 `expiresAt` 與 `revokedAt` 推導，不儲存。
+非 Coach → `403 FORBIDDEN`。
+
+### GET /invite-codes — Coach only
+
+回傳呼叫者自己的碼，`createdAt` 由新到舊。非 Coach → `403 FORBIDDEN`。
+
+### POST /invite-codes/{id}/revoke — Coach only（owner）
+
+冪等。撤銷為 **forward-only**：阻止後續兌換，不解除已加入的 Athlete。
+非 owner 或不存在 → 一律 `404 NOT_FOUND`，不區分兩者。
+
+### GET /invite-codes/{code}/preview — Public
+
+供 Athlete 在加入前確認對象。
+
+Response `200`：
+
+```json
+{ "code": "...", "coachName": "Kao", "description": "Fall squad" }
+```
+
+**不含任何 id**（無 `coachId`、無 invite id）。
+未知 / 格式錯誤 / 已過期 / 已撤銷 → 一律 `404 NOT_FOUND`，因此本 endpoint 無法用來確認某個碼是否曾經存在。
+
+### POST /invite-codes/{code}/redeem — Firebase-authenticated (app account optional)
+
+Request：
+
+```json
+{ "name": "Kevin" }
+```
+
+`name` 僅在需要建立新 `users` row 時必填。
+
+Response `200`：
+
+```json
+{
+  "user": { "id": "...", "name": "Kevin", "role": "ATHLETE" },
+  "coach": { "name": "Kao" }
+}
+```
+
+| 情況 | 結果 |
+| --- | --- |
+| 尚無 `users` row | 建立 `role = ATHLETE` 並連結該 coach |
+| 已是 Athlete、尚未連結 | 建立連結 |
+| 已是 Athlete、已連結同一 coach | 冪等成功，不重複建立 |
+| 已是 Coach（含兌換自己的碼） | `403 FORBIDDEN` |
+| 碼無效（同 preview 的四種情況） | `404 NOT_FOUND` |
+
+一位 Athlete 可連結多位 Coach。既有 row 的 `name` 與 `role` 一律原樣讀回，永不覆寫。
+
+### DELETE /athletes/{athleteId} — Coach only（connected）
+
+`204 No Content`。只刪除 `coach_athletes` 關係，**不刪 `users` row、不動 Firebase 帳號、不動訓練紀錄**。
+未連結、不存在、或 `athleteId` 非合法 UUID → 一律 `404 NOT_FOUND`。
 
 ### GET /athletes — Coach only
 
@@ -698,7 +826,7 @@ Application 端：於 transaction 內取 `MAX(set_number) + 1` 後 insert；撞�
 
 **Retry 語意：**一次初始嘗試 + 最多三次額外的整筆 transaction 重試（共至多四次 insert 嘗試）。每次重試都是全新的 transaction，不是同一個 transaction 內迴圈——PostgreSQL 的 transaction 在任何 statement 出錯（含這裡預期的 unique violation）後即進入 aborted 狀態，之後的 statement 都會被拒絕，必須 rollback 才能繼續；因此每次重試皆為 `BEGIN` → 重新計算 `MAX(set_number) + 1` → `INSERT` → `COMMIT`/`ROLLBACK` 的完整循環,不使用 SAVEPOINT。只有命中上述 constraint 名稱的 23505 才視為預期的 setNumber 競爭而重試；任何其他錯誤（含撞到其他 unique constraint，例如 id/pkey 碰撞）一律直接回傳，不可被重試邏輯吞掉。
 
-每次重試的 transaction 內，於計算 `MAX(set_number) + 1` 之前，先以 `SELECT status FROM workout_sessions WHERE id = $1 FOR SHARE` 重新確認 session 仍為 `ACTIVE`；若併發轉為 `COMPLETED`（即使 V0.1 尚未實作 Complete Session），本次 insert 需中止並回傳 `409 CONFLICT`，而不是寫入一筆屬於已完成 session 的 SetLog。
+每次重試的 transaction 內，於計算 `MAX(set_number) + 1` 之前，先以 `SELECT status FROM workout_sessions WHERE id = $1 FOR SHARE` 重新確認 session 仍為 `ACTIVE`；若併發轉為 `COMPLETED`，本次 insert 需中止並回傳 `409 CONFLICT`，而不是寫入一筆屬於已完成 session 的 SetLog。
 
 unique constraint 是正確性底線，不能只靠應用層計數。
 
@@ -750,99 +878,46 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 
 # 4. 權限矩陣 (Authorization Matrix)
 
-| Endpoint | Coach (owner/connected) | Athlete (本人) | 無關使用者 |
-| --- | --- | --- | --- |
-| GET/POST /exercises | ✅ (公用+自己的；POST 僅建自己的 private Exercise) | ❌ 403 | ❌ 403 |
-| POST /workouts | ✅ | ❌ 403 | ❌ 403 |
-| GET/PATCH/DELETE /workouts/{id} | ✅ owner | ❌ 404 | ❌ 404 |
-| GET /athletes | ✅ | ❌ 403 | ❌ 403 |
-| POST /scheduled-workouts | ✅ 且每個 athlete 都需 connected | ❌ 403 | ❌ 403 |
-| GET /scheduled-workouts | ✅ 僅回自己建立的排程（`athleteId` 選填；未連結該 athlete → 404，見 §3.5） | ❌ 403 | ❌ 403 |
-| GET /scheduled-workouts/{id} | ✅ owner | ❌ 404 | ❌ 404 |
-| PUT /scheduled-workouts/{id} | ✅ owner 且尚未開始訓練（否則 409，見 §3.5） | ❌ 404 | ❌ 404 |
-| GET /me/scheduled-workouts | ➖ (回自己的=空) | ✅ | ✅ (空) |
-| POST .../session (start) | ✅ connected | ✅ | ❌ 404 |
-| POST /sessions/{id}/complete | ✅ connected | ✅ | ❌ 404 |
-| GET /sessions/{id} | ✅ connected | ✅ | ❌ 404 |
-| POST /sessions/{id}/set-logs | ✅ connected | ✅ | ❌ 404 |
-| PATCH/DELETE /set-logs/{id} | ✅ connected | ✅ | ❌ 404 |
+四種 caller state 的定義見 §1 Authentication。Coach / Athlete 欄位中的 owner、connected 條件與其失敗碼直接寫在格內；endpoint 專屬的冪等性與衝突行為寫在 Constraints 欄。
+
+| Endpoint | Unauthenticated | Firebase, no app account | Coach | Athlete | Constraints / notes |
+| --- | --- | --- | --- | --- | --- |
+| `GET /invite-codes/{code}/preview` | ✅ | ✅ | ✅ | ✅ | 除 health check 外唯一公開的 product endpoint；未知/格式錯/過期/已撤銷一律 `404`；回應不含任何 id |
+| `POST /coach-signup` | ❌ 401 | ✅ 建立 COACH | ✅ 冪等回既有，不覆寫 `name` | ❌ 409 CONFLICT | `name` 僅建立路徑必填（≤ 80）；role 永不變更 |
+| `POST /invite-codes/{code}/redeem` | ❌ 401 | ✅ 建立 ATHLETE 並連結 | ❌ 403 FORBIDDEN（含自己的碼） | ✅ 冪等連結 | 可連結多位 Coach；既有 row 的 `name`/`role` 不覆寫；無效碼 `404` |
+| `POST /invite-codes` | ❌ 401 | ❌ 401 | ✅ `201` | ❌ 403 | `expiresInDays` 省略時預設 30 |
+| `GET /invite-codes` | ❌ 401 | ❌ 401 | ✅ 僅自己的 | ❌ 403 | `createdAt` 由新到舊 |
+| `POST /invite-codes/{id}/revoke` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 403 | 冪等；forward-only，不解除已加入者 |
+| `DELETE /athletes/{athleteId}` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ❌ 403 | `204`；只解除關係，保留帳號與訓練紀錄；非法 UUID 亦回 `404` |
+| `GET/POST /exercises` | ❌ 401 | ❌ 401 | ✅ 公用 + 自己的；POST 僅建自己的 private Exercise | ❌ 403 | — |
+| `POST /workouts` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
+| `GET/PATCH/DELETE /workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | — |
+| `GET /athletes` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
+| `POST /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 且每個 athlete 都需 connected | ❌ 403 | 任一 athlete 未連結則整批拒絕，不做部分排程 |
+| `GET /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 僅回自己建立的排程 | ❌ 403 | `athleteId` 選填；未連結該 athlete → `404`，見 §3.5 |
+| `GET /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | 單筆展開 snapshot，供 Coach Calendar 的 Edit 表單 prefill；list 刻意不含 exercises |
+| `PUT /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`，永久唯讀，見 §3.5 |
+| `GET /me/scheduled-workouts` | ❌ 401 | ❌ 401 | ➖ 回自己的 = 空 | ✅ | 無關聯的 application user 得到空清單 |
+| `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
+| `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |
+| `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |
+| `POST /sessions/{id}/set-logs` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | 併發 claim 同一 planned set → `409`，見 §3.8 |
+| `PATCH/DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |
 
 矩陣即 service 層的測試清單：每列至少三個 test case（允許、拒絕、404 隱藏）。
 
 ---
 
-# 5. Target conceptual tables
+# 5. Persistence semantics the API relies on
 
-> 下列為 approved target schema shape；目前 `0001_init_schema` 仍是 scalar implementation。必須等獨立 migration phase 核准後，以 additive migration + backfill 實作，不得修改既有 migration。
+> Table、欄位、constraint 與 index 的 canonical owner 是 `docs/database-schema-relationships.md`（§3 現行 shape、§6 integrity rules）。本節不重述 schema，只記錄 API 行為所依賴的持久化語意。
 
-```sql
-users(id, firebase_uid unique, name, role, created_at)
-
-coach_athletes(coach_id, athlete_id, primary key(coach_id, athlete_id))
-
-exercises(id, name, owner_coach_id null, created_at)
-  -- owner_coach_id NULL = 系統公用動作
-  -- 唯一性用兩個 partial unique index（見 3.2）
-
-workouts(id, coach_id, name, archived_at null, created_at)
-
-workout_exercises(id, workout_id, exercise_id,
-                  target_sets,
-                  target_reps null, target_prescription_note null,
-                  target_load null, target_load_unit null,
-                  target_rpe null, position)
-  -- existing scalar target fields are the authoring defaults
-  -- CHECK exactly one of target_reps/target_prescription_note is present
-  -- target_load_unit in ('kg','lb'); required when any default/override load exists
-  -- UNIQUE (workout_id, position)
-
-workout_exercise_set_overrides(id, workout_exercise_id, planned_position,
-                               reps_override null, prescription_note_override null,
-                               load_override null, rpe_override null)
-  -- sparse authoring rows; nullable column means inherit, never explicit-none
-  -- at least one override value must be non-null
-  -- reps_override/prescription_note_override cannot both be non-null
-  -- UNIQUE (workout_exercise_id, planned_position)
-  -- service validates planned_position in 1..workout_exercises.target_sets
-
-scheduled_workouts(id, workout_id, coach_id, athlete_id, scheduled_date, created_at)
-
-scheduled_workout_exercises(id, scheduled_workout_id, exercise_id,
-                            exercise_name, target_load_unit null, position)
-  -- frozen exercise snapshot parent; exercise_id 僅供 analytics 關聯
-  -- UNIQUE (scheduled_workout_id, position)
-
-scheduled_workout_planned_sets(id, scheduled_workout_exercise_id, planned_position,
-                               target_reps null, target_prescription_note null,
-                               target_load null, target_rpe null)
-  -- fully resolved frozen values; no inheritance/override metadata
-  -- exactly one of target_reps/target_prescription_note is present
-  -- UNIQUE (scheduled_workout_exercise_id, planned_position)
-
-workout_sessions(id, scheduled_workout_id unique, athlete_id,
-                 status, started_at, completed_at)
-
-set_logs(id, session_id, scheduled_workout_exercise_id,
-         scheduled_workout_planned_set_id null, set_number,
-         load numeric null, unit text null, reps integer not null, rpe numeric null,
-         logged_by_user_id, created_at)
-  -- UNIQUE (session_id, scheduled_workout_exercise_id, set_number)
-  -- UNIQUE (session_id, scheduled_workout_planned_set_id)
-  --   WHERE scheduled_workout_planned_set_id IS NOT NULL
-  -- planned-set FK null means EXTRA; non-null means PLANNED
-  -- CHECK ((load IS NULL) = (unit IS NULL))   -- load 與 unit 同進退
-  -- reps not null：V0.1 僅支援 reps-based logging
-```
-
-重點：
-
-- `workout_sessions.scheduled_workout_id` unique → 一個排程一個 session，start 冪等靠 constraint 兜底
-- `set_logs` 三欄 unique 是 setNumber 正確性底線
-- planned-set partial unique 保證同一 session 不能對同一 frozen target 建兩筆 normal actual logs；extra logs 因 reference 為 null 不受此限制
-- service 必須驗證 `scheduled_workout_planned_set_id` 屬於同一個 `scheduled_workout_exercise_id` 與 session snapshot
-- `set_logs` 的 CHECK 保證不會出現「有重量沒單位」或「有單位沒重量」的紀錄
-
-Migration 前必須先查現有 `workout_exercises` 與 `scheduled_workout_exercises` 是否有 `target_reps IS NOT NULL AND target_prescription_note IS NOT NULL`。若結果非 0，停止 backfill 並人工檢查；不得建立 `reps wins` 或其他永久 precedence rule。
+- `workout_sessions.scheduled_workout_id` 唯一 → 一個 ScheduledWorkout 最多一個 session；`POST /scheduled-workouts/{id}/session` 的 start/resume 冪等以此兜底。
+- `set_logs (session_id, scheduled_workout_exercise_id, set_number)` 唯一 → `setNumber` 正確性的最終邊界，不能只靠應用層計數；併發處理見 §3.8。
+- planned-set partial unique → 同一 session 不能對同一 frozen target 建立兩筆 normal actual log；兩個 request 同時 claim 同一 planned set 時回 `409 CONFLICT`。EXTRA log 的 planned-set reference 為 null，不受此限制。
+- Service **必須**驗證 `scheduled_workout_planned_set_id` 屬於同一個 `scheduled_workout_exercise_id` 與同一 session snapshot。這是服務層規則，資料庫不強制。
+- `load` 與 `unit` 同進同出 → 只給其中一方的 SetLog 寫入回 `400 INVALID_ARGUMENT`。
+- `reps` not null → V0.1 僅支援 reps-based logging。
 
 ---
 
@@ -869,9 +944,9 @@ Migration 前必須先查現有 `workout_exercises` 與 `scheduled_workout_exerc
 > 原則：V0.1 schema 要做到的是「未來不會卡死」，不是「現在就支援所有未來功能」。
 > 
 
-## 7.1 Planned-set prescription — approved design, implementation pending
+## 7.1 Planned-set prescription — implemented
 
-V0.1 uses the hybrid design defined in §2 and §5: template authoring stores exercise defaults plus sparse overrides; scheduling persists fully resolved frozen planned-set rows; normal SetLogs explicitly reference one frozen row and extra SetLogs have a null reference. Skipped rows and explicit-none overrides are not part of V0.1. One planned load unit belongs to each WorkoutExercise.
+V0.1 uses the hybrid design defined in §2 and in `docs/database-schema-relationships.md` §3.1: template authoring stores exercise defaults plus sparse overrides; scheduling persists fully resolved frozen planned-set rows; normal SetLogs explicitly reference one frozen row and extra SetLogs have a null reference. Skipped rows and explicit-none overrides are not part of V0.1. One planned load unit belongs to each WorkoutExercise.
 
 This contract deliberately revises the existing `/api/v1` scalar shapes rather than adding `/api/v2`. Frontend, backend, and migration must land as a coordinated controlled-pilot change. The implementation must not introduce dual-read or dual-write compatibility branches.
 

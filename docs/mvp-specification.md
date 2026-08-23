@@ -63,20 +63,62 @@ Route/navigation detail lives in `docs/frontend-ui-spec.md`; this document defin
 
 ---
 
-## **Deferred — Not Yet Specified: Client Invite / Onboarding**
+## **Coach & Athlete Onboarding — Implemented (V0.1)**
 
-> **Status: mechanism undecided. Not implemented. This section exists to make the gap explicit, not to describe a solved feature.**
-> 
+> **Status: implemented.** This section defines product behavior only.
+> Wire-level request/response detail belongs in
+> `docs/go-backend-api-contract-v0.1.md`; screens and navigation belong in
+> `docs/frontend-ui-spec.md`.
 
-The Coach's first step is conceptually "invite or create a Client," but V0.1 has no signup or invite flow. `CoachAthlete` relationships and Athlete accounts are currently created by manual seed only (see `go-backend-api-contract-v0.1.md` §3.4). `/coach/clients` in V0.1 can only *list* already-connected athletes (`GET /athletes`) — it cannot create the relationship.
+Firebase Auth is the only authentication system. An invite code is a **capability, never a credential** — it names which Coach an Athlete is joining, and nothing more. It never signs anyone in.
 
-Before this can ship, the following need a product decision (out of scope for this document to resolve):
+### **Coach account**
 
-- How does a Coach add a new Client — invite link, email, manual creation, code?
-- Does the Athlete need to accept, or is the relationship coach-created unilaterally?
-- Does an Athlete account get created at invite time, or only at first login?
+A Coach registers themselves; no operator step is involved. A login already registered as an Athlete cannot also become a Coach — a role is chosen once, at account creation, and never changes afterwards.
 
-Do not treat `/coach/clients` as feature-complete until this is resolved.
+### **Coach invites an Athlete**
+
+The Coach creates a **reusable** invite code and shares it as a join link or as a short code the Athlete can type in. One code can bring in any number of Athletes.
+
+A code expires after 30 days by default, and the Coach may choose a different lifetime when creating it. A Coach can revoke a code at any time. Revocation is **forward-only**: it stops new Athletes from joining and never disconnects Athletes who already joined. The Coach can tell, for each of their codes, whether it is active, expired, or revoked.
+
+A Coach sees and manages only their own codes and their own Athletes.
+
+### **Athlete joins**
+
+Opening a join link shows the Athlete who they are about to join — the Coach's name and the invite's description — before they commit to anything. The Athlete then creates an account or signs in without leaving the join flow, and arrives at Today.
+
+The Athlete's account is created when they join, not when they are invited. There is no pending or placeholder Athlete: an Athlete exists only once a real person has joined. Joining is safe to repeat — following the same invite twice connects the Athlete once. An Athlete may be connected to more than one Coach.
+
+A Coach account can never join another Coach, including through its own code.
+
+Unknown, expired, and revoked codes are all reported the same way: the join flow cannot be used to discover whether a code ever existed.
+
+### **Coach removes an Athlete**
+
+A Coach can remove an Athlete, which ends the coaching relationship only. The Athlete keeps their account, their login, and their training history, and may be invited again later.
+
+### **Acceptance Criteria**
+
+- A Coach can register without operator involvement.
+- A login already registered as an Athlete cannot register as a Coach.
+- A Coach can create, list, and revoke reusable invite codes, and can tell whether each one is active, expired, or revoked.
+- A revoked or expired code stops new Athletes joining and disconnects nobody.
+- An Athlete with no prior account can join from an invite alone and reach Today in one uninterrupted flow.
+- An Athlete who is already signed in can join without signing in again.
+- Following the same invite twice connects the Athlete once.
+- An Athlete may join more than one Coach.
+- A Coach account cannot join via an invite code, including its own.
+- Unknown, expired, and revoked codes are indistinguishable to the Athlete.
+- A Coach sees and manages only their own codes and their own Athletes.
+- Removing an Athlete ends the relationship and preserves the Athlete's account and training history.
+
+### **Not in V0.1**
+
+- Google / Apple sign-in — email and password only.
+- A "Pending" Athlete state.
+- Single-use codes, bulk upload, SMS or email delivery, Groups / Teams.
+- Assigning workouts during onboarding.
 
 ---
 
