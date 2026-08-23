@@ -505,3 +505,178 @@ func sameFloat(left, right *float64) bool {
 func sameString(left, right *string) bool {
 	return (left == nil && right == nil) || (left != nil && right != nil && *left == *right)
 }
+
+// --- Duplicate-schedule guard (docs/tasks/2026-08-23-duplicate-schedule-guard.md) ---
+
+func TestCreateRejectsDuplicateScheduleAndSchedulesNothing(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	athlete := user(t, "ATHLETE")
+	connect(t, coach, athlete)
+
+	reps := 5
+	w := createWorkout(t, coach, []workout.CreateExerciseInput{
+		{Name: prefix + " dup", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	})
+	input := scheduledworkout.CreateInput{WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-16"}
+
+	if _, err := scheduledworkout.Create(ctx, pool, coach, input); err != nil {
+		t.Fatalf("first schedule: %v", err)
+	}
+
+	_, err := scheduledworkout.Create(ctx, pool, coach, input)
+	var dup *scheduledworkout.DuplicateScheduleError
+	if !errors.As(err, &dup) {
+		t.Fatalf("second schedule error = %v, want DuplicateScheduleError", err)
+	}
+	if len(dup.AthleteNames) != 1 || dup.AthleteNames[0] != athlete.Name {
+		t.Fatalf("AthleteNames = %#v, want [%q]", dup.AthleteNames, athlete.Name)
+	}
+	assertScheduleCount(t, coach.ID, w.ID, athlete.ID, "2026-08-16", 1)
+}
+
+func TestCreateAllowDuplicatesSchedulesAgain(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	athlete := user(t, "ATHLETE")
+	connect(t, coach, athlete)
+
+	reps := 5
+	w := createWorkout(t, coach, []workout.CreateExerciseInput{
+		{Name: prefix + " dup-allowed", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	})
+	input := scheduledworkout.CreateInput{WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-17"}
+
+	if _, err := scheduledworkout.Create(ctx, pool, coach, input); err != nil {
+		t.Fatalf("first schedule: %v", err)
+	}
+
+	input.AllowDuplicates = true
+	if _, err := scheduledworkout.Create(ctx, pool, coach, input); err != nil {
+		t.Fatalf("allowDuplicates schedule: %v", err)
+	}
+	assertScheduleCount(t, coach.ID, w.ID, athlete.ID, "2026-08-17", 2)
+}
+
+// The guard must key on all four of coach/workout/athlete/date — a difference
+// in any one of them is not a duplicate.
+func TestCreateDuplicateGuardIsScopedToWorkoutAthleteAndDate(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	athleteOne, athleteTwo := user(t, "ATHLETE"), user(t, "ATHLETE")
+	connect(t, coach, athleteOne)
+	connect(t, coach, athleteTwo)
+
+	reps := 5
+	plan := []workout.CreateExerciseInput{
+		{Name: prefix + " scoped", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	}
+	first := createWorkout(t, coach, plan)
+	second := createWorkout(t, coach, plan)
+
+	base := scheduledworkout.CreateInput{WorkoutID: first.ID, AthleteIDs: []string{athleteOne.ID}, ScheduledDate: "2026-08-18"}
+	if _, err := scheduledworkout.Create(ctx, pool, coach, base); err != nil {
+		t.Fatalf("baseline schedule: %v", err)
+	}
+
+	otherDate := base
+	otherDate.ScheduledDate = "2026-08-19"
+	if _, err := scheduledworkout.Create(ctx, pool, coach, otherDate); err != nil {
+		t.Fatalf("same workout, different date should be allowed: %v", err)
+	}
+
+	otherAthlete := base
+	otherAthlete.AthleteIDs = []string{athleteTwo.ID}
+	if _, err := scheduledworkout.Create(ctx, pool, coach, otherAthlete); err != nil {
+		t.Fatalf("same workout+date, different athlete should be allowed: %v", err)
+	}
+
+	otherWorkout := base
+	otherWorkout.WorkoutID = second.ID
+	if _, err := scheduledworkout.Create(ctx, pool, coach, otherWorkout); err != nil {
+		t.Fatalf("same athlete+date, different workout should be allowed: %v", err)
+	}
+}
+
+// One duplicate in a batch rejects the whole batch, matching this endpoint's
+// existing all-or-nothing behavior for unconnected athletes.
+func TestCreateDuplicateInBatchRejectsWholeBatch(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	athleteOne, athleteTwo := user(t, "ATHLETE"), user(t, "ATHLETE")
+	connect(t, coach, athleteOne)
+	connect(t, coach, athleteTwo)
+
+	reps := 5
+	w := createWorkout(t, coach, []workout.CreateExerciseInput{
+		{Name: prefix + " batch", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	})
+
+	if _, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
+		WorkoutID: w.ID, AthleteIDs: []string{athleteOne.ID}, ScheduledDate: "2026-08-20",
+	}); err != nil {
+		t.Fatalf("baseline schedule: %v", err)
+	}
+
+	_, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
+		WorkoutID: w.ID, AthleteIDs: []string{athleteOne.ID, athleteTwo.ID}, ScheduledDate: "2026-08-20",
+	})
+	var dup *scheduledworkout.DuplicateScheduleError
+	if !errors.As(err, &dup) {
+		t.Fatalf("batch error = %v, want DuplicateScheduleError", err)
+	}
+	if len(dup.AthleteNames) != 1 || dup.AthleteNames[0] != athleteOne.Name {
+		t.Fatalf("AthleteNames = %#v, want only the already-scheduled athlete", dup.AthleteNames)
+	}
+	// The clean athlete in the batch must not have been written.
+	assertScheduleCount(t, coach.ID, w.ID, athleteTwo.ID, "2026-08-20", 0)
+	assertScheduleCount(t, coach.ID, w.ID, athleteOne.ID, "2026-08-20", 1)
+}
+
+// Another coach scheduling the same shared template to the same athlete on the
+// same day is not a duplicate, and must not be reported as one.
+func TestCreateDuplicateGuardIsScopedToCoach(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coachOne, coachTwo := user(t, "COACH"), user(t, "COACH")
+	athlete := user(t, "ATHLETE")
+	connect(t, coachOne, athlete)
+	connect(t, coachTwo, athlete)
+
+	reps := 5
+	plan := []workout.CreateExerciseInput{
+		{Name: prefix + " cross-coach", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	}
+	workoutOne := createWorkout(t, coachOne, plan)
+	workoutTwo := createWorkout(t, coachTwo, plan)
+
+	if _, err := scheduledworkout.Create(ctx, pool, coachOne, scheduledworkout.CreateInput{
+		WorkoutID: workoutOne.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-21",
+	}); err != nil {
+		t.Fatalf("coach one schedule: %v", err)
+	}
+	if _, err := scheduledworkout.Create(ctx, pool, coachTwo, scheduledworkout.CreateInput{
+		WorkoutID: workoutTwo.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-21",
+	}); err != nil {
+		t.Fatalf("coach two schedule should be allowed: %v", err)
+	}
+}
+
+func assertScheduleCount(t *testing.T, coachID, workoutID, athleteID, date string, want int) {
+	t.Helper()
+	var got int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM scheduled_workouts
+		 WHERE coach_id = $1 AND workout_id = $2 AND athlete_id = $3 AND scheduled_date = $4`,
+		coachID, workoutID, athleteID, date,
+	).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("scheduled_workouts rows = %d, want %d", got, want)
+	}
+}

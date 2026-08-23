@@ -505,14 +505,24 @@ Response `200`：
 {
   "workoutId": "...",
   "athleteIds": ["a1", "a2", "a3"],
-  "scheduledDate": "2026-08-14"
+  "scheduledDate": "2026-08-14",
+  "allowDuplicates": false
 }
 ```
+
+`allowDuplicates`：**選填**，預設 `false`（即預設會擋）。見下方檢查 3。
 
 Service 層檢查（依序）：
 
 1. workout 存在、未封存、且 `workout.coachId == caller.id` → 否則 404
 2. `athleteIds` 非空、無重複；**每一個** athleteId 都有 `CoachAthlete(caller, athleteId)` 關係 → 任一不符回 `403 FORBIDDEN`（全有全無，不做部分成功）
+3. **V0.9 新增｜重複排程防呆**：`allowDuplicates` 為 `false`（或省略）時，若任一 athlete 已有**同一 coach、同一 workout、同一日期**的排程 → `409 CONFLICT`，`message` 會列出這些 athlete 的名字。與檢查 2 一致採全有全無：整批拒絕，不做部分排程。
+
+   這是**防呆，不是 domain rule**。同一天排同一份 workout 兩次是合法的訓練安排（例如 AM/PM 兩堂），所以 client 可以在讓教練確認後、帶 `allowDuplicates: true` 重送同一請求來完成排程。也正因如此，`scheduled_workouts` **刻意沒有**對應的資料庫 UNIQUE constraint — 那會讓合法情境變成不可能，而不只是需要確認。
+
+   檢查在 Create 既有的同一個 transaction 內、對即將寫入的同一批 row 執行，因此不像前端預先檢查那樣可被 race。四個維度缺一不可：換日期、換 athlete、換 workout、換 coach 都不算重複（另一位 coach 把共用 template 排給同一位 athlete 的同一天是各自獨立的排程，且不得向任一方洩漏對方的排程）。
+
+   已存在的重複資料不受影響 — 本檢查只防止新的意外，不清理歷史（系統目前也沒有刪除排程的能力）。
 
 通過後先 deterministic resolve 每個 template exercise 的 defaults + sparse overrides，得到 exactly `1..setCount` effective positions。於 **同一 transaction** 內，對每個 athlete：建立一筆 `scheduled_workouts` → 建立 snapshot exercise（含 frozen `exercise_name` 與 planned unit）→ 建立完整 resolved `ScheduledWorkoutPlannedSet` rows。每位 athlete 都有自己的 snapshot row IDs。
 
@@ -893,7 +903,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST /workouts` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
 | `GET/PATCH/DELETE /workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | — |
 | `GET /athletes` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
-| `POST /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 且每個 athlete 都需 connected | ❌ 403 | 任一 athlete 未連結則整批拒絕，不做部分排程 |
+| `POST /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 且每個 athlete 都需 connected | ❌ 403 | 任一 athlete 未連結則整批拒絕，不做部分排程；已排同一 workout + 同一日期 → `409`，除非帶 `allowDuplicates: true`，見 §3.5 |
 | `GET /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 僅回自己建立的排程 | ❌ 403 | `athleteId` 選填；未連結該 athlete → `404`，見 §3.5 |
 | `GET /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | 單筆展開 snapshot，供 Coach Calendar 的 Edit 表單 prefill；list 刻意不含 exercises |
 | `PUT /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`，永久唯讀，見 §3.5 |

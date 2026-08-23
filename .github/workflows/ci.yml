@@ -1,0 +1,155 @@
+# Verification gate for AGENTS.md §17 (Verification Rules): the checks that
+# section already requires, run on every PR instead of only on the machine of
+# whoever remembered.
+#
+# The api job runs the integration tests against a real PostgreSQL, not just
+# `go build`. That is deliberate and load-bearing: every *_integration_test.go
+# in this repo calls requireDB(t), which calls t.Skip() when TEST_DATABASE_URL
+# is unset — and a fully skipped package still reports `ok`. Without a
+# database, `go test ./...` is green while running close to nothing (19 skips,
+# 0 passes in internal/scheduledworkout alone). The "no tests were skipped"
+# step below exists so that failure mode can never come back silently.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging]
+
+# A new push to the same PR/branch makes the in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: api (go)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Pinned to the same major as docker-compose.yml, so CI and local
+        # development do not disagree about server behavior.
+        image: postgres:16
+        env:
+          POSTGRES_USER: performance
+          POSTGRES_PASSWORD: performance
+          POSTGRES_DB: performance_coach_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U performance -d performance_coach_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The test harness asserts this URL targets performance_coach_test, so a
+      # misconfigured CI can never point the suite at a real database.
+      #
+      # DATABASE_URL is deliberately NOT set here. Several suites (athlete,
+      # coachsignup, exercise, invitecode) skip themselves when DATABASE_URL
+      # resolves to the same database as TEST_DATABASE_URL, so that
+      # destructive tests can never run against a development or production
+      # database. Setting both job-wide tripped exactly that guard and
+      # silently skipped 29 tests. It is scoped to the migrate step instead.
+      TEST_DATABASE_URL: postgres://performance:performance@localhost:5432/performance_coach_test?sslmode=disable
+
+    defaults:
+      run:
+        working-directory: apps/api
+        # Actions' default Linux shell is `bash -e`, which does NOT set
+        # pipefail: `go test ... | tee` would then exit with tee's status and
+        # a failing suite would report success. `shell: bash` is Actions'
+        # spelling of `bash --noprofile --norc -eo pipefail`.
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Read from go.mod rather than pinned here, so the toolchain cannot
+          # drift away from what the module declares.
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would reformat these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Apply migrations
+        # The same entrypoint used in deployment, not a test-only schema path,
+        # so a migration that cannot apply from empty fails here first.
+        # DATABASE_URL is set only here — see the env block above.
+        env:
+          DATABASE_URL: postgres://performance:performance@localhost:5432/performance_coach_test?sslmode=disable
+        run: go run ./cmd/migrate
+
+      - name: go test
+        # -p 1: the integration suites share one database and are not safe to
+        # run in parallel across packages.
+        run: go test -count=1 -p 1 -v ./... 2>&1 | tee test-output.log
+
+      - name: Assert no tests were skipped
+        # See the header comment. If TEST_DATABASE_URL ever stops reaching the
+        # service container, the step above still passes — this one does not.
+        run: |
+          skipped=$(grep -c '^--- SKIP' test-output.log || true)
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::$skipped test(s) skipped — the integration suite is not actually running."
+            grep '^--- SKIP' test-output.log
+            exit 1
+          fi
+          echo "No skipped tests."
+
+  web:
+    name: web (next)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/web
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        # Must precede the typecheck: `next build` generates .next/types,
+        # which is where Next 16 puts the global route types app/layout.tsx
+        # relies on (LayoutProps). Running tsc first fails with
+        # "Cannot find name 'LayoutProps'" — invisible locally, because a
+        # developer's .next already exists from a previous run.
+        #
+        # No NEXT_PUBLIC_FIREBASE_* values are provided on purpose: the build
+        # must not depend on runtime configuration, and this proves it stays
+        # that way. Firebase config is read in the browser, and AuthProvider
+        # already fails closed when it is absent.
+        run: npm run build
+
+      - name: Typecheck
+        # `next build` type-checks too, but running tsc on its own reports
+        # every error rather than stopping at the first, which is what makes a
+        # red build actionable.
+        run: npx tsc --noEmit

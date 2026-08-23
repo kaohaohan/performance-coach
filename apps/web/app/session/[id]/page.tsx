@@ -207,6 +207,9 @@ export default function SessionPage() {
     <main className="min-h-screen bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
       <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-lg">
+          <button type="button" onClick={() => router.back()} aria-label="Back" className="mb-2 -ml-2 flex h-9 w-9 items-center justify-center rounded-full text-white/80 hover:bg-white/10">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5"><path fillRule="evenodd" d="M12.79 4.22a.75.75 0 0 1 0 1.06L8.06 10l4.73 4.72a.75.75 0 1 1-1.06 1.06l-5.25-5.25a.75.75 0 0 1 0-1.06l5.25-5.25a.75.75 0 0 1 1.06 0Z" clipRule="evenodd" /></svg>
+          </button>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Workout Session</p>
           <div className="mt-4 flex items-start justify-between gap-4">
             <div><h1 className="text-3xl font-semibold tracking-tight">{session.athlete.name}</h1><p className="mt-2 text-sm text-slate-300">{isActive ? "Live training" : "Training complete"}</p></div>

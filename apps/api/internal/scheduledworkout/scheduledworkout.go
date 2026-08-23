@@ -84,6 +84,28 @@ var ErrAthleteNotFound = errors.New("scheduledworkout: athlete not found or not 
 // workout with this id exists for a different coach.
 var ErrWorkoutNotFound = errors.New("scheduledworkout: workout not found or not owned by caller")
 
+// ErrDuplicateSchedule indicates at least one requested athlete already has
+// this exact workout scheduled on this exact date by this coach, and the
+// caller did not set AllowDuplicates. Handlers map it to 409 CONFLICT. Like
+// ErrAthletesNotConnected, the whole batch is rejected — this endpoint has
+// never done partial scheduling, and doing so here would leave the coach
+// unable to tell which athletes were written.
+//
+// This is a guard against a silent accident, not a domain rule: scheduling
+// the same workout twice in one day is valid programming (an AM/PM session),
+// which is why the caller can retry with AllowDuplicates rather than being
+// permanently blocked. There is deliberately no database uniqueness
+// constraint backing this — that would make the legitimate case impossible.
+type DuplicateScheduleError struct {
+	// AthleteNames are the already-scheduled athletes, in the order returned
+	// by lookupConnectedAthletes, for the handler to name in its message.
+	AthleteNames []string
+}
+
+func (e *DuplicateScheduleError) Error() string {
+	return fmt.Sprintf("scheduledworkout: %s already have this workout scheduled on this date", strings.Join(e.AthleteNames, ", "))
+}
+
 // ErrAthletesNotConnected indicates at least one requested athleteId has no
 // coach_athletes row with caller. Handlers map this to 403 FORBIDDEN. The
 // whole batch is rejected when this occurs — no partial scheduling.
@@ -178,6 +200,13 @@ type CreateInput struct {
 	WorkoutID     string
 	AthleteIDs    []string
 	ScheduledDate string
+	// AllowDuplicates skips the same-workout-same-day guard below. False (the
+	// default) is the guarding behavior: scheduling a workout an athlete
+	// already has that day is treated as an accident and rejected. True means
+	// the coach was shown the conflict and confirmed it anyway — a two-a-day
+	// is legitimate programming, so this is deliberately possible, just not
+	// silent.
+	AllowDuplicates bool
 }
 
 // Create schedules workoutId to every athlete in athleteIds on
@@ -236,6 +265,17 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 	athletes, err := lookupConnectedAthletes(ctx, tx, caller.ID, input.AthleteIDs)
 	if err != nil {
 		return nil, err
+	}
+
+	// Guard against silently re-scheduling training an athlete already has
+	// that day. Runs inside this transaction against the same rows the insert
+	// loop below will touch, so unlike a frontend pre-check it cannot be
+	// raced. Placed after lookupConnectedAthletes so it only considers
+	// athletes that already passed authorization, and can name them.
+	if !input.AllowDuplicates {
+		if err := assertNoDuplicateSchedule(ctx, tx, caller.ID, input.WorkoutID, scheduledDate, athletes); err != nil {
+			return nil, err
+		}
 	}
 
 	// Read the prescription once into memory, before the per-athlete loop
@@ -432,6 +472,57 @@ func lookupConnectedAthletes(ctx context.Context, tx pgx.Tx, coachID string, ath
 		athletes[i] = byID[id]
 	}
 	return athletes, nil
+}
+
+// assertNoDuplicateSchedule reports which of `athletes` already have
+// workoutID scheduled on scheduledDate by this coach. Athlete order follows
+// the caller's slice so the resulting message reads in the order the coach
+// picked them.
+//
+// Scoped by coach_id as well as athlete/date/workout: two different coaches
+// legitimately scheduling the same shared template to the same athlete on
+// the same day are not duplicates of each other, and one coach must not be
+// told anything about another coach's programming.
+func assertNoDuplicateSchedule(ctx context.Context, tx pgx.Tx, coachID, workoutID string, scheduledDate time.Time, athletes []connectedAthlete) error {
+	athleteIDs := make([]string, len(athletes))
+	for i, a := range athletes {
+		athleteIDs[i] = a.ID
+	}
+
+	const query = `
+		SELECT athlete_id
+		FROM scheduled_workouts
+		WHERE coach_id = $1 AND workout_id = $2 AND scheduled_date = $3
+		  AND athlete_id = ANY($4)`
+
+	rows, err := tx.Query(ctx, query, coachID, workoutID, scheduledDate, athleteIDs)
+	if err != nil {
+		return fmt.Errorf("scheduledworkout: lookup duplicate schedules: %w", err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]struct{})
+	for rows.Next() {
+		var athleteID string
+		if err := rows.Scan(&athleteID); err != nil {
+			return fmt.Errorf("scheduledworkout: scan duplicate schedule: %w", err)
+		}
+		existing[athleteID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("scheduledworkout: iterate duplicate schedules: %w", err)
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(existing))
+	for _, a := range athletes {
+		if _, dup := existing[a.ID]; dup {
+			names = append(names, a.Name)
+		}
+	}
+	return &DuplicateScheduleError{AthleteNames: names}
 }
 
 // resolvedPrescription is one template exercise with its authoring defaults
