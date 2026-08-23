@@ -114,7 +114,7 @@
 | Phase 1 — Task Doc | Done | Approved design documented and committed before implementation. |
 | Phase 2 — WIF and least-privilege IAM | Done | Created active pool/provider, keyless deploy identity, and exact repository/service/runtime-identity bindings; verified no user-managed keys. |
 | Phase 3 — workflow and ignore rules | Done | Added staging-only WIF deployment, cumulative migration guard, digest deployment, zero-traffic candidate smoke test, revision-pinned promotion, and credential exclusions. |
-| Phase 4 — local/static verification | Not Started | Validate workflow shape and review only task files. |
+| Phase 4 — local/static verification | Done | Docker image build succeeded; YAML/dependency gate, ignore rule, cumulative migration guard, diff, and final worktree checks passed. |
 | Phase 5 — first staging deployment | Not Started | Requires the workflow commit to reach lowercase `staging`. |
 | Phase 6 — live verification and deployment record | Not Started | Record SHA, digest, revision, smoke checks, and proxy proof. |
 
