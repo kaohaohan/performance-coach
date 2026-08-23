@@ -9,10 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -728,9 +730,13 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 // /api/v1/scheduled-workouts request body
 // (docs/go-backend-api-contract-v0.1.md §3.5).
 type createScheduledWorkoutRequest struct {
-	WorkoutID     string   `json:"workoutId"`
-	AthleteIDs    []string `json:"athleteIds"`
-	ScheduledDate string   `json:"scheduledDate"`
+	WorkoutID  string   `json:"workoutId"`
+	AthleteIDs []string `json:"athleteIds"`
+	// AllowDuplicates is optional and defaults to false, i.e. to guarding.
+	// Existing clients that never send it keep their exact behavior for every
+	// request that was not already creating a silent duplicate.
+	ScheduledDate   string `json:"scheduledDate"`
+	AllowDuplicates bool   `json:"allowDuplicates"`
 }
 
 // handleCreateScheduledWorkouts decodes the request body, delegates
@@ -752,17 +758,27 @@ func handleCreateScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		input := scheduledworkout.CreateInput{
-			WorkoutID:     req.WorkoutID,
-			AthleteIDs:    req.AthleteIDs,
-			ScheduledDate: req.ScheduledDate,
+			WorkoutID:       req.WorkoutID,
+			AthleteIDs:      req.AthleteIDs,
+			ScheduledDate:   req.ScheduledDate,
+			AllowDuplicates: req.AllowDuplicates,
 		}
 
 		created, err := scheduledworkout.Create(r.Context(), pool, user, input)
 		if err != nil {
 			var validationErr *scheduledworkout.ValidationError
+			var duplicateErr *scheduledworkout.DuplicateScheduleError
 			switch {
 			case errors.Is(err, scheduledworkout.ErrForbidden):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &duplicateErr):
+				// Names the athletes so the client can put them in front of the
+				// coach verbatim; the error envelope has no structured details
+				// field and this is the only endpoint that needs one.
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", fmt.Sprintf(
+					"%s already scheduled for this workout on this date. Resend with allowDuplicates to schedule it again anyway.",
+					strings.Join(duplicateErr.AthleteNames, ", "),
+				))
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			case errors.Is(err, scheduledworkout.ErrWorkoutNotFound):

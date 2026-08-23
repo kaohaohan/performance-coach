@@ -523,6 +523,12 @@ export default function CoachCalendarPage() {
   // render the identical string, which is what made the button look dead.
   const [draftJustSaved, setDraftJustSaved] = useState(false);
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
+  // The API rejects scheduling a workout an athlete already has that day
+  // (409 CONFLICT) unless allowDuplicates is set. That is a guard against an
+  // accident, not a prohibition — a two-a-day is real programming — so the
+  // coach is shown exactly who is already scheduled and can proceed
+  // deliberately. `retry` re-runs the original request with the override.
+  const [duplicateConfirm, setDuplicateConfirm] = useState<{ message: string; retry: () => Promise<void> } | null>(null);
 
   // The one accessor every authoring read uses. Falling back to the browsing
   // date keeps a missed assignment degrading to the old behaviour rather than
@@ -855,7 +861,7 @@ export default function CoachCalendarPage() {
   // atomic. Anything that fails is kept in copyOutstanding and only those are
   // retried on the next PASTE click, which is what stops a retry from
   // double-scheduling whatever already landed.
-  async function handlePaste(athleteIds: string[], targetDate: string) {
+  async function handlePaste(athleteIds: string[], targetDate: string, allowDuplicates = false) {
     if (!idToken || copyInFlight.current || copySource === null) return;
     const workoutIds = copyOutstanding ?? [...new Set(copySource.map((assignment) => assignment.workout.id))];
     if (workoutIds.length === 0 || athleteIds.length === 0) return;
@@ -865,21 +871,37 @@ export default function CoachCalendarPage() {
     setCopyError(null);
 
     const failed: string[] = [];
+    const duplicateMessages: string[] = [];
     let lastError = "";
     for (const workoutId of workoutIds) {
       try {
         await apiFetch(idToken, "/api/v1/scheduled-workouts", {
           method: "POST",
-          body: { workoutId, athleteIds, scheduledDate: targetDate },
+          body: { workoutId, athleteIds, scheduledDate: targetDate, ...(allowDuplicates ? { allowDuplicates: true } : {}) },
         });
       } catch (err) {
         failed.push(workoutId);
         lastError = errorMessage(err);
+        if (isDuplicateScheduleError(err)) duplicateMessages.push(err.message);
       }
     }
 
     copyInFlight.current = false;
     setCopySubmitting(false);
+
+    // Every failure was a duplicate the coach can legitimately override, so
+    // offer that instead of reporting an error. A mixed batch falls through
+    // to the normal partial-failure path below: the outstanding list already
+    // handles retrying only what did not land, and re-offering "paste anyway"
+    // for a set that also contains genuine failures would be misleading.
+    if (!allowDuplicates && duplicateMessages.length > 0 && duplicateMessages.length === failed.length) {
+      setCopyOutstanding(failed);
+      setDuplicateConfirm({
+        message: [...new Set(duplicateMessages)].join(" "),
+        retry: () => handlePaste(athleteIds, targetDate, true),
+      });
+      return;
+    }
 
     if (failed.length > 0) {
       const names = failed.map((id) => copySource.find((assignment) => assignment.workout.id === id)?.workout.name ?? "a workout");
@@ -1159,7 +1181,7 @@ export default function CoachCalendarPage() {
     setBuildFieldErrors((previous) => ({ ...previous, athletes: undefined }));
   }
 
-  async function handleAssign() {
+  async function handleAssign(allowDuplicates = false) {
     if (assignmentInFlight.current || buildInFlight.current || buildStatus !== "idle" || pendingAssignment || !idToken || !selectedWorkoutId || selectedAthleteIds.length === 0) return;
     assignmentInFlight.current = true;
     setAssigning(true);
@@ -1171,13 +1193,17 @@ export default function CoachCalendarPage() {
         // `date`, not authoringDate: this is the Existing Workout path, which
         // has no builder content. If a BUILD draft happens to be alive for
         // another day, its date must not leak into this assignment.
-        body: { workoutId: selectedWorkoutId, athleteIds: selectedAthleteIds, scheduledDate: date },
+        body: { workoutId: selectedWorkoutId, athleteIds: selectedAthleteIds, scheduledDate: date, ...(allowDuplicates ? { allowDuplicates: true } : {}) },
       });
       setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
       setAssignSuccess(true);
       setEditorOpen(false);
       await refetchAssignments();
     } catch (err) {
+      if (isDuplicateScheduleError(err) && !allowDuplicates) {
+        setDuplicateConfirm({ message: err.message, retry: () => handleAssign(true) });
+        return;
+      }
       setAssignError(errorMessage(err));
     } finally {
       assignmentInFlight.current = false;
@@ -1482,7 +1508,7 @@ export default function CoachCalendarPage() {
                 )}
                 {assignError && <div className="mt-3"><Notice tone="error">{assignError}</Notice></div>}
                 {assignSuccess && <div className="mt-3"><Notice tone="success">Workout assigned. Your coaching board is updated below.</Notice></div>}
-                <button type="button" onClick={handleAssign} disabled={assigning || !selectedWorkoutId || selectedCount === 0} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+                <button type="button" onClick={() => handleAssign()} disabled={assigning || !selectedWorkoutId || selectedCount === 0} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                   {assigning ? "Assigning workout…" : `Assign to ${selectedCount || ""} athlete${selectedCount === 1 ? "" : "s"}`}
                 </button>
               </div> : (
@@ -1708,6 +1734,19 @@ export default function CoachCalendarPage() {
         />
       )}
 
+      {duplicateConfirm && <ConfirmDialog
+        title="Already scheduled"
+        body={<>{duplicateConfirm.message.replace(" Resend with allowDuplicates to schedule it again anyway.", "")} Scheduling it again creates a second, separate copy on that day — which is what you want for a two-a-day, and probably is not what you want otherwise.</>}
+        confirmLabel="Schedule it anyway"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          const { retry } = duplicateConfirm;
+          setDuplicateConfirm(null);
+          void retry();
+        }}
+        onCancel={() => setDuplicateConfirm(null)}
+      />}
+
       {pendingNav && <ConfirmDialog
         title="Close the builder?"
         body={pendingNav.kind === "date"
@@ -1859,6 +1898,15 @@ function FieldHint({ hintId, label, children }: { hintId: string; label: string;
       {open && <span id={bubbleId} role="note" aria-hidden="true" className="absolute left-0 top-full z-20 mt-1 w-64 max-w-[calc(100vw-3rem)] rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium leading-5 text-white shadow-lg">{children}</span>}
     </span>
   );
+}
+
+// The API answers a would-be duplicate schedule with 409 CONFLICT and a
+// message naming the already-scheduled athletes
+// (docs/go-backend-api-contract-v0.1.md §3.5). Matched on status alone: this
+// endpoint has exactly one 409 case, and the envelope carries no more
+// specific discriminator than the shared "CONFLICT" code.
+function isDuplicateScheduleError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 409;
 }
 
 function errorMessage(err: unknown): string {
