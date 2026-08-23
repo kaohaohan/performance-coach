@@ -30,6 +30,8 @@ Copy the variables from `.env.example` into your shell environment (e.g. `export
 
 `FIREBASE_AUTH_EMULATOR_HOST` must only be set in local development. When it's set, the Firebase Admin SDK verifies ID tokens against the local emulator instead of real Firebase — it must be unset in any staging/production environment, or authentication would silently accept emulator-issued tokens.
 
+`NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` is only needed where "Continue with Google" runs against real Firebase. It names the domain serving the sign-in popup handler (`<project>.firebaseapp.com`); locally the Auth Emulator serves its own handler and the variable stays unset. Deployed environments also need the Google provider enabled and **One account per email address** selected in the Firebase Console — see `docs/tasks/2026-08-20-google-signin-account-continuity.md` §6.
+
 ### 4. Go API
 
 ```

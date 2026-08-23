@@ -4,8 +4,17 @@
 // current ID token for calling the Go API. No server session/cookie exists
 // yet — the ID token lives in memory only (re-fetched on Firebase's own
 // token refresh), per this phase's scope (login flow only).
+//
+// The `idToken` string below is a snapshot from the last onIdTokenChanged
+// callback and is safe for render gating ("is a token available yet"), but it
+// must not be what an API call actually sends: an ID token expires an hour
+// after it is minted, and a backgrounded tab (phone locked mid-workout) stops
+// the SDK's refresh timer, leaving the snapshot stale. getIdToken() below
+// mints on demand instead, and is registered with lib/api.ts so every
+// apiFetch call uses it.
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -13,16 +22,34 @@ import {
 } from "react";
 import {
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
   onIdTokenChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut as firebaseSignOut,
   type User,
 } from "firebase/auth";
 import { getFirebaseAuth } from "./firebase";
+import { setAuthTokenProvider } from "./api";
+
+// GoogleSignInResult carries both halves a caller needs after a Google
+// sign-in: the fresh ID token to authenticate the very next API call, and
+// the Firebase user itself — coach signup reads displayName off it to
+// pre-fill the Coach's name.
+export type GoogleSignInResult = {
+  idToken: string;
+  user: User;
+};
 
 type AuthContextValue = {
   user: User | null;
+  // Snapshot of the current ID token for render gating only — see the module
+  // comment above. To authenticate a request, use getIdToken().
   idToken: string | null;
+  // Mints a valid ID token at call time: returns the cached one while it is
+  // still valid, and silently exchanges the refresh token when it is not.
+  // Rejects when nobody is signed in (or Firebase failed to initialize).
+  getIdToken: (forceRefresh?: boolean) => Promise<string>;
   loading: boolean;
   // Returns a freshly-minted ID token directly from the sign-in credential,
   // rather than relying on the async onIdTokenChanged state update below —
@@ -34,6 +61,18 @@ type AuthContextValue = {
   // (docs/athlete-onboarding-invite-codes-v0.1.md §7.6) — it does not
   // create a PostgreSQL `users` row by itself; that happens on redeem.
   signUp: (email: string, password: string) => Promise<string>;
+  // signInWithGoogle authenticates against the Google provider and, like
+  // signIn/signUp, hands back a token taken straight from the credential.
+  //
+  // It provisions nothing by itself. Firebase alone decides which Firebase
+  // user this Google identity resolves to — including linking it to an
+  // existing password account for the same address under the project's
+  // "One account per email address" setting, which is what lets a pilot
+  // user who registered with Gmail + password keep their UID (and so their
+  // users.firebase_uid, relationships and history) after switching to
+  // Google. This app never resolves identity by email and never merges
+  // application users; see docs/tasks/2026-08-20-google-signin-account-continuity.md.
+  signInWithGoogle: () => Promise<GoogleSignInResult>;
   signOut: () => Promise<void>;
 };
 
@@ -69,6 +108,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
+  // getIdToken is the single source of a *valid* token. currentUser is read
+  // at call time rather than closed over, so the callback keeps a stable
+  // identity across sign-ins and re-renders (safe to register once below and
+  // to put in an effect's dependency list). getIdToken(false) returns the
+  // SDK's cached token unless it is expired or within five minutes of
+  // expiring, so this is not a network call per request.
+  const getIdToken = useCallback(async (forceRefresh = false): Promise<string> => {
+    const currentUser = getFirebaseAuth().currentUser;
+    if (!currentUser) {
+      throw new Error("auth-context: no signed-in user");
+    }
+    return currentUser.getIdToken(forceRefresh);
+  }, []);
+
+  useEffect(() => {
+    // Hand the API client a way to mint a token per request, so pages can go
+    // on passing their captured `idToken` to apiFetch without that snapshot
+    // being what gets sent (lib/api.ts, setAuthTokenProvider). Cleared on
+    // unmount so a torn-down provider cannot keep serving tokens.
+    setAuthTokenProvider(getIdToken);
+    return () => setAuthTokenProvider(null);
+  }, [getIdToken]);
+
   async function signIn(email: string, password: string): Promise<string> {
     const auth = getFirebaseAuth();
     const credential = await signInWithEmailAndPassword(auth, email, password);
@@ -86,13 +148,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return credential.user.getIdToken();
   }
 
+  // signInWithPopup, not signInWithRedirect: the redirect flow finishes by
+  // reading storage owned by the authDomain sign-in helper, which is
+  // cross-origin to our Vercel host and blocked by Safari 16.1+, Firefox
+  // 109+ and Chrome M115+. Firebase's redirect best-practices guidance
+  // names switching to popup as the fix for apps not served from Firebase
+  // Hosting. Popup also keeps the athlete invite flow a single
+  // uninterrupted client state machine, so /join/<code> cannot be lost
+  // across a navigation. Callers must invoke this only from an explicit
+  // user gesture — browsers block popups opened any other way.
+  async function signInWithGoogle(): Promise<GoogleSignInResult> {
+    const auth = getFirebaseAuth();
+    const provider = new GoogleAuthProvider();
+    // Always show the account chooser. Left to itself Google reuses the one
+    // session already in the browser, which is how someone on a shared
+    // phone signs in as the wrong person — and on the invite flow that
+    // would attach the invite to the wrong Firebase identity.
+    provider.setCustomParameters({ prompt: "select_account" });
+    const credential = await signInWithPopup(auth, provider);
+    // Same reasoning as signIn/signUp: return the token directly rather
+    // than racing the onIdTokenChanged update above.
+    return { idToken: await credential.user.getIdToken(), user: credential.user };
+  }
+
   async function signOut() {
     const auth = getFirebaseAuth();
     await firebaseSignOut(auth);
   }
 
   return (
-    <AuthContext.Provider value={{ user, idToken, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, idToken, getIdToken, loading, signIn, signUp, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -458,6 +458,45 @@ Response `200`（陣列，每筆為一個 ScheduledWorkout 摘要）：
 
 `session`：`null` 代表該 ScheduledWorkout 尚未開始訓練；非 null（`{ id, status }`，`status` ∈ `ACTIVE`/`COMPLETED`）代表已開始或完成。前端（Calendar 日檢視、Coach review 列表）據此顯示每個 athlete 當日的完成狀態；要看實際 SetLog / plan vs actual 仍需另呼叫 `GET /sessions/{id}`。
 
+### GET /scheduled-workouts/{id} — Coach only
+
+**V0.6 新增**：讀取單一 ScheduledWorkout 的展開 snapshot（含 exercises 與 resolved planned sets），僅限擁有者 coach（`coachId != caller.id` → `404 NOT_FOUND`，同上）。存在的唯一理由是給 Coach Calendar 的 Edit 動作 prefill 表單——上面 `GET /scheduled-workouts`（list）刻意不含 exercises,單筆 detail 沒有其他讀取路徑。Response 與 POST 相同的單一元素形狀，差別是 `session` 反映實際狀態（可能非 null）而不是固定 `null`。
+
+### PUT /scheduled-workouts/{id} — Coach only
+
+**V0.6 新增**：修正意外指派錯誤的排程。Coach 只能編輯**尚未開始訓練**（`workout_sessions` 尚無對應 row）的自己的 ScheduledWorkout；一旦 `ACTIVE` 或 `COMPLETED`，一律 `409 CONFLICT`，永久唯讀。這是修正意外指派的**唯一**入口 — 絕不透過編輯 reusable Workout template 再重新 snapshot 所有 athlete 來達成同樣效果（那會靜默改到其他 athlete、甚至其他日期的排程）。
+
+Request body 沿用 POST /workouts 的 per-exercise 形狀（`exercises[].name` + `plan`），**沒有頂層 `name`**：ScheduledWorkout 本身沒有名稱欄位，顯示名稱一律 join 自 reusable Workout（見上方 GET 回應範例），本 endpoint 不觸碰它。
+
+```json
+{
+  "exercises": [
+    {
+      "name": "Back Squat",
+      "plan": {
+        "setCount": 4,
+        "defaults": { "reps": 8, "load": 100, "unit": "kg", "rpe": 8 },
+        "overrides": []
+      }
+    }
+  ]
+}
+```
+
+Service 層檢查（依序）：
+
+1. caller 必須是 COACH → 否則 403
+2. `id` 必須是合法 UUID → 否則 400
+3. `exercises` 非空、每個 `name` 非空、每個 `plan` 通過與 POST /workouts 相同的 prescription 驗證規則 → 否則 400（在任何 DB 存取前完成，與 POST /scheduled-workouts 的既有順序原則一致）
+4. ScheduledWorkout 存在且 `coachId == caller.id` → 否則 `404 NOT_FOUND`（resource-scoping，非 role check，不透露它屬於另一個 coach——與 §3.5 既有慣例一致）
+5. 尚無 `workout_sessions` row（無論 `ACTIVE` 或 `COMPLETED`）→ 否則 `409 CONFLICT`
+
+第 4-5 步與所有寫入都在**同一個 transaction**內完成：先以 `SELECT ... FOR UPDATE` 鎖住該 ScheduledWorkout row，再檢查 session；驗證失敗或任何寫入失敗都不留下部分寫入。這個鎖同時是併發保護——若一個 `POST .../session`（開始訓練）在編輯中途才嘗試 `INSERT`，會被同一 row 上的 foreign key 鎖擋住，直到本次編輯 commit 或 rollback 為止，athlete 因此永遠不會看到「編輯到一半」的 snapshot。
+
+通過後刪除該 ScheduledWorkout 既有的 `scheduled_workout_planned_sets` 與 `scheduled_workout_exercises` row，重新以請求內容 resolve 並寫入新的 snapshot（`exercise_name`、`position`、frozen unit、resolved planned sets 的語意與 POST /scheduled-workouts 完全相同）。**只動這一筆 ScheduledWorkout**：既不動 reusable Workout template，也不動同一 template 指派給其他 athlete（或同一 athlete其他日期）的 ScheduledWorkout。
+
+Response `200`：與 POST /scheduled-workouts 陣列中單一元素相同的形狀（展開後的新 snapshot；`session` 固定 `null`，因為能編輯就代表尚未開始訓練）。
+
 ---
 
 ## 3.6 Athlete Today View（Story 3）
@@ -719,6 +758,8 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | GET /athletes | ✅ | ❌ 403 | ❌ 403 |
 | POST /scheduled-workouts | ✅ 且每個 athlete 都需 connected | ❌ 403 | ❌ 403 |
 | GET /scheduled-workouts | ✅ 僅回自己建立的排程（`athleteId` 選填；未連結該 athlete → 404，見 §3.5） | ❌ 403 | ❌ 403 |
+| GET /scheduled-workouts/{id} | ✅ owner | ❌ 404 | ❌ 404 |
+| PUT /scheduled-workouts/{id} | ✅ owner 且尚未開始訓練（否則 409，見 §3.5） | ❌ 404 | ❌ 404 |
 | GET /me/scheduled-workouts | ➖ (回自己的=空) | ✅ | ✅ (空) |
 | POST .../session (start) | ✅ connected | ✅ | ❌ 404 |
 | POST /sessions/{id}/complete | ✅ connected | ✅ | ❌ 404 |
