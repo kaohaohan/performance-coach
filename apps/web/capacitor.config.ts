@@ -10,6 +10,21 @@ const config: CapacitorConfig = {
   server: {
     url: "https://performance-coach-git-staging-kaohaohans-projects.vercel.app",
   },
+  plugins: {
+    // Only Google is bundled. The plugin enables every provider by default,
+    // which would link the Facebook and Twitter SDKs into the binary for
+    // sign-in methods this app does not offer — dead dependency surface that
+    // also drags in privacy-manifest obligations. Apple stays off until Sign
+    // in with Apple is actually in scope.
+    SocialLogin: {
+      providers: {
+        google: true,
+        facebook: false,
+        apple: false,
+        twitter: false,
+      },
+    },
+  },
 };
 
 export default config;
