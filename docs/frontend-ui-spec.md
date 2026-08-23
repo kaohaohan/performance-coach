@@ -29,7 +29,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 | Route | Role | Backs onto | Purpose |
 |---|---|---|---|
 | `/coach/calendar` | **Primary** | `GET /exercises`, `POST /workouts`, `POST /scheduled-workouts`, `GET /scheduled-workouts` (athleteId omitted → all connected athletes in a date range) | Default landing page after Coach login and the primary programming workspace. Pick a date and one-or-more Athletes, then either choose an existing saved Workout → Assign, or Build Workout inline → add Exercises → define sets → define a uniform prescription and optional individual-set overrides → Build & Assign. Inline Build creates one normal saved Workout template, then batch-schedules it; it does not create a Workout per Athlete. Shows each Athlete's completion status per day (`session` field on the scheduled-workout list). Entry point into `/session/[id]` for review or live 1:1 coaching. |
-| `/coach/clients` | Secondary | `GET /athletes` | List of connected Athletes. **Does not yet support inviting/creating a Client** — see "Deferred" below. |
+| `/coach/clients` | Secondary | `GET /athletes`, `DELETE /athletes/{athleteId}`, `GET/POST /invite-codes`, `POST /invite-codes/{id}/revoke` | Athletes tab lists connected Athletes and can remove one (ends the relationship only). Invite Codes tab creates, lists and revokes reusable invite codes. Product behavior is defined in `docs/mvp-specification.md`, "Coach & Athlete Onboarding — Implemented (V0.1)". |
 | `/coach/workouts` | Secondary | `GET /workouts`, `POST /workouts` | Secondary reusable-template tool. Coaches can create saved Workout templates in advance, view saved templates, and later reuse them from Calendar. It is optional pre-programming, never a prerequisite for Calendar scheduling. |
 | `/coach/exercises` | Secondary | `GET /exercises`, `POST /exercises` | Secondary Exercise-management tool and the canonical V0.1 surface for creating private Exercises. Calendar's inline Workout Builder searches existing Exercises through `GET /api/v1/exercises?q=`; if a movement is unavailable, Coach opens Exercise Library rather than creating it inline. |
 
@@ -44,6 +44,13 @@ This is a frontend information-architecture decision. It introduces no new backe
 | Route | Role | Backs onto | Purpose |
 |---|---|---|---|
 | `/session/[id]` | Coach (connected) + Athlete (self) | `POST /scheduled-workouts/{id}/session`, `GET /sessions/{id}`, `POST/PATCH/DELETE /sessions/{id}/set-logs`, `POST /sessions/{id}/complete` | The Training Session UI. Both roles use the same screen/domain: start or resume a session, log/edit/delete SetLogs, view plan vs. actual, complete the session. This is what makes Story 2 (Coach runs a live 1:1 session) possible without a separate coach-only UI. |
+
+### Onboarding (unauthenticated)
+
+| Route | Role | Backs onto | Purpose |
+|---|---|---|---|
+| `/join` | Unauthenticated | none | Manual invite-code entry. Normalizes input and routes to `/join/[code]`. |
+| `/join/[code]` | Unauthenticated | `GET /invite-codes/{code}/preview`, `POST /invite-codes/{code}/redeem` | Preview → confirm → auth (embedded, no redirect to `/login`) → redeem → `/today`. Product behavior is defined in `docs/mvp-specification.md`, "Coach & Athlete Onboarding — Implemented (V0.1)". |
 
 ---
 
@@ -77,7 +84,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 
 ## 4. Explicitly Deferred / Not Implemented
 
-- **Client invite/onboarding mechanism** — undecided. `/coach/clients` can only list existing connections (`GET /athletes`); it cannot create one. `CoachAthlete` relationships are currently seed-only. See `docs/mvp-specification.md`, "Deferred — Not Yet Specified: Client Invite / Onboarding."
+- **Onboarding — implemented, with these parts still deferred.** Athletes self-connect by redeeming a reusable Coach invite code; `CoachAthlete` relationships are no longer seed-only. Product behavior is defined in `docs/mvp-specification.md`, "Coach & Athlete Onboarding — Implemented (V0.1)". Still deferred: Google / Apple sign-in (email and password only), a "Pending" Athlete state, single-use codes, bulk upload, and SMS or email delivery of invites.
 - **Voice / Video / AI** — deferred per `docs/mvp-specification.md` Story 5/6 and §4/§5 (Out of Scope / Future Video Flow). No route in this document reflects them.
 - **No Calendar domain object or endpoint** — `/coach/calendar` is served entirely by existing `Workout`/`ScheduledWorkout` endpoints (extended per `go-backend-api-contract-v0.1.md` §3.5/V0.5). There is no `calendars` table and no `/calendar` API resource.
 - **Exercise Library slice boundaries** — no Exercise edit/archive, video, description, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, standalone Exercise-Library Workout Builder, or System exercise seed implementation.

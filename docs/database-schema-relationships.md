@@ -9,6 +9,8 @@ Purpose: Define the PostgreSQL data model, table responsibilities, foreign keys,
 ```
 User (Coach) ──< Workout ──< WorkoutExercise >── Exercise
       │
+      ├──< CoachInviteCode
+      │
       └──< CoachAthlete >── User (Athlete)
 
 Workout
@@ -26,6 +28,7 @@ More explicitly:
 ```
 users
   ├──< coach_athletes >── users
+  ├──< coach_invite_codes
   ├──< workouts
   ├──< exercises (owner_coach_id nullable)
   └──< set_logs (logged_by_user_id)
@@ -50,12 +53,15 @@ scheduled_workout_planned_sets
   └──< set_logs (nullable reference; null = EXTRA)
 ```
 
+Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite row itself is never consumed, decremented, or referenced from `coach_athletes` — it stays reusable until it expires or is revoked.
+
 ## 2. Table Summary
 
 | Table | Important fields | Relationship | Responsibility |
 | --- | --- | --- | --- |
 | `users` | `id`, `firebase_uid`, `name`, `role` | Root entity | Application identity. Firebase authenticates the user; this row determines internal identity and role. |
 | `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Defines which coaches may access and operate on which athletes. |
+| `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
 | `exercises` | `id`, `name`, `owner_coach_id` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
 | `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults for one template exercise. |
@@ -66,7 +72,7 @@ scheduled_workout_planned_sets
 | `workout_sessions` | `scheduled_workout_id`, `athlete_id`, `status`, timestamps | ScheduledWorkout 1:0..1 | Actual training occurrence. One scheduled workout can create at most one session. |
 | `set_logs` | `session_id`, `scheduled_workout_exercise_id`, optional `scheduled_workout_planned_set_id`, `set_number`, actual fields | Session 1:N; ScheduledWorkoutExercise 1:N; optional PlannedSet link | Actual performance. Non-null planned-set link = PLANNED; null link = EXTRA. |
 
-The rows above describe the approved target responsibilities. The checked-in `0001_init_schema` remains scalar; §3 records that current shape and §3.1 records the target shape for a future approved migration.
+The rows above describe the implemented responsibilities. `0001_init_schema` established the scalar baseline; `0002_planned_set_prescription` added the override and planned-set rows recorded in §3.1; `0003_coach_invite_codes` added the invite table. §3 records the current checked-in shape.
 
 ## 3. Current implemented PostgreSQL shape
 
@@ -84,6 +90,26 @@ coach_athletes(
   athlete_id uuid references users(id),
   primary key (coach_id, athlete_id)
 )
+
+coach_invite_codes(
+  id uuid primary key,
+  coach_id uuid not null references users(id),
+  code text not null unique,
+  description text null,
+  expires_at timestamptz not null,
+  revoked_at timestamptz null,
+  created_at timestamptz not null
+)
+  -- coach_invite_codes_code_format_check:
+  --   CHECK (code ~ '^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{10}$')
+  -- coach_invite_codes_description_check:
+  --   CHECK (description IS NULL OR length(btrim(description)) > 0)
+  -- coach_invite_codes_expiry_check:  CHECK (expires_at > created_at)
+  -- coach_invite_codes_revoked_check: CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+  -- INDEX coach_invite_codes_coach_created_idx (coach_id, created_at DESC)
+  --   serves GET /api/v1/invite-codes (caller's own codes, newest first)
+  -- Status (ACTIVE/EXPIRED/REVOKED) is derived at read time from
+  --   revoked_at and expires_at; it is never stored.
 
 exercises(
   id uuid primary key,
@@ -160,9 +186,9 @@ set_logs(
 )
 ```
 
-### 3.1 Approved target planned-set shape
+### 3.1 Planned-set shape as implemented
 
-The implementation migration must be additive and must not rewrite `0001_init_schema`. Exact migration names may differ, but these entities and semantics are canonical:
+Implemented additively by `0002_planned_set_prescription` without rewriting `0001_init_schema`. These entities and semantics are canonical:
 
 ```sql
 workout_exercises(
@@ -231,7 +257,7 @@ create unique index one_actual_per_planned_set
 
 Existing `workout_exercises.target_reps`, `target_prescription_note`, and `target_rpe` become authoring defaults; they do not need duplicate `default_*` columns. V0.1 override storage has only two states: a null override column means inherit; a non-null override column means explicit value. It does not encode explicit-none. The service validates override position `<= target_sets`, requires the parent `target_load_unit` when any load override exists, and validates that a SetLog's planned-set reference belongs to the same snapshot exercise and session. A null SetLog planned-set reference is the formal EXTRA representation.
 
-### 3.2 Approved conceptual migration/backfill
+### 3.2 Migration/backfill as executed by `0002_planned_set_prescription`
 
 1. Before schema mutation, query both current template and scheduled snapshot tables for rows where `target_reps IS NOT NULL AND target_prescription_note IS NOT NULL`.
 2. If either query returns any row, stop and inspect those rows manually. There is no `reps wins` or text-wins precedence rule.
@@ -269,7 +295,7 @@ V0.1 rule: if a system exercise and requested name match after `lower(trim(name)
 
 `SetLog` is what actually happened during training.
 
-The current checked-in relationship aligns plan and actual only at exercise level. The approved target relationship aligns normal actuals by explicit frozen planned-set reference while preserving exercise context for both normal and extra SetLogs.
+`0001_init_schema` aligned plan and actual only at exercise level. Since `0002_planned_set_prescription`, normal actuals are aligned by explicit frozen planned-set reference while exercise context is preserved for both normal and extra SetLogs.
 
 Example:
 
@@ -296,7 +322,7 @@ Historical display reads `exercise_name` and `target_load_unit` from `scheduled_
 
 ### 5.1 Approved hybrid planned-set architecture
 
-The current scalar schema cannot yet persist these approved V0.1 rules:
+These V0.1 rules are persisted by the shape recorded in §3.1 (`0002_planned_set_prescription`):
 
 - `target sets = N` yields exactly `N` effective planned set positions, ordered `1..N`.
 - The **authoring model** contains exercise-level defaults plus sparse, property-specific per-position overrides. The Coach starts in a **uniform-first** editing mode: one reps value or text prescription, one load plus unit, and one RPE may apply to all `N` positions; uniform work must not require N repeated entries.
@@ -319,6 +345,8 @@ The target representation is the normalized hybrid shape in §3.1. Because this 
 ## 6. Important Integrity Rules
 
 - `coach_athletes` prevents duplicate coach-athlete relationships through its composite primary key.
+- `coach_invite_codes.code` is globally unique and constrained by CHECK to a 10-character unambiguous alphabet: the database, not the generator, is the final guarantee that two coaches can never share a code.
+- There is no redemption-audit table. Idempotent redemption is guaranteed by `coach_athletes`'s composite primary key plus `ON CONFLICT DO NOTHING`; no second table is required for correctness.
 - `workout_exercises (workout_id, position)` is unique so item order cannot collide inside one template.
 - `scheduled_workout_exercises (scheduled_workout_id, position)` is unique for the same reason in the frozen snapshot.
 - `workout_exercise_set_overrides (workout_exercise_id, planned_position)` is unique; service validation keeps positions within `1..target_sets`.
@@ -344,7 +372,7 @@ Coach
 
 V0.1 SetLog is currently reps-based. Actual `load` and `unit` are nullable for bodyweight movements. Time/distance actual metrics remain future extensions; preserving a planned text prescription such as `30 sec` does not itself make duration an actual SetLog metric.
 
-Approved but not yet implemented in the current scalar schema: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association. Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
+Implemented: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association (`0002_planned_set_prescription`); coach invite codes (`0003_coach_invite_codes`). Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
 
 ## 8. Future Extension Points
 
