@@ -1512,8 +1512,8 @@ export default function CoachCalendarPage() {
                 </div>}
 
                 {!editTarget && <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                  <ProgrammingModeButton active={programmingMode === "EXISTING"} onClick={() => changeProgrammingMode("EXISTING")} disabled={programmingControlsDisabled}>Existing Workout</ProgrammingModeButton>
-                  <ProgrammingModeButton active={programmingMode === "BUILD"} onClick={() => changeProgrammingMode("BUILD")} disabled={programmingControlsDisabled}>Build New Workout</ProgrammingModeButton>
+                  <ProgrammingModeButton active={programmingMode === "EXISTING"} onClick={() => changeProgrammingMode("EXISTING")} disabled={programmingControlsDisabled}>From saved</ProgrammingModeButton>
+                  <ProgrammingModeButton active={programmingMode === "BUILD"} onClick={() => changeProgrammingMode("BUILD")} disabled={programmingControlsDisabled}>New workout</ProgrammingModeButton>
                 </div>}
 
                 {editTarget ? <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-medium text-amber-900 ring-1 ring-amber-600/15">Editing <span className="font-bold">{editTarget.athleteName}</span>&apos;s assigned workout. This replaces only this one assignment — the reusable Workout template and any other athlete&apos;s copy of it are unaffected.</p> : <fieldset className="mt-4 rounded-xl bg-stone-50 p-3">
@@ -1553,7 +1553,7 @@ export default function CoachCalendarPage() {
 
                   <div>
                     <div className="flex items-baseline justify-between gap-3">
-                      <p className="text-sm font-semibold text-slate-700">Training prescription</p>
+                      <p className="text-sm font-semibold text-slate-700">Exercises</p>
                       {draftExercises.length > 0 && <span className="text-sm font-medium text-slate-500">{draftExercises.length} added</span>}
                     </div>
                     {buildFieldErrors.exercises && <FieldError>{buildFieldErrors.exercises}</FieldError>}
@@ -1593,7 +1593,7 @@ export default function CoachCalendarPage() {
                   <button type="submit" disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                     {editTarget
                       ? (buildStatus === "savingChanges" ? "Saving changes…" : "Save Changes")
-                      : (buildStatus === "creating" ? "Creating workout…" : buildStatus === "assigning" ? "Assigning workout…" : "Build & Assign")}
+                      : (buildStatus === "creating" ? "Creating workout…" : buildStatus === "assigning" ? "Assigning workout…" : "Assign")}
                   </button>
                 </form>
               )}
@@ -1607,9 +1607,9 @@ export default function CoachCalendarPage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
-            <h1 className="truncate text-xl font-semibold tracking-tight">Athlete Calendar</h1>
+            <h1 className="truncate text-xl font-semibold tracking-tight">Calendar</h1>
           </div>
-          <nav className="flex shrink-0 gap-1 text-xs font-semibold text-slate-300" aria-label="Coach tools">
+          <nav className="flex shrink-0 gap-1 text-xs font-semibold text-slate-300" aria-label="Coach navigation">
             <button type="button" onClick={() => router.push("/coach/workouts")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Workouts</button>
             <button type="button" onClick={() => router.push("/coach/exercises")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Exercises</button>
             <button type="button" onClick={() => router.push("/coach/clients")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Clients</button>
@@ -1822,10 +1822,10 @@ function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, on
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
   return <article className="rounded-2xl border border-slate-200 bg-white p-4">
-    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Exercise {index + 1}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{item.exercise.name}</h3></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${item.exercise.scope === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{item.exercise.scope}</span></div>
+    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Exercise {index + 1}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{item.exercise.name}</h3></div>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">Mine</span>}</div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Sets</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
-      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Target RPE <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
+      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
     </div>
     <fieldset className="mt-4"><legend className="text-sm font-semibold text-slate-700">Prescription</legend><div className="mt-2 flex flex-wrap gap-2"><PrescriptionModeButton active={!textMode} onClick={() => onChange({ prescriptionMode: "REPS" })} disabled={disabled}>Reps</PrescriptionModeButton><PrescriptionModeButton active={textMode} onClick={() => onChange({ prescriptionMode: "TEXT" })} disabled={disabled}>Text</PrescriptionModeButton></div></fieldset>
     {textMode
@@ -1845,7 +1845,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, on
           <input id={`${baseId}-reps`} type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" aria-describedby={`${baseId}-reps-hint`} value={item.defaultReps} onChange={(event) => onChange({ defaultReps: event.target.value })} onBlur={() => onValidateField("reps")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />
           {errors?.reps && <FieldError>{errors.reps}</FieldError>}
         </div>}
-    <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Planned Load <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Unit</span><select value={item.unit} onChange={(event) => onChange({ unit: event.target.value as PlannedUnit })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
+    <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Load <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Unit</span><select value={item.unit} onChange={(event) => onChange({ unit: event.target.value as PlannedUnit })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Planned sets</p>
       {setCount > 0 && <div className="mt-3 grid gap-2">{Array.from({ length: setCount }, (_, offset) => offset + 1).map((position) => {
         const prescription = effectivePrescription(position);
