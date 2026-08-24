@@ -57,7 +57,7 @@ The MVP follows this principle:
 
 **Workout Library (`/coach/workouts`) is the SECONDARY reusable-template tool.** Coaches can create saved Workout templates in advance, view saved Workout templates, and later reuse them from Calendar. It is optional pre-programming, not a prerequisite for Calendar scheduling.
 
-**Exercise Library (`/coach/exercises`) is the SECONDARY Exercise-management tool and canonical V0.1 surface for creating private Exercises.** The Calendar inline Workout Builder searches existing Exercises through `GET /api/v1/exercises?q=`. If a Coach cannot find a movement, they open Exercise Library; V0.1 does not create Exercises inline from Calendar.
+**Exercise Library (`/coach/exercises`) is the SECONDARY Exercise-management tool for private Exercises.** The Calendar inline Workout Builder searches existing Exercises through `GET /api/v1/exercises?q=` and may create one missing private Exercise through the existing Exercise API without leaving the programming flow. Exercise Library remains the secondary surface for browsing and managing existing Exercises.
 
 Route/navigation detail lives in `docs/frontend-ui-spec.md`; this document defines product behavior only.
 
@@ -134,7 +134,7 @@ The Coach may maintain a small Exercise Library used by Calendar and Workout Lib
 - Zero SYSTEM exercises does not block listing or creating private Exercises.
 - Another Coach's private Exercise is invisible.
 - Athlete cannot manage the Exercise Library.
-- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, inline Exercise creation from Calendar, and System exercise seed implementation remain out of scope for this slice.
+- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, and System exercise seed implementation remain out of scope for this slice.
 
 ---
 
@@ -211,7 +211,7 @@ Refreshing the page does not remove the workout or the schedule.
 
 - Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout Library.
 - Existing Workout path: Coach can choose a saved Workout and assign it to all selected Athletes.
-- Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions. If an Exercise is unavailable, Coach opens Exercise Library; V0.1 does not create Exercises inline from Calendar.
+- Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`, or create one missing private Exercise through `POST /api/v1/exercises`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
 - Workout persists in the workout library after refresh.
 - ScheduledWorkout persists on the Calendar after refresh.

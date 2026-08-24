@@ -22,6 +22,7 @@ import DayCard from "./day-card";
 import ViewToolbar from "./view-toolbar";
 import DuplicateDayPanel from "./duplicate-day-panel";
 import { createDuplicateInFlightGuard, duplicateSourceEndpoint, submitDuplicateRequests } from "./duplicate-requests";
+import { ExistingExerciseUnavailableError, createOrResolveExercise } from "./exercise-creation";
 import {
   monthGridDays,
   rangeLabel as viewRangeLabel,
@@ -466,8 +467,10 @@ export default function CoachCalendarPage() {
   const [pickerQuery, setPickerQuery] = useState("");
   const [pickerExercises, setPickerExercises] = useState<Exercise[] | null>(null);
   const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerCreating, setPickerCreating] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const pickerRequestId = useRef(0);
+  const [pendingSetsFocusId, setPendingSetsFocusId] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [calendarAthleteId, setCalendarAthleteId] = useState("");
@@ -905,8 +908,9 @@ export default function CoachCalendarPage() {
       return failed;
     }
 
-    closeCopyWizard();
+    closeDuplicatePanel();
     await refetchAssignments();
+    return undefined;
   }
 
   function resetBuilderDraft() {
@@ -917,6 +921,7 @@ export default function CoachCalendarPage() {
     setPickerOpen(false);
     setPickerQuery("");
     setPickerExercises(null);
+    setPickerCreating(false);
     setPickerError(null);
     setEditTarget(null);
     setEditLoadError(null);
@@ -956,9 +961,40 @@ export default function CoachCalendarPage() {
       editingPositions: [],
     }]);
     setBuildFieldErrors((previous) => ({ ...previous, exercises: undefined }));
+    setPendingSetsFocusId(exercise.id);
     setPickerOpen(false);
     setPickerQuery("");
     setPickerExercises(null);
+    setPickerCreating(false);
+    setPickerError(null);
+  }
+
+  async function createExerciseFromPicker() {
+    const name = pickerQuery.trim();
+    if (!idToken || name === "" || buildStatus !== "idle" || pickerCreating) return;
+
+    setPickerCreating(true);
+    setPickerError(null);
+    try {
+      const exercise = await createOrResolveExercise({
+        name,
+        create: () => apiFetch<Exercise>(idToken, "/api/v1/exercises", {
+          method: "POST",
+          body: { name },
+        }),
+        search: () => apiFetch<Exercise[]>(idToken, `/api/v1/exercises?q=${encodeURIComponent(name)}`),
+        isConflict: isExerciseNameConflict,
+      });
+      addExercise(exercise);
+    } catch (err) {
+      if (err instanceof ExistingExerciseUnavailableError) {
+        setPickerError(`“${name}” already exists, but it is not available to add.`);
+      } else {
+        setPickerError(`Couldn’t create “${name}”. ${errorMessage(err)}`);
+      }
+    } finally {
+      setPickerCreating(false);
+    }
   }
 
   function updateExercise(index: number, update: Partial<DraftExercise>) {
@@ -1522,12 +1558,12 @@ export default function CoachCalendarPage() {
                     </div>
                     {buildFieldErrors.exercises && <FieldError>{buildFieldErrors.exercises}</FieldError>}
                     <div className="mt-3 grid gap-4">
-                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
+                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
                     </div>
                   </div>
 
                   <div>
-                    {!pickerOpen ? <button type="button" onClick={() => { setPickerOpen(true); setPickerError(null); }} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border border-dashed border-teal-600 bg-teal-50 px-5 text-base font-bold text-teal-800 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50">+ Add Exercise</button> : <ExercisePicker query={pickerQuery} exercises={pickerExercises} loading={pickerLoading} error={pickerError} selectedIds={new Set(draftExercises.map((item) => item.exercise.id))} disabled={programmingControlsDisabled} onQueryChange={setPickerQuery} onAdd={addExercise} onClose={() => setPickerOpen(false)} onOpenLibrary={() => router.push("/coach/exercises")} />}
+                    {!pickerOpen ? <button type="button" onClick={() => { setPickerOpen(true); setPickerError(null); }} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border border-dashed border-teal-600 bg-teal-50 px-5 text-base font-bold text-teal-800 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50">+ Add Exercise</button> : <ExercisePicker query={pickerQuery} exercises={pickerExercises} loading={pickerLoading} creating={pickerCreating} error={pickerError} selectedIds={new Set(draftExercises.map((item) => item.exercise.id))} disabled={programmingControlsDisabled} onQueryChange={setPickerQuery} onAdd={addExercise} onCreate={createExerciseFromPicker} onClose={() => setPickerOpen(false)} onOpenLibrary={() => router.push("/coach/exercises")} />}
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
@@ -1701,7 +1737,7 @@ export default function CoachCalendarPage() {
                   hasDraftContent={hasDraftContent}
                   onSelect={selectCalendarDate}
                   onAddWorkout={openWorkoutEditorOn}
-                  onCopy={openCopyWizard}
+                  onDuplicate={openDuplicatePanel}
                 />
               ))}
             </div>
@@ -1716,17 +1752,18 @@ export default function CoachCalendarPage() {
         )}
       </div>
 
-      {copySourceDate !== null && (
-        <CopyWorkoutWizard
+      {duplicateSourceDate !== null && (
+        <DuplicateDayPanel
           athletes={athletes ?? []}
-          sourceDate={copySourceDate}
-          sourceAssignments={copySource}
-          sourceError={copySourceError}
-          submitting={copySubmitting}
-          submitError={copyError}
-          onSourceDateChange={changeCopySourceDate}
-          onClose={closeCopyWizard}
-          onPaste={handlePaste}
+          sourceDate={duplicateSourceDate}
+          sourceAssignments={duplicateSource}
+          workoutsById={workoutsById}
+          sourceError={duplicateSourceError}
+          submitting={duplicateSubmitting}
+          submitError={duplicateError}
+          initialAthleteId={calendarAthleteId}
+          onClose={closeDuplicatePanel}
+          onDuplicate={handleDuplicate}
         />
       )}
 
@@ -1763,7 +1800,13 @@ function ProgrammingModeButton({ active, children, ...props }: { active: boolean
   return <button type="button" {...props} className={`min-h-12 rounded-xl border px-4 text-sm font-bold transition ${active ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:opacity-50`}>{active ? "● " : "○ "}{children}</button>;
 }
 
-function DraftExerciseCard({ item, index, total, errors, disabled, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
+function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
+  const setsInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!focusSets) return;
+    setsInputRef.current?.focus();
+    onSetsFocused();
+  }, [focusSets, onSetsFocused]);
   const baseId = useId();
   const textMode = item.prescriptionMode === "TEXT";
   const setCount = WHOLE_NUMBER.test(item.setCount) ? Number(item.setCount) : 0;
@@ -1781,7 +1824,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, onChange, onS
   return <article className="rounded-2xl border border-slate-200 bg-white p-4">
     <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Exercise {index + 1}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{item.exercise.name}</h3></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${item.exercise.scope === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{item.exercise.scope}</span></div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
-      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Sets</span><input type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
+      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Sets</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">Target RPE <span className="font-normal text-slate-500">optional</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
     </div>
     <fieldset className="mt-4"><legend className="text-sm font-semibold text-slate-700">Prescription</legend><div className="mt-2 flex flex-wrap gap-2"><PrescriptionModeButton active={!textMode} onClick={() => onChange({ prescriptionMode: "REPS" })} disabled={disabled}>Reps</PrescriptionModeButton><PrescriptionModeButton active={textMode} onClick={() => onChange({ prescriptionMode: "TEXT" })} disabled={disabled}>Text</PrescriptionModeButton></div></fieldset>
@@ -1828,14 +1871,20 @@ function PrescriptionModeButton({ active, children, ...props }: { active: boolea
   return <button type="button" {...props} className={`min-h-11 rounded-xl border px-4 text-sm font-bold transition ${active ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:opacity-50`}>{active ? "● " : "○ "}{children}</button>;
 }
 
-function ExercisePicker({ query, exercises, loading, error, selectedIds, disabled, onQueryChange, onAdd, onClose, onOpenLibrary }: { query: string; exercises: Exercise[] | null; loading: boolean; error: string | null; selectedIds: Set<string>; disabled: boolean; onQueryChange: (value: string) => void; onAdd: (exercise: Exercise) => void; onClose: () => void; onOpenLibrary: () => void }) {
+function ExercisePicker({ query, exercises, loading, creating, error, selectedIds, disabled, onQueryChange, onAdd, onCreate, onClose, onOpenLibrary }: { query: string; exercises: Exercise[] | null; loading: boolean; creating: boolean; error: string | null; selectedIds: Set<string>; disabled: boolean; onQueryChange: (value: string) => void; onAdd: (exercise: Exercise) => void; onCreate: () => void; onClose: () => void; onOpenLibrary: () => void }) {
   const availableExercises = exercises?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
   const visibleExercises = availableExercises.slice(0, 8);
   const system = visibleExercises.filter((exercise) => exercise.scope === "SYSTEM");
   const privateExercises = visibleExercises.filter((exercise) => exercise.scope === "PRIVATE");
   const hiddenCount = availableExercises.length - visibleExercises.length;
   const trimmedQuery = query.trim();
-  return <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">Add Exercise</p><button type="button" onClick={onClose} disabled={disabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button></div><label className="mt-3 block"><span className="sr-only">Search exercises</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} disabled={disabled} placeholder="Search exercises…" autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">Start typing to find an exercise.</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">Loading exercises…</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">No exercises found.</p><p className="mt-1 text-sm text-slate-500">Can&apos;t find the movement you need?</p><button type="button" onClick={onOpenLibrary} disabled={disabled} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50">Open Exercise Library</button></div> : exercises !== null && availableExercises.length === 0 ? <p className="mt-4 text-sm font-medium text-slate-500">All matching exercises are already added.</p> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title="System exercises" exercises={system} selectedIds={selectedIds} disabled={disabled} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title="My exercises" exercises={privateExercises} selectedIds={selectedIds} disabled={disabled} onAdd={onAdd} />}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{hiddenCount} more result{hiddenCount === 1 ? "" : "s"}. Keep typing to narrow the list.</p>}{loading && <p className="text-sm font-medium text-slate-500">Updating exercises…</p>}</div>}</div>;
+  const actionsDisabled = disabled || creating;
+  const createAction = trimmedQuery !== "" && (
+    <button type="button" onClick={onCreate} disabled={actionsDisabled} className="min-h-11 rounded-xl border border-teal-600 px-4 text-sm font-bold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500">
+      {creating ? "Creating…" : `Create “${trimmedQuery}”`}
+    </button>
+  );
+  return <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">Add Exercise</p><button type="button" onClick={onClose} disabled={actionsDisabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button></div><label className="mt-3 block"><span className="sr-only">Search exercises</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} disabled={actionsDisabled} placeholder="Search exercises…" autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">Start typing to find an exercise.</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">Loading exercises…</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">No exercises found.</p><p className="mt-1 text-sm text-slate-500">Create the movement, or manage your exercise library.</p><div className="mt-3 flex flex-wrap gap-2">{createAction}<button type="button" onClick={onOpenLibrary} disabled={actionsDisabled} className="min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50">Open Exercise Library</button></div></div> : exercises !== null && availableExercises.length === 0 ? <div className="mt-4 grid gap-3"><p className="text-sm font-medium text-slate-500">All matching exercises are already added.</p>{createAction}</div> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title="System exercises" exercises={system} selectedIds={selectedIds} disabled={actionsDisabled} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title="My exercises" exercises={privateExercises} selectedIds={selectedIds} disabled={actionsDisabled} onAdd={onAdd} />}{createAction}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{hiddenCount} more result{hiddenCount === 1 ? "" : "s"}. Keep typing to narrow the list.</p>}{loading && <p className="text-sm font-medium text-slate-500">Updating exercises…</p>}</div>}</div>;
 }
 
 function PickerGroup({ title, exercises, selectedIds, disabled, onAdd }: { title: string; exercises: Exercise[]; selectedIds: Set<string>; disabled: boolean; onAdd: (exercise: Exercise) => void }) {
@@ -1906,6 +1955,10 @@ function FieldHint({ hintId, label, children }: { hintId: string; label: string;
 // endpoint has exactly one 409 case, and the envelope carries no more
 // specific discriminator than the shared "CONFLICT" code.
 function isDuplicateScheduleError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 409;
+}
+
+function isExerciseNameConflict(err: unknown): err is ApiError {
   return err instanceof ApiError && err.status === 409;
 }
 
