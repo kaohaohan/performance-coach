@@ -24,12 +24,15 @@ import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
   onIdTokenChanged,
+  signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
   type User,
 } from "firebase/auth";
+import { Capacitor } from "@capacitor/core";
 import { getFirebaseAuth } from "./firebase";
+import { nativeGoogleCredential } from "./native-google-auth";
 import { setAuthTokenProvider } from "./api";
 
 // GoogleSignInResult carries both halves a caller needs after a Google
@@ -157,8 +160,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // uninterrupted client state machine, so /join/<code> cannot be lost
   // across a navigation. Callers must invoke this only from an explicit
   // user gesture — browsers block popups opened any other way.
+  //
+  // ...except inside the iOS Capacitor shell, where popup cannot work at
+  // all: Capacitor's WKUIDelegate implements createWebViewWith by always
+  // returning nil and handing the URL to the system browser instead
+  // (@capacitor/ios WebViewDelegationHandler.swift), so window.open()
+  // resolves to null and Firebase throws auth/popup-blocked. Google's
+  // chooser does appear — in Safari, detached from the JS context that
+  // already failed. The native branch below therefore runs Google's own
+  // sign-in sheet and exchanges the resulting ID token for a Firebase
+  // credential; both branches converge on the same GoogleSignInResult, so
+  // /login, /join/[code] and /coach/signup need no platform awareness.
   async function signInWithGoogle(): Promise<GoogleSignInResult> {
     const auth = getFirebaseAuth();
+
+    if (Capacitor.isNativePlatform()) {
+      const credential = await nativeGoogleCredential();
+      const result = await signInWithCredential(auth, credential);
+      return { idToken: await result.user.getIdToken(), user: result.user };
+    }
+
     const provider = new GoogleAuthProvider();
     // Always show the account chooser. Left to itself Google reuses the one
     // session already in the browser, which is how someone on a shared
