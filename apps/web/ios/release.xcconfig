@@ -6,14 +6,13 @@ CAPACITOR_DEBUG = false
 //
 // Set this to the REVERSED_CLIENT_ID from the GoogleService-Info.plist the
 // Firebase console generates when an iOS app (bundle id
-// com.performancecoach.app) is registered; the matching CLIENT_ID goes to
+// com.pumpslate.app) is registered; the matching CLIENT_ID goes to
 // NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID. Left empty the app still builds and
 // runs — only "Continue with Google" is unavailable.
-// See docs/tasks/2026-08-23-ios-google-signin-webview.md.
+// See docs/tasks/2026-08-23-ios-google-signin-webview.md and
+// docs/tasks/2026-08-24-ios-beta-auth-pumpslate.md.
 //
-// TODO(pumpslate beta auth, docs/tasks/2026-08-24-ios-beta-auth-pumpslate.md):
-// this is still the com.performancecoach.app client ID. It must move to the
-// com.pumpslate.app Firebase iOS app's REVERSED_CLIENT_ID once that app is
-// registered in the Firebase console (blocked on Firebase Console access,
-// see Task Doc §1 Dependencies #2) — not changed here per that doc's scope.
-GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.33959430194-oo5bu2f4jduamv97dr97trctr4ebsdtm
+// Updated 2026-08-24 to the com.pumpslate.app Firebase iOS app's
+// REVERSED_CLIENT_ID (app ID 1:33959430194:ios:112e1f14824a04dbfa142b),
+// retrieved via the Firebase Management API once the app was registered.
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.33959430194-aqvfqnmdhuoig5hr8517pc0q8mbvespf
