@@ -1,5 +1,5 @@
 // Shared response/DTO shapes for the Coach Calendar's Week/Month grid and
-// Copy Workout wizard.
+// Duplicate panel.
 //
 // Workout mirrors GET /api/v1/workouts, which returns each template's full
 // prescription (internal/workout/workout.go ListForCoach). page.tsx imports

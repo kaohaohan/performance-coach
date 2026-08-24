@@ -40,7 +40,7 @@ export default function DayCard({
   hasDraftContent,
   onSelect,
   onAddWorkout,
-  onCopy,
+  onDuplicate,
 }: {
   date: string;
   // The day currently marked selected (highlighted with a stronger ring).
@@ -64,7 +64,7 @@ export default function DayCard({
   hasDraftContent: boolean;
   onSelect: (date: string) => void;
   onAddWorkout: (date: string) => void;
-  onCopy?: (date: string) => void;
+  onDuplicate?: (date: string) => void;
 }) {
   const isToday = date === todayLocalISODate();
   const isSelected = date === selectedDate;
@@ -96,12 +96,12 @@ export default function DayCard({
           {heading}
         </button>
         <div className="flex shrink-0 items-center gap-1">
-          {onCopy !== undefined && <button
+          {onDuplicate !== undefined && <button
             type="button"
-            onClick={() => onCopy(date)}
+            onClick={() => onDuplicate(date)}
             disabled={disabled || !hasTraining}
-            aria-label={`Copy training from ${date}`}
-            title="Copy Workout"
+            aria-label={`Duplicate workouts from ${date}`}
+            title="Duplicate workouts"
             className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
           >
             <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">

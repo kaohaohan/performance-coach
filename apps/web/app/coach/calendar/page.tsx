@@ -20,7 +20,8 @@ import {
 } from "./workout-draft";
 import DayCard from "./day-card";
 import ViewToolbar from "./view-toolbar";
-import CopyWorkoutWizard from "./copy-workout-wizard";
+import DuplicateDayPanel from "./duplicate-day-panel";
+import { createDuplicateInFlightGuard, duplicateSourceEndpoint, submitDuplicateRequests } from "./duplicate-requests";
 import {
   monthGridDays,
   rangeLabel as viewRangeLabel,
@@ -483,21 +484,21 @@ export default function CoachCalendarPage() {
   const [view, setView] = useState<CalendarView>("day");
   const [weekAnchor, setWeekAnchor] = useState(todayLocalISODate);
 
-  // Copy Workout wizard — copies one day's ScheduledWorkouts (by re-scheduling
-  // their current workout template) to another date/athlete set. Entirely
+  // Duplicate panel — schedules one day's Workout templates to another
+  // date/client set. Entirely
   // independent of the Build-draft machinery above: it reads and writes
   // existing ScheduledWorkouts, never touches draftName/draftExercises, and
   // does not open or close the builder.
-  const [copySourceDate, setCopySourceDate] = useState<string | null>(null);
-  const [copySource, setCopySource] = useState<ScheduledWorkoutSummary[] | null>(null);
-  const [copySourceError, setCopySourceError] = useState<string | null>(null);
-  const [copySubmitting, setCopySubmitting] = useState(false);
-  const [copyError, setCopyError] = useState<string | null>(null);
-  // Workout ids still to be pasted. Non-null only after a partial failure, so
+  const [duplicateSourceDate, setDuplicateSourceDate] = useState<string | null>(null);
+  const [duplicateSource, setDuplicateSource] = useState<ScheduledWorkoutSummary[] | null>(null);
+  const [duplicateSourceError, setDuplicateSourceError] = useState<string | null>(null);
+  const [duplicateSubmitting, setDuplicateSubmitting] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  // Workout ids still to be duplicated. Non-null only after a partial failure, so
   // a retry resumes rather than re-sending what already landed.
-  const [copyOutstanding, setCopyOutstanding] = useState<string[] | null>(null);
-  const copySourceLoadId = useRef(0);
-  const copyInFlight = useRef(false);
+  const [duplicateOutstanding, setDuplicateOutstanding] = useState<string[] | null>(null);
+  const duplicateSourceLoadId = useRef(0);
+  const duplicateInFlight = useRef(createDuplicateInFlightGuard());
 
   // Problem A — browser-local Build Workout draft persistence. coachId
   // scopes the localStorage key so multiple Coach accounts in the same
@@ -813,103 +814,95 @@ export default function CoachCalendarPage() {
     }
   }
 
-  // Copy Workout wizard — source-day fetch. The coach can move the source
-  // date to anywhere in step 1, including outside the range the active view
-  // has already loaded, so this is fetched on its own rather than read out
-  // of `assignments`.
+  // The panel's source day is fixed when Duplicate is invoked, but it can
+  // still be outside the active view's loaded range, so fetch it independently
+  // rather than reading the in-memory Calendar assignments.
   useEffect(() => {
-    if (!idToken || copySourceDate === null) return;
-    const requestId = ++copySourceLoadId.current;
+    if (!idToken || duplicateSourceDate === null) return;
+    const requestId = ++duplicateSourceLoadId.current;
     let cancelled = false;
     (async () => {
       try {
         const res = await apiFetch<ScheduledWorkoutSummary[]>(
           idToken,
-          `/api/v1/scheduled-workouts?from=${copySourceDate}&to=${copySourceDate}&athleteId=${encodeURIComponent(calendarAthleteId)}`,
+          duplicateSourceEndpoint(duplicateSourceDate, calendarAthleteId),
         );
-        if (!cancelled && requestId === copySourceLoadId.current) setCopySource(res);
+        if (!cancelled && requestId === duplicateSourceLoadId.current) setDuplicateSource(res);
       } catch (err) {
-        if (!cancelled && requestId === copySourceLoadId.current) setCopySourceError(errorMessage(err));
+        if (!cancelled && requestId === duplicateSourceLoadId.current) setDuplicateSourceError(errorMessage(err));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [idToken, copySourceDate, calendarAthleteId]);
+  }, [idToken, duplicateSourceDate, calendarAthleteId]);
 
-  function changeCopySourceDate(nextDate: string) {
-    setCopySourceDate(nextDate);
-    setCopySource(null);
-    setCopySourceError(null);
-    setCopyError(null);
-    setCopyOutstanding(null);
-  }
-
-  function openCopyWizard(sourceDate: string) {
+  function openDuplicatePanel(sourceDate: string) {
     if (programmingControlsDisabled) return;
-    changeCopySourceDate(sourceDate);
+    setDuplicateSourceDate(sourceDate);
+    setDuplicateSource(null);
+    setDuplicateSourceError(null);
+    setDuplicateError(null);
+    setDuplicateOutstanding(null);
   }
 
-  function closeCopyWizard() {
-    if (copyInFlight.current) return;
-    setCopySourceDate(null);
-    setCopySource(null);
-    setCopySourceError(null);
-    setCopyError(null);
-    setCopyOutstanding(null);
+  function closeDuplicatePanel() {
+    if (duplicateInFlight.current.inFlight) return;
+    setDuplicateSourceDate(null);
+    setDuplicateSource(null);
+    setDuplicateSourceError(null);
+    setDuplicateError(null);
+    setDuplicateOutstanding(null);
   }
 
-  // Pasting is one POST per distinct workout on the source day, so it is not
-  // atomic. Anything that fails is kept in copyOutstanding and only those are
-  // retried on the next PASTE click, which is what stops a retry from
-  // double-scheduling whatever already landed.
-  async function handlePaste(athleteIds: string[], targetDate: string, allowDuplicates = false) {
-    if (!idToken || copyInFlight.current || copySource === null) return;
-    const workoutIds = copyOutstanding ?? [...new Set(copySource.map((assignment) => assignment.workout.id))];
+  // Duplicate submits one POST per distinct source workout, so it is not
+  // atomic. Anything that fails remains outstanding and only those workout
+  // ids are retried, preventing a retry from double-scheduling successes.
+  async function handleDuplicate(selectedWorkoutIds: string[], athleteIds: string[], targetDate: string, allowDuplicates = false): Promise<string[] | undefined> {
+    if (!idToken || duplicateInFlight.current.inFlight || duplicateSource === null) return;
+    const workoutIds = duplicateOutstanding ?? selectedWorkoutIds;
     if (workoutIds.length === 0 || athleteIds.length === 0) return;
 
-    copyInFlight.current = true;
-    setCopySubmitting(true);
-    setCopyError(null);
+    if (!duplicateInFlight.current.start()) return;
+    setDuplicateSubmitting(true);
+    setDuplicateError(null);
 
-    const failed: string[] = [];
-    const duplicateMessages: string[] = [];
-    let lastError = "";
-    for (const workoutId of workoutIds) {
-      try {
-        await apiFetch(idToken, "/api/v1/scheduled-workouts", {
-          method: "POST",
-          body: { workoutId, athleteIds, scheduledDate: targetDate, ...(allowDuplicates ? { allowDuplicates: true } : {}) },
-        });
-      } catch (err) {
-        failed.push(workoutId);
-        lastError = errorMessage(err);
-        if (isDuplicateScheduleError(err)) duplicateMessages.push(err.message);
-      }
-    }
+    const failures = await submitDuplicateRequests({
+      workoutIds,
+      athleteIds,
+      targetDate,
+      allowDuplicates,
+      schedule: (body) => apiFetch(idToken, "/api/v1/scheduled-workouts", { method: "POST", body }),
+      errorMessage,
+      isDuplicateConflict: isDuplicateScheduleError,
+    });
+    const failed = failures.map((failure) => failure.workoutId);
+    const duplicateMessages = failures.filter((failure) => failure.isDuplicateConflict).map((failure) => failure.message);
+    const lastError = failures.at(-1)?.message ?? "";
 
-    copyInFlight.current = false;
-    setCopySubmitting(false);
+    duplicateInFlight.current.finish();
+    setDuplicateSubmitting(false);
 
     // Every failure was a duplicate the coach can legitimately override, so
     // offer that instead of reporting an error. A mixed batch falls through
     // to the normal partial-failure path below: the outstanding list already
-    // handles retrying only what did not land, and re-offering "paste anyway"
-    // for a set that also contains genuine failures would be misleading.
+    // handles retrying only what did not land.
     if (!allowDuplicates && duplicateMessages.length > 0 && duplicateMessages.length === failed.length) {
-      setCopyOutstanding(failed);
+      setDuplicateOutstanding(failed);
       setDuplicateConfirm({
         message: [...new Set(duplicateMessages)].join(" "),
-        retry: () => handlePaste(athleteIds, targetDate, true),
+        retry: async () => {
+          await handleDuplicate(selectedWorkoutIds, athleteIds, targetDate, true);
+        },
       });
-      return;
+      return failed;
     }
 
     if (failed.length > 0) {
-      const names = failed.map((id) => copySource.find((assignment) => assignment.workout.id === id)?.workout.name ?? "a workout");
-      setCopyOutstanding(failed);
-      setCopyError(`${failed.length} of ${workoutIds.length} could not be pasted (${names.join(", ")}). ${lastError} Press PASTE to retry just those.`);
-      return;
+      const names = failed.map((id) => duplicateSource.find((assignment) => assignment.workout.id === id)?.workout.name ?? "a workout");
+      setDuplicateOutstanding(failed);
+      setDuplicateError(`${failed.length} of ${workoutIds.length} could not be duplicated (${names.join(", ")}). ${lastError} Press Duplicate to retry just those.`);
+      return failed;
     }
 
     closeCopyWizard();
