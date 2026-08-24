@@ -109,7 +109,7 @@ Consequently, renaming the module path would be a 29-file edit with no functiona
 | Phase 3 — Define "Beta authentication" scope & acceptance criteria | Done | User confirmed (2026-08-24): verify native Google Sign-In works under a Release build configuration; no allowlist/invite gate. |
 | Phase 4 — Feasibility Analysis: select an option | Done | See §1 — Option 1, with a concrete Release-config xcconfig gap identified as the likely root cause. |
 | Phase 5 — Technical Design | Done | See §2 and the sub-task breakdown in §3. |
-| Phase 6 — Implementation | In Progress | **Phase 6a done** (sub-tasks 3–4, the part with no external-access dependency; this implementation session, remote/Linux, no Xcode). Sub-tasks 1–2 (Firebase + Apple Developer registration) and sub-task 5 (Vercel env) remain blocked on external access; sub-task 6 (Release-scheme Simulator build + live Google Sign-In) can only run on macOS/Xcode, not in this environment. |
+| Phase 6 — Implementation | In Progress | **Phase 6a done** (sub-tasks 3–4, the part with no external-access dependency; implemented remote/Linux, no Xcode). **Sub-task 6's build half now verified on macOS/Xcode** (2026-08-24, separate worktree — see §5 "Release-build verification"): the Release scheme builds and produces the expected `PumpSlate` / `com.pumpslate.app` / non-empty `CFBundleURLSchemes`, but only after fixing an Alamofire linker gap that the remote session could not have detected. Sub-task 6's *live Google Sign-In* half is still **not** done — blocked on the same Firebase registration as sub-tasks 1–2 and 5. |
 | TestFlight / Archive / Upload / App Store Connect work | Not Started | Explicitly out of scope for this doc per user instruction; tracked separately once Apple Developer/App Store Connect access is confirmed. |
 
 ## 5. Outcome (filled at completion)
@@ -124,10 +124,45 @@ Consequently, renaming the module path would be a 29-file edit with no functiona
   - `npm run lint` — passes clean.
   - `project.pbxproj` parsed successfully with the `xcodeproj` Ruby gem; confirmed both targets' Release configuration now resolves `baseConfigurationReference` to `release.xcconfig` (previously `NONE`), and `PRODUCT_BUNDLE_IDENTIFIER` reads `com.pumpslate.app` in all four (Debug/Release × Debug target/Release target) `XCBuildConfiguration` entries.
   - Confirmed by direct inspection of `release.xcconfig` that `CAPACITOR_DEBUG` resolves to `false` and `GOOGLE_REVERSED_CLIENT_ID` resolves to a non-empty value under the Release configuration — i.e. the two build settings that were previously undefined in Release now resolve.
-- **Not verified — requires macOS/Xcode, could not be done in this remote session**: an actual Release-scheme Xcode build (compile + sign), and an end-to-end native Google Sign-In test under that build. This is sub-task 6 and remains the acceptance criterion in §2 ("Verification target") that is still open. Needs to run on a Mac.
+- ~~**Not verified — requires macOS/Xcode, could not be done in this remote session**~~: superseded — the Release-scheme build has since been run on a Mac. See "Release-build verification" at the end of this section. The *live Google Sign-In* half of sub-task 6 remains open.
 - Deviations from plan: None from the approved §2/§3 design. The release-vs-extend-debug xcconfig choice (left open in §2/§3 for implementation to decide) was resolved in favor of a new `release.xcconfig` file, reasoned above.
 - Follow-ups:
-  1. Run the Xcode Release-scheme build + native Google Sign-In verification on macOS (sub-task 6) — this environment cannot do it.
+  1. ~~Run the Xcode Release-scheme build~~ **done** (2026-08-24, macOS — see "Release-build verification" at the end of this section). Still open: the **native Google Sign-In end-to-end test** under that Release build, which is the remaining half of sub-task 6 and the §2 "Verification target" acceptance criterion. It cannot pass until the Firebase registration in follow-up 2/3 lands.
   2. Sub-tasks 1–2 remain blocked on Firebase Console and Apple Developer access respectively; sub-task 5 (Vercel `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID`) blocked on the same Firebase registration.
   3. Once Firebase/Apple access is available, update `GOOGLE_REVERSED_CLIENT_ID` in `release.xcconfig` (and `debug.xcconfig`) to the new `com.pumpslate.app` client, set `DEVELOPMENT_TEAM`, and complete sub-task 6.
   4. The ten web pages' "Performance Coach" brand strings (§2) remain a separate, not-yet-opened task — raise with the user before the beta ships.
+  5. **Root-fix the Alamofire dependency upstream.** The `project.pbxproj` change above is a correct local workaround, but the real gap is in `@capgo/capacitor-social-login`'s `Package.swift`, which uses Alamofire without declaring it. The build still emits a non-fatal `warning: 'SocialLoginPlugin' is missing a dependency on 'Alamofire' because dependency scan of Swift module 'SocialLoginPlugin' discovered a dependency on 'Alamofire'`. Worth an upstream issue/PR; until then the local pin must stay, and note that a future `npx cap sync ios` regenerating project files could drop it — re-verify a Release build after any Capacitor upgrade.
+
+### Release-build verification (2026-08-24, macOS/Xcode)
+
+Run in an isolated worktree at `~/Desktop/performance-coach-ios` (branched from `95539c6`) so the main checkout's unrelated in-progress work was untouched. Xcode 17F113, iOS Simulator SDK 26.5, target `iPhone 16` (`1EC79AC2-FFC4-4179-916E-A93E13D91E9A`).
+
+All four Phase 6a acceptance points pass:
+
+| # | Check | Result |
+| --- | --- | --- |
+| a | Release scheme builds for Simulator | `** BUILD SUCCEEDED **` (after the Alamofire fix below) |
+| b | App display name | `CFBundleDisplayName` = `PumpSlate`, read from the built `App.app/Info.plist` |
+| c | `CFBundleURLSchemes` non-empty under Release | `com.googleusercontent.apps.33959430194-oo5bu2f4jduamv97dr97trctr4ebsdtm` |
+| d | `PRODUCT_BUNDLE_IDENTIFIER` (Release) | `com.pumpslate.app`, via `xcodebuild -showBuildSettings` |
+
+Point (c) is the **runtime** confirmation of the xcconfig gap fix that the bullet above could only assert by reading `release.xcconfig` statically: `GOOGLE_REVERSED_CLIENT_ID` genuinely resolves to a non-empty value in a real Release build, and lands in the built `Info.plist`. (The value is still the old `com.performancecoach.app` client ID — correct per scope; see Follow-ups.)
+
+**Bug found and fixed — Alamofire not linked into the App target under Release.** The first Release build failed at link time:
+
+```
+Undefined symbols for architecture arm64:
+  "type metadata accessor for Alamofire.AFError", ...
+ld: symbol(s) not found for architecture arm64
+```
+
+Debug built clean from the same source, isolating it as Release-only: Release uses `SWIFT_COMPILATION_MODE = wholemodule` with `-O`; Debug uses `ONLY_ACTIVE_ARCH = YES` with `-Onone`. Root cause is that `Alamofire` reaches the app only as a transitive dependency of `@capgo/capacitor-social-login`'s `SocialLoginPlugin` (used by its `AppleProvider`), and that package's `Package.swift` never declares it. Debug's incremental build happened to resolve the symbols anyway; whole-module Release never handed the library to the linker.
+
+Fixed in `apps/web/ios/App/App.xcodeproj/project.pbxproj` by adding `Alamofire` as an explicit App-target package product dependency (`XCRemoteSwiftPackageReference` pinned to `exactVersion 5.12.0` — the version `Package.resolved` already recorded, so no dependency moves — plus the matching `PBXBuildFile`, Frameworks build-phase entry, `packageProductDependencies`, and `packageReferences` entries). This is a **local workaround, not the root fix**; see Follow-ups.
+
+Two environment-setup facts not previously recorded here, both of which will trip up a fresh clone:
+
+- **`npx cap sync ios` must run before any Xcode build.** `npm ci` alone leaves `ios/App/App/public`, `config.xml`, and `capacitor.config.json` absent (all three are gitignored), and the build fails on `CpResource` with "The file ... couldn't be opened because there is no such file."
+- **There is no `.xcworkspace`.** The project is SPM-based (`CapApp-SPM`), not CocoaPods — there is no `Podfile`. The entry point is `apps/web/ios/App/App.xcodeproj`, and it sits under `apps/web/ios/`, not a top-level `ios/`.
+
+Deliberately **not** tested, per the verification's agreed scope: live Google Sign-In (expected to fail — the client ID is still the `com.performancecoach.app` one, and the new Firebase iOS app is not registered; a known gap, not a bug) and Archive/TestFlight upload (`DEVELOPMENT_TEAM` unset, would fail by construction).
