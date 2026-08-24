@@ -73,7 +73,7 @@
 | Phase 0 — read-only inspection | Done | Confirmed branch divergence, preserved PumpSlate commit, stale OAuth registration, staging remote URL, placeholder artwork, absent account-deletion UI, and current Apple review risks. |
 | Planning — this Task Doc | Done | Ready to commit before implementation begins. |
 | Rebrand integration | Done | Merged `c03d69f` as `f5a6510`; `npx cap sync ios`, lint, Webpack production build, and unsigned iOS Simulator build passed. Native identity verified as `PumpSlate` / `com.pumpslate.app`. |
-| Brand assets | Not Started | Requires user selection before repository changes are final. |
+| Brand assets | Done | User selected Concept B: three offset slate plates in deep navy and teal. Installed a 1024px App Icon and matching full-bleed 2732px launch artwork; visual inspection and unsigned iOS Simulator build passed. |
 | Beta authentication | Not Started | Requires explicit approval before Firebase project changes. |
 | Archive and external TestFlight | Not Started | Requires Apple membership/account access and successful preceding phases. |
 | Public App Store readiness | Not Started | Explicitly deferred to a separate Task Doc. |
