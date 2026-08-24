@@ -127,9 +127,9 @@ Consequently, renaming the module path would be a 29-file edit with no functiona
 - ~~**Not verified — requires macOS/Xcode, could not be done in this remote session**~~: superseded — the Release-scheme build has since been run on a Mac. See "Release-build verification" at the end of this section. The *live Google Sign-In* half of sub-task 6 remains open.
 - Deviations from plan: None from the approved §2/§3 design. The release-vs-extend-debug xcconfig choice (left open in §2/§3 for implementation to decide) was resolved in favor of a new `release.xcconfig` file, reasoned above.
 - Follow-ups:
-  1. ~~Run the Xcode Release-scheme build~~ **done** (2026-08-24, macOS — see "Release-build verification" at the end of this section). Still open: the **native Google Sign-In end-to-end test** under that Release build, which is the remaining half of sub-task 6 and the §2 "Verification target" acceptance criterion. It cannot pass until the Firebase registration in follow-up 2/3 lands.
-  2. Sub-tasks 1–2 remain blocked on Firebase Console and Apple Developer access respectively; sub-task 5 (Vercel `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID`) blocked on the same Firebase registration.
-  3. Once Firebase/Apple access is available, update `GOOGLE_REVERSED_CLIENT_ID` in `release.xcconfig` (and `debug.xcconfig`) to the new `com.pumpslate.app` client, set `DEVELOPMENT_TEAM`, and complete sub-task 6.
+  1. ~~Run the Xcode Release-scheme build~~ **done** (2026-08-24, macOS — see "Release-build verification" at the end of this section). Still open: the **native Google Sign-In end-to-end test** under that Release build, which is the remaining half of sub-task 6 and the §2 "Verification target" acceptance criterion. The client-ID blocker is now cleared (see "Firebase registration" below), so this is ready to run — it just has not been exercised yet.
+  2. ~~Sub-task 1 blocked on Firebase Console access~~ **done** — `com.pumpslate.app` is registered and sub-task 5 (Vercel env) is complete; see "Firebase registration and client-ID rollout" below. **Sub-task 2 remains blocked on Apple Developer access** (App ID registration + `DEVELOPMENT_TEAM`).
+  3. ~~Update `GOOGLE_REVERSED_CLIENT_ID`~~ **done** for both xcconfigs. Still open, pending Apple Developer access: set `DEVELOPMENT_TEAM`, which is what gates Archive/TestFlight.
   4. The ten web pages' "Performance Coach" brand strings (§2) remain a separate, not-yet-opened task — raise with the user before the beta ships.
   5. **Root-fix the Alamofire dependency upstream.** The `project.pbxproj` change above is a correct local workaround, but the real gap is in `@capgo/capacitor-social-login`'s `Package.swift`, which uses Alamofire without declaring it. The build still emits a non-fatal `warning: 'SocialLoginPlugin' is missing a dependency on 'Alamofire' because dependency scan of Swift module 'SocialLoginPlugin' discovered a dependency on 'Alamofire'`. Worth an upstream issue/PR; until then the local pin must stay, and note that a future `npx cap sync ios` regenerating project files could drop it — re-verify a Release build after any Capacitor upgrade.
 
@@ -166,3 +166,37 @@ Two environment-setup facts not previously recorded here, both of which will tri
 - **There is no `.xcworkspace`.** The project is SPM-based (`CapApp-SPM`), not CocoaPods — there is no `Podfile`. The entry point is `apps/web/ios/App/App.xcodeproj`, and it sits under `apps/web/ios/`, not a top-level `ios/`.
 
 Deliberately **not** tested, per the verification's agreed scope: live Google Sign-In (expected to fail — the client ID is still the `com.performancecoach.app` one, and the new Firebase iOS app is not registered; a known gap, not a bug) and Archive/TestFlight upload (`DEVELOPMENT_TEAM` unset, would fail by construction).
+
+### Firebase registration and client-ID rollout (2026-08-24)
+
+Sub-tasks 1 and 5 are complete. `com.pumpslate.app` is now registered as an iOS app in the `dontworkout` Firebase project:
+
+- App ID: `1:33959430194:ios:112e1f14824a04dbfa142b`
+- Display name: `PumpSlate`
+- `REVERSED_CLIENT_ID`: `com.googleusercontent.apps.33959430194-aqvfqnmdhuoig5hr8517pc0q8mbvespf`
+
+The old `com.performancecoach.app` app is intentionally left in place — Firebase does not allow changing an existing app's bundle ID (see §1), so the two coexist.
+
+Two notes for anyone retracing this:
+
+- **The Console UI briefly misreported the registration.** Registering with a placeholder App Store ID returned a "繫結 ID 與現有繫結 ID 相同" error, and the new app did not appear in the app list. The app had in fact been created successfully — confirmed by querying the Firebase Management API directly. If the Console looks like the registration failed, check the API before re-registering:
+  ```
+  curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+       -H "x-goog-user-project: dontworkout" \
+       "https://firebase.googleapis.com/v1beta1/projects/dontworkout/iosApps?showDeleted=true"
+  ```
+- **No `GoogleService-Info.plist` is committed.** This project does not link the Firebase SDK (there is no `FirebaseApp.configure()` anywhere); it only consumes the `CLIENT_ID`/`REVERSED_CLIENT_ID` pair through `@capgo/capacitor-social-login`. The plist's two relevant values live in the xcconfigs and in Vercel env, and the file itself is not needed in the repo.
+
+Rolled out to:
+
+| Where | Value | Status |
+| --- | --- | --- |
+| `apps/web/ios/debug.xcconfig` | `GOOGLE_REVERSED_CLIENT_ID` | Updated |
+| `apps/web/ios/release.xcconfig` | `GOOGLE_REVERSED_CLIENT_ID` | Updated; the TODO block noting the blocker is removed |
+| Vercel — Production | `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID` | Set |
+| Vercel — Preview | `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID` | Set |
+| Vercel — Preview (`staging` branch override) | `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID` | Set |
+
+Verified with a Release build: the new value resolves into the built `App.app/Info.plist` as `CFBundleURLTypes:0:CFBundleURLSchemes:0`.
+
+**Incident during rollout, recorded so the current state is not mistaken for the previous one:** the Vercel variables were replaced by removing and re-adding them. `vercel env rm NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID preview` removed *both* the `Preview, Production`-scoped entry and a separate `Preview (staging)` git-branch override that was not meant to be touched; the override's prior value was not recorded before deletion and could not be recovered. All three scopes were then set to the new client ID, which is the intended end state for every environment anyway, so no configuration was lost in substance. Their type also changed from `Sensitive` to `Non-sensitive` — not a choice: Vercel rejects secret visibility for `NEXT_PUBLIC_`-prefixed variables, and this value is public client configuration by design (see the comment in `apps/web/lib/native-google-auth.ts`), so the previous `Sensitive` marking conveyed nothing.
