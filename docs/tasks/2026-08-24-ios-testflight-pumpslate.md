@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Confirmed branch divergence, preserved PumpSlate commit, stale OAuth registration, staging remote URL, placeholder artwork, absent account-deletion UI, and current Apple review risks. |
 | Planning — this Task Doc | Done | Ready to commit before implementation begins. |
-| Rebrand integration | Not Started | Execute in a separate implementation session after approval. |
+| Rebrand integration | Done | Merged `c03d69f` as `f5a6510`; `npx cap sync ios`, lint, Webpack production build, and unsigned iOS Simulator build passed. Native identity verified as `PumpSlate` / `com.pumpslate.app`. |
 | Brand assets | Not Started | Requires user selection before repository changes are final. |
 | Beta authentication | Not Started | Requires explicit approval before Firebase project changes. |
 | Archive and external TestFlight | Not Started | Requires Apple membership/account access and successful preceding phases. |
@@ -80,6 +80,6 @@
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Planning complete; no implementation or external account changes performed.
-- Deviations from plan: None yet.
-- Follow-ups: Public App Store readiness is intentionally separated from the first external TestFlight beta.
+- Final status: Rebrand integration complete and verified locally; remaining TestFlight-beta phases have not started and no external account changes were performed.
+- Deviations from plan: The default Homebrew Node runtime was unusable because its ICU dependency was absent, so local verification used the installed Node 22 runtime. Turbopack was blocked by the execution environment's process-binding restriction; the equivalent Webpack production build passed.
+- Follow-ups: Brand assets, explicitly approved Firebase beta authentication, and Apple/TestFlight work remain separate, ordered phases. Public App Store readiness is intentionally deferred.
