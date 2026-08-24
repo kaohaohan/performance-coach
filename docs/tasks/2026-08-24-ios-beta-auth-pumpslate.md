@@ -45,6 +45,32 @@
   2. Firebase Console access to register the new `com.pumpslate.app` iOS app in the `dontworkout` project and retrieve its `GoogleService-Info.plist` — needed before the native config can be updated.
   3. ~~Confirmation of the exact public-facing app name/display string~~ — **Resolved: "PumpSlate"**, per explicit user confirmation (2026-08-24). Bundle ID stays lowercase (`com.pumpslate.app`, unaffected by display-string casing).
 
+### Naming scope — what is and is not being renamed
+
+Recorded here because this repo carries a deliberate three-way naming drift. It is a decision (2026-08-24), not an oversight — a future session should not "tidy" it without re-reading this section.
+
+| Thing | Name | Renameable? | This task |
+| --- | --- | --- | --- |
+| iOS app identity | → `com.pumpslate.app`, display name `PumpSlate` | Yes | **Being changed** (see §2) |
+| GitHub repo | `kaohaohan/performance-coach` | Yes | **Deliberately unchanged** |
+| Go module path | `github.com/kaohaohan/performance-coach/apps/api` | Yes (28 `.go` files + `go.mod`) | **Deliberately unchanged** |
+| Firebase project ID | `dontworkout` | **No — permanent, Firebase hard limit** | Unchanged (cannot change) |
+| Production domain | `dontworkout.vercel.app` | Yes | Out of scope |
+
+Why the repo and module path stay as they are:
+
+- **Full naming consistency is unattainable anyway.** A Firebase project ID can never be renamed — reaching `pumpslate` there would mean a new Firebase project plus a migration of every existing auth user, which is far more risk than a naming preference justifies. Renaming only the repo would move from three names to a different three names, i.e. the same half-migrated state this task has otherwise been careful to avoid.
+- **The repo name is developer-facing only.** What users actually see is the App Store listing and the bundle ID, both of which this task already covers.
+- **Timing.** Deferred to a standalone housekeeping task after the beta ships, with nothing else in flight.
+
+If a repo rename is ever done, note that it does **not** require changing the Go module path, and the two should not be bundled:
+
+- GitHub keeps permanent redirects for the old repo URL.
+- `apps/api/Dockerfile` builds with relative paths (`COPY apps/api/ ./`, `go build ./cmd/api`), so the module path is never resolved over the network — it is only an identifier string.
+- There are no CI workflows (`.github/` is empty), so no pipeline depends on the name.
+
+Consequently, renaming the module path would be a 29-file edit with no functional benefit; treat it as cosmetic-only and optional.
+
 ## 2. Technical Design
 
 - Affected files/components:
