@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import SignOutButton from "@/components/sign-out-button";
 import {
   clearDraft,
   isDraftContentEmpty,
@@ -1582,6 +1583,7 @@ export default function CoachCalendarPage() {
             <button type="button" onClick={() => router.push("/coach/workouts")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Workouts</button>
             <button type="button" onClick={() => router.push("/coach/exercises")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Exercises</button>
             <button type="button" onClick={() => router.push("/coach/clients")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Clients</button>
+            <SignOutButton className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50" />
           </nav>
         </div>
       </header>
