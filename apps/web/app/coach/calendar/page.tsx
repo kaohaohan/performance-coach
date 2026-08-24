@@ -623,7 +623,8 @@ export default function CoachCalendarPage() {
     if (!idToken || programmingMode !== "BUILD" || !pickerOpen) return;
     const requestId = ++pickerRequestId.current;
     const trimmedQuery = pickerQuery.trim();
-    const endpoint = trimmedQuery === "" ? "/api/v1/exercises" : `/api/v1/exercises?q=${encodeURIComponent(pickerQuery)}`;
+    if (trimmedQuery === "") return;
+    const endpoint = `/api/v1/exercises?q=${encodeURIComponent(trimmedQuery)}`;
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       (async () => {
@@ -643,7 +644,7 @@ export default function CoachCalendarPage() {
           if (!cancelled && requestId === pickerRequestId.current) setPickerLoading(false);
         }
       })();
-    }, trimmedQuery === "" ? 0 : 275);
+    }, 275);
     return () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
@@ -1848,9 +1849,13 @@ function PrescriptionModeButton({ active, children, ...props }: { active: boolea
 }
 
 function ExercisePicker({ query, exercises, loading, error, selectedIds, disabled, onQueryChange, onAdd, onClose, onOpenLibrary }: { query: string; exercises: Exercise[] | null; loading: boolean; error: string | null; selectedIds: Set<string>; disabled: boolean; onQueryChange: (value: string) => void; onAdd: (exercise: Exercise) => void; onClose: () => void; onOpenLibrary: () => void }) {
-  const system = exercises?.filter((exercise) => exercise.scope === "SYSTEM") ?? [];
-  const privateExercises = exercises?.filter((exercise) => exercise.scope === "PRIVATE") ?? [];
-  return <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">Add Exercise</p><button type="button" onClick={onClose} disabled={disabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button></div><label className="mt-3 block"><span className="sr-only">Search exercises</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} disabled={disabled} placeholder="Search exercises…" autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>{error && <FieldError>{error}</FieldError>}{loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">Loading exercises…</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">No exercises found.</p><p className="mt-1 text-sm text-slate-500">Can&apos;t find the movement you need?</p><button type="button" onClick={onOpenLibrary} disabled={disabled} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50">Open Exercise Library</button></div> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title="System exercises" exercises={system} selectedIds={selectedIds} disabled={disabled} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title="My exercises" exercises={privateExercises} selectedIds={selectedIds} disabled={disabled} onAdd={onAdd} />}{loading && <p className="text-sm font-medium text-slate-500">Updating exercises…</p>}</div>}</div>;
+  const availableExercises = exercises?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
+  const visibleExercises = availableExercises.slice(0, 8);
+  const system = visibleExercises.filter((exercise) => exercise.scope === "SYSTEM");
+  const privateExercises = visibleExercises.filter((exercise) => exercise.scope === "PRIVATE");
+  const hiddenCount = availableExercises.length - visibleExercises.length;
+  const trimmedQuery = query.trim();
+  return <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">Add Exercise</p><button type="button" onClick={onClose} disabled={disabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Close</button></div><label className="mt-3 block"><span className="sr-only">Search exercises</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} disabled={disabled} placeholder="Search exercises…" autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">Start typing to find an exercise.</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">Loading exercises…</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">No exercises found.</p><p className="mt-1 text-sm text-slate-500">Can&apos;t find the movement you need?</p><button type="button" onClick={onOpenLibrary} disabled={disabled} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50">Open Exercise Library</button></div> : exercises !== null && availableExercises.length === 0 ? <p className="mt-4 text-sm font-medium text-slate-500">All matching exercises are already added.</p> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title="System exercises" exercises={system} selectedIds={selectedIds} disabled={disabled} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title="My exercises" exercises={privateExercises} selectedIds={selectedIds} disabled={disabled} onAdd={onAdd} />}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{hiddenCount} more result{hiddenCount === 1 ? "" : "s"}. Keep typing to narrow the list.</p>}{loading && <p className="text-sm font-medium text-slate-500">Updating exercises…</p>}</div>}</div>;
 }
 
 function PickerGroup({ title, exercises, selectedIds, disabled, onAdd }: { title: string; exercises: Exercise[]; selectedIds: Set<string>; disabled: boolean; onAdd: (exercise: Exercise) => void }) {
