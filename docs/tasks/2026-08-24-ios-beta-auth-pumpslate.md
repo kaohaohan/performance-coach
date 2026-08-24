@@ -43,13 +43,13 @@
 - Dependencies / blockers:
   1. **Apple Developer Team ID / App Store Connect access** (user-provided, pending manual confirmation) — required before `DEVELOPMENT_TEAM`, a new App ID, or any Release/distribution signing can actually be configured. Tracked separately; not required to finish this Task Doc, but blocks Phase 6 (Implementation) below.
   2. Firebase Console access to register the new `com.pumpslate.app` iOS app in the `dontworkout` project and retrieve its `GoogleService-Info.plist` — needed before the native config can be updated.
-  3. Confirmation of the exact public-facing app name/display string ("Pumpslate"? "PumpSlate"? something else) for `CFBundleDisplayName` — cosmetic, non-blocking for the auth verification goal, but should not be guessed when it's touched.
+  3. ~~Confirmation of the exact public-facing app name/display string~~ — **Resolved: "PumpSlate"**, per explicit user confirmation (2026-08-24). Bundle ID stays lowercase (`com.pumpslate.app`, unaffected by display-string casing).
 
 ## 2. Technical Design
 
 - Affected files/components:
   - `apps/web/ios/App/App.xcodeproj/project.pbxproj` — change `PRODUCT_BUNDLE_IDENTIFIER` from `com.performancecoach.app` to `com.pumpslate.app` (Debug + Release target configs); once Apple Developer access exists, set `DEVELOPMENT_TEAM`; **attach a Release xcconfig to the Release `XCBuildConfiguration` that currently has none** (see Risks above) — either extend `debug.xcconfig`'s coverage or add a parallel `release.xcconfig`, decision deferred to implementation since it doesn't change the design shape.
-  - `apps/web/ios/App/App/Info.plist` — `CFBundleDisplayName` (pending exact brand string, see Dependencies #3); `CFBundleURLTypes` scheme continues to read `$(GOOGLE_REVERSED_CLIENT_ID)`, which starts resolving correctly in Release once the config gap above is fixed.
+  - `apps/web/ios/App/App/Info.plist` — `CFBundleDisplayName` changes from `Performance Coach` to `PumpSlate` (confirmed, see Dependencies #3); `CFBundleURLTypes` scheme continues to read `$(GOOGLE_REVERSED_CLIENT_ID)`, which starts resolving correctly in Release once the config gap above is fixed.
   - `apps/web/ios/debug.xcconfig` (and/or new release xcconfig) — `GOOGLE_REVERSED_CLIENT_ID` updated to the value from the new `com.pumpslate.app` Firebase iOS app's `GoogleService-Info.plist`.
   - `apps/web/.env.example` and Vercel env (`NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID`, Preview + Production) — updated to the new client ID from the same `GoogleService-Info.plist`.
   - No changes anticipated to `apps/web/lib/auth-context.tsx`, `apps/web/lib/native-google-auth.ts`, or `apps/web/components/google-sign-in-button.tsx` — the sign-in code path itself is not the gap; the build configuration feeding it is.
@@ -64,7 +64,7 @@
 - Sub-task breakdown:
   1. Register `com.pumpslate.app` as a new iOS app in the `dontworkout` Firebase project; obtain its `GoogleService-Info.plist`. *(needs Firebase Console access)*
   2. Register `com.pumpslate.app` as a new App ID in the Apple Developer account. *(needs Apple Developer access — blocked, see §1 Dependencies #1)*
-  3. Update `project.pbxproj` (`PRODUCT_BUNDLE_IDENTIFIER`, `DEVELOPMENT_TEAM` once available) and `Info.plist` (`CFBundleDisplayName`, pending confirmed brand string).
+  3. Update `project.pbxproj` (`PRODUCT_BUNDLE_IDENTIFIER`, `DEVELOPMENT_TEAM` once available) and `Info.plist` (`CFBundleDisplayName` → `PumpSlate`).
   4. Fix the Release `XCBuildConfiguration` xcconfig gap; update `GOOGLE_REVERSED_CLIENT_ID` for the new Firebase app.
   5. Update `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID` in Vercel (Preview + Production) and `.env.example`.
   6. Build the Release scheme in the Simulator; verify native Google Sign-In completes end-to-end under Release configuration.
