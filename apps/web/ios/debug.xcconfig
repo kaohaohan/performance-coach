@@ -6,8 +6,15 @@ CAPACITOR_DEBUG = true
 //
 // Set this to the REVERSED_CLIENT_ID from the GoogleService-Info.plist the
 // Firebase console generates when an iOS app (bundle id
-// com.performancecoach.app) is registered; the matching CLIENT_ID goes to
+// com.pumpslate.app) is registered; the matching CLIENT_ID goes to
 // NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID. Left empty the app still builds and
 // runs — only "Continue with Google" is unavailable.
 // See docs/tasks/2026-08-23-ios-google-signin-webview.md.
+//
+// STALE as of the PumpSlate rename (2026-08-24): the value below was issued
+// for the old com.performancecoach.app registration and no longer matches
+// this target's bundle id, so Google sign-in will fail until a new iOS app
+// is registered for com.pumpslate.app and both this and Vercel's
+// NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID are updated.
+// See docs/tasks/2026-08-24-ios-rebrand-pumpslate.md.
 GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.33959430194-oo5bu2f4jduamv97dr97trctr4ebsdtm
