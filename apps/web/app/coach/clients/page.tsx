@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import SignOutButton from "@/components/sign-out-button";
 import InviteCodesPanel from "./invite-codes-panel";
 
 type Role = "COACH" | "ATHLETE";
@@ -173,7 +174,10 @@ function CoachClientsPageInner() {
     <main className="min-h-screen bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
       <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-lg">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
+            <SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />
+          </div>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">Clients</h1>
           <p className="mt-2 text-sm text-slate-300">Your connected athletes.</p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
