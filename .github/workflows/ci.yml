@@ -272,7 +272,10 @@ jobs:
 
       - name: Name candidate tag
         id: candidate-name
-        run: echo "tag=candidate-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+        # Cloud Run caps the traffic tag and service name at 46 characters
+        # combined, and the service name alone is 28. "c-" plus 12 SHA
+        # characters keeps the tag at 14, well inside the remaining 18.
+        run: echo "tag=c-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy candidate revision without traffic
         env:
