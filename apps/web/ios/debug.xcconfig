@@ -10,4 +10,4 @@ CAPACITOR_DEBUG = true
 // NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID. Left empty the app still builds and
 // runs — only "Continue with Google" is unavailable.
 // See docs/tasks/2026-08-23-ios-google-signin-webview.md.
-GOOGLE_REVERSED_CLIENT_ID =
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.33959430194-oo5bu2f4jduamv97dr97trctr4ebsdtm
