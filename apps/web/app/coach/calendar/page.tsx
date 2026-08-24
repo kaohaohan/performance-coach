@@ -1579,12 +1579,25 @@ export default function CoachCalendarPage() {
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
             <h1 className="truncate text-xl font-semibold tracking-tight">Athlete Calendar</h1>
           </div>
-          <nav className="flex shrink-0 gap-1 text-xs font-semibold text-slate-300" aria-label="Coach tools">
+          {/* sm and up: the full row. Below sm (phone width, most visibly
+              the iOS Capacitor shell) four buttons plus the title never
+              fit — the title was truncating to "Athlet…" — so collapse
+              into a native <details> menu instead; no JS state needed. */}
+          <nav className="hidden shrink-0 gap-1 text-xs font-semibold text-slate-300 sm:flex" aria-label="Coach tools">
             <button type="button" onClick={() => router.push("/coach/workouts")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Workouts</button>
             <button type="button" onClick={() => router.push("/coach/exercises")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Exercises</button>
             <button type="button" onClick={() => router.push("/coach/clients")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Clients</button>
             <SignOutButton className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50" />
           </nav>
+          <details className="relative shrink-0 sm:hidden">
+            <summary aria-label="Coach tools menu" className="grid h-9 w-9 cursor-pointer list-none place-items-center rounded-lg text-lg leading-none text-slate-300 hover:bg-slate-800 [&::-webkit-details-marker]:hidden">☰</summary>
+            <nav className="absolute right-0 top-full z-10 mt-2 w-44 overflow-hidden rounded-xl bg-slate-900 py-1 text-sm font-semibold text-slate-200 shadow-lg ring-1 ring-slate-700" aria-label="Coach tools">
+              <button type="button" onClick={() => router.push("/coach/workouts")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Workouts</button>
+              <button type="button" onClick={() => router.push("/coach/exercises")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Exercises</button>
+              <button type="button" onClick={() => router.push("/coach/clients")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Clients</button>
+              <SignOutButton className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50" />
+            </nav>
+          </details>
         </div>
       </header>
 
