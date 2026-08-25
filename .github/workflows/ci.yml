@@ -135,6 +135,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test
+        # Frontend unit/component tests (vitest + jsdom). AGENTS.md §17 asks
+        # for the relevant tests where they exist; the Coach Calendar's
+        # builder state machine is where they now exist.
+        run: npm test
+
       - name: Build
         # Must precede the typecheck: `next build` generates .next/types,
         # which is where Next 16 puts the global route types app/layout.tsx
