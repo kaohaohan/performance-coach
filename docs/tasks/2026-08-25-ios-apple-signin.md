@@ -84,7 +84,7 @@ signInWithCredential(Firebase Auth)
 | --- | --- | --- |
 | Task Doc | Done | This document, authored with founder corrections #1–#3 |
 | Sub-task 1: native plumbing | Done | lint clean; 5/5 new unit tests pass; 2 pre-existing calendar test failures (.tsx import under node --experimental-strip-types) are from unrelated in-flight work and were left untouched |
-| Sub-task 2: UI wiring | Not Started | |
+| Sub-task 2: UI wiring | Done | lint, tsc --noEmit, and next build all clean; Apple button renders iOS-only at equal prominence above Google on /login, /coach/signup, /join/[code]; collision + cancel copy handled in appleAuthErrorMessage |
 | Sub-task 3: console/Xcode config + TestFlight pass + doc fixes | Not Started | Manual values verified at configuration time, never fabricated |
 
 ## 5. Outcome (filled at completion)
