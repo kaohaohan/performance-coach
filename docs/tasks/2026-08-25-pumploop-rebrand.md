@@ -48,11 +48,11 @@
 | Sub-task 1: Foundation | Done | lint, tsc --noEmit, next build all clean |
 | Sub-task 2: Hero pages → AppHeader | Done | lint, tsc, build clean; children JSX carried over unchanged |
 | Sub-task 3: Pre-auth pages + bespoke wiring | Done | lint, tsc, build clean; join uses padding="pb-16" |
-| Sub-task 4: iOS/Capacitor identity + cap sync | In Progress | cap sync done; generated config.json/index.html (gitignored) read "PumpLoop"; Release build verifying |
-| Verification + merge to staging | Not Started | zero "Performance Coach" hits in apps/web already confirmed |
+| Sub-task 4: iOS/Capacitor identity + cap sync | Done | cap sync refreshed gitignored generated files; Release build via xcodebuild succeeded; built Info.plist reads "PumpLoop", bundle ID `com.pumpslate.app` and URL scheme block unchanged vs staging |
+| Verification + merge to staging | In Progress | lint/tsc/build clean per sub-task; zero "Performance Coach" hits in apps/web; prerendered HTML of all 7 static pages renders "PumpLoop"; remaining "PumpSlate" hits are the bundle ID and a factual debug.xcconfig comment about the Firebase registration |
 
 ## 5. Outcome (filled at completion)
 
-- Final status:
-- Deviations from plan:
-- Follow-ups:
+- Final status: Implemented and verified on `feat/pumploop-rebrand` (commit b4606ec).
+- Deviations from plan: Visual spot-check done via production-build prerendered HTML + diff review instead of browser screenshots (browser tooling unavailable in this environment); result is pixel-identical by construction since `AppHeader`/`AuthHero` emit the exact class strings the hand-rolled headers had, and all page-specific JSX moved as `children` unchanged. iOS verified with `xcodebuild -project` (no `.xcworkspace` exists — SPM-based project) with `CODE_SIGNING_ALLOWED=NO`.
+- Follow-ups: The in-flight Apple sign-in branch (`fix/calendar-discard-and-unassign`) also edits `login`, `coach/signup`, and `join/[code]` — in the form body, not the header — so its merge to staging should not conflict with this one. `apps/web/ios/debug.xcconfig` still says "PumpSlate iOS registration" in a comment; that is the actual Firebase console registration name and stays accurate until the registration is renamed.
