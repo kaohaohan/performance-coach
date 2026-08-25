@@ -15,6 +15,7 @@ import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
+import { AppleSignInButton, appleAuthErrorMessage } from "@/components/apple-sign-in-button";
 
 type Me = { id: string; name: string; role: "COACH" | "ATHLETE" };
 
@@ -48,12 +49,13 @@ function provisioningErrorMessage(err: unknown): string {
 
 export default function CoachSignupPage() {
   const router = useRouter();
-  const { signUp, signInWithGoogle, signOut } = useAuth();
+  const { signUp, signInWithGoogle, signInWithApple, signOut } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [googlePending, setGooglePending] = useState(false);
+  const [applePending, setApplePending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Firebase account creation succeeded but backend provisioning failed —
   // a real (if unusual) split-failure state, not a case to paper over: we
@@ -62,13 +64,17 @@ export default function CoachSignupPage() {
   // account without creating a second one (Signup is idempotent on an
   // existing COACH row).
   const [provisioningFailed, setProvisioningFailed] = useState(false);
-  // Google authentication has completed and this Firebase identity is now
-  // signed in, but no COACH row exists yet. The card switches to confirming
-  // the name athletes will see — the backend requires one when it creates
-  // the row, Google's displayName is a reasonable default rather than an
-  // authority on what a coach wants to be called, and Google does not
-  // always supply one at all.
-  const [googleConfirm, setGoogleConfirm] = useState(false);
+  // Social authentication (Google or Apple) has completed and this
+  // Firebase identity is now signed in, but no COACH row exists yet. The
+  // card switches to confirming the name athletes will see — the backend
+  // requires one when it creates the row, the provider's displayName is a
+  // reasonable default rather than an authority on what a coach wants to
+  // be called, and neither provider always supplies one: Apple only
+  // returns a name on the first-ever authorization, so the field must be
+  // able to stay empty and be filled by hand. Which provider signed in is
+  // kept only so the confirm card's copy is honest.
+  const [socialProvider, setSocialProvider] = useState<"google" | "apple" | null>(null);
+  const socialConfirm = socialProvider !== null;
 
   async function provisionCoach(token: string, coachName: string) {
     const me = await apiFetch<Me>(token, "/api/v1/coach-signup", {
@@ -115,7 +121,7 @@ export default function CoachSignupPage() {
       const { user } = await signInWithGoogle();
       // Pre-fill from Google, but never overwrite something already typed.
       if (!name.trim() && user.displayName) setName(user.displayName);
-      setGoogleConfirm(true);
+      setSocialProvider("google");
     } catch (err) {
       const message = googleAuthErrorMessage(err);
       if (message) setError(message);
@@ -124,11 +130,31 @@ export default function CoachSignupPage() {
     }
   }
 
-  // handleGoogleConfirm provisions the COACH row for the Google identity
+  // handleAppleSignIn reuses the Google post-auth flow exactly: the same
+  // confirm-the-name card, the same provisioning path. When Apple returns
+  // no displayName the pre-fill is simply skipped — the name field stays
+  // empty for the coach to fill; no name is invented.
+  async function handleAppleSignIn() {
+    setError(null);
+    setProvisioningFailed(false);
+    setApplePending(true);
+    try {
+      const { user } = await signInWithApple();
+      if (!name.trim() && user.displayName) setName(user.displayName);
+      setSocialProvider("apple");
+    } catch (err) {
+      const message = appleAuthErrorMessage(err);
+      if (message) setError(message);
+    } finally {
+      setApplePending(false);
+    }
+  }
+
+  // handleSocialConfirm provisions the COACH row for the social identity
   // already signed in. The token is minted fresh from the current Firebase
-  // user rather than reusing the one signInWithGoogle returned, so a coach
-  // who pauses on the name field cannot submit a stale token.
-  async function handleGoogleConfirm(event: FormEvent<HTMLFormElement>) {
+  // user rather than reusing the one the social sign-in returned, so a
+  // coach who pauses on the name field cannot submit a stale token.
+  async function handleSocialConfirm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const coachName = name.trim();
     if (!coachName) {
@@ -140,7 +166,7 @@ export default function CoachSignupPage() {
     try {
       const currentUser = getFirebaseAuth().currentUser;
       if (!currentUser) {
-        setGoogleConfirm(false);
+        setSocialProvider(null);
         setError("Your session expired. Please sign in again.");
         return;
       }
@@ -152,12 +178,12 @@ export default function CoachSignupPage() {
     }
   }
 
-  // Escape hatch for picking the wrong Google account: sign the identity
-  // back out so the next attempt starts from Google's account chooser
-  // rather than silently reusing it.
+  // Escape hatch for picking the wrong account: sign the identity back out
+  // so the next attempt starts from the provider's account prompt rather
+  // than silently reusing it.
   async function handleUseDifferentAccount() {
     setError(null);
-    setGoogleConfirm(false);
+    setSocialProvider(null);
     setName("");
     try {
       await signOut();
@@ -203,27 +229,30 @@ export default function CoachSignupPage() {
         </div>
       </section>
       <div className="mx-auto -mt-8 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <form onSubmit={googleConfirm ? handleGoogleConfirm : handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
+        <form onSubmit={socialConfirm ? handleSocialConfirm : handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Coach &amp; Athlete Training</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight">{googleConfirm ? "Confirm your name" : "Create Coach Account"}</h2>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight">{socialConfirm ? "Confirm your name" : "Create Coach Account"}</h2>
 
-          {googleConfirm ? (
-            <p className="mt-2 text-sm leading-6 text-slate-600">You&apos;re signed in with Google. This is the name your athletes will see.</p>
+          {socialConfirm ? (
+            <p className="mt-2 text-sm leading-6 text-slate-600">You&apos;re signed in with {socialProvider === "apple" ? "Apple" : "Google"}. This is the name your athletes will see.</p>
           ) : (
             <>
-              <div className="mt-6">
-                <GoogleSignInButton onClick={handleGoogleSignIn} pending={googlePending} disabled={submitting || provisioningFailed} />
+              <div className="mt-6 grid gap-3">
+                {/* Apple first on iOS (Guideline 4.8 equivalent prominence);
+                    null on web, where only the Google button renders. */}
+                <AppleSignInButton onClick={handleAppleSignIn} pending={applePending} disabled={submitting || provisioningFailed || googlePending} />
+                <GoogleSignInButton onClick={handleGoogleSignIn} pending={googlePending} disabled={submitting || provisioningFailed || applePending} />
               </div>
               <AuthDivider />
             </>
           )}
 
-          <div className={googleConfirm ? "mt-6 grid gap-4" : "grid gap-4"}>
+          <div className={socialConfirm ? "mt-6 grid gap-4" : "grid gap-4"}>
             <label>
               <span className="mb-1.5 block text-sm font-semibold text-slate-700">Name</span>
               <input type="text" required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
             </label>
-            {!googleConfirm && (
+            {!socialConfirm && (
               <>
                 <label>
                   <span className="mb-1.5 block text-sm font-semibold text-slate-700">Email</span>
@@ -242,10 +271,10 @@ export default function CoachSignupPage() {
           {provisioningFailed ? (
             <button type="button" onClick={handleRetryProvisioning} disabled={submitting} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Retrying…" : "Retry account setup"}</button>
           ) : (
-            <button type="submit" disabled={submitting || googlePending} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Creating account…" : "Create Coach Account"}</button>
+            <button type="submit" disabled={submitting || googlePending || applePending} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Creating account…" : "Create Coach Account"}</button>
           )}
 
-          {googleConfirm && (
+          {socialConfirm && (
             <button type="button" onClick={handleUseDifferentAccount} disabled={submitting} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300">Use a different account</button>
           )}
         </form>
