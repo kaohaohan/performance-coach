@@ -128,6 +128,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts/{id}", authMiddleware(handleGetScheduledWorkout(pool)))
 	mux.Handle("PUT /api/v1/scheduled-workouts/{id}", authMiddleware(handleUpdateScheduledWorkout(pool)))
+	mux.Handle("DELETE /api/v1/scheduled-workouts/{id}", authMiddleware(handleDeleteScheduledWorkout(pool)))
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
@@ -830,6 +831,41 @@ func handleGetScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(got)
+	}
+}
+
+// handleDeleteScheduledWorkout removes one ScheduledWorkout, delegating
+// authorization, editability, and persistence to scheduledworkout.Delete.
+// Coach only, owner only, and only while no session exists — the only way to
+// undo an accidental assignment (docs/go-backend-api-contract-v0.1.md §3.5).
+// Error mapping mirrors handleGetScheduledWorkout, plus the 409 that
+// handleUpdateScheduledWorkout returns for an already-started workout.
+func handleDeleteScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		if err := scheduledworkout.Delete(r.Context(), pool, user, r.PathValue("id")); err != nil {
+			var validationErr *scheduledworkout.ValidationError
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, scheduledworkout.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "scheduled workout not found")
+			case errors.Is(err, scheduledworkout.ErrSessionStarted):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "this workout has already been started and can no longer be removed")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

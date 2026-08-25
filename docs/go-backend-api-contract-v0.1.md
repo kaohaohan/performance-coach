@@ -522,7 +522,7 @@ Service 層檢查（依序）：
 
    檢查在 Create 既有的同一個 transaction 內、對即將寫入的同一批 row 執行，因此不像前端預先檢查那樣可被 race。四個維度缺一不可：換日期、換 athlete、換 workout、換 coach 都不算重複（另一位 coach 把共用 template 排給同一位 athlete 的同一天是各自獨立的排程，且不得向任一方洩漏對方的排程）。
 
-   已存在的重複資料不受影響 — 本檢查只防止新的意外，不清理歷史（系統目前也沒有刪除排程的能力）。
+   已存在的重複資料不受影響 — 本檢查只防止新的意外，不清理歷史。要移除誤排的排程，見下方 `DELETE /scheduled-workouts/{id}`。
 
 通過後先 deterministic resolve 每個 template exercise 的 defaults + sparse overrides，得到 exactly `1..setCount` effective positions。於 **同一 transaction** 內，對每個 athlete：建立一筆 `scheduled_workouts` → 建立 snapshot exercise（含 frozen `exercise_name` 與 planned unit）→ 建立完整 resolved `ScheduledWorkoutPlannedSet` rows。每位 athlete 都有自己的 snapshot row IDs。
 
@@ -634,6 +634,35 @@ Service 層檢查（依序）：
 通過後刪除該 ScheduledWorkout 既有的 `scheduled_workout_planned_sets` 與 `scheduled_workout_exercises` row，重新以請求內容 resolve 並寫入新的 snapshot（`exercise_name`、`position`、frozen unit、resolved planned sets 的語意與 POST /scheduled-workouts 完全相同）。**只動這一筆 ScheduledWorkout**：既不動 reusable Workout template，也不動同一 template 指派給其他 athlete（或同一 athlete其他日期）的 ScheduledWorkout。
 
 Response `200`：與 POST /scheduled-workouts 陣列中單一元素相同的形狀（展開後的新 snapshot；`session` 固定 `null`，因為能編輯就代表尚未開始訓練）。
+
+### DELETE /scheduled-workouts/{id} — Coach only
+
+**V1.0 新增**：移除誤排的排程。在此之前系統沒有任何刪除排程的能力，因此一筆意外建立的 ScheduledWorkout 是永久的；Coach Calendar 上唯一看起來像「撤銷」的操作是 Build Workout 的 Discard Draft，但那隻清除瀏覽器本機草稿、從不發出任何請求，於是被誤用成撤銷。這個 endpoint 是撤銷的**唯一**入口。
+
+與 PUT 相同的可編輯性規則：只能刪除**尚未開始訓練**的排程。一旦有 `workout_sessions` row（`ACTIVE` 或 `COMPLETED`）就是已發生的訓練紀錄，一律 `409 CONFLICT` — 刪除排程絕不能連帶抹掉 athlete 已經做過的訓練。
+
+Request 無 body。
+
+Service 層檢查（依序）：
+
+1. caller 必須是 COACH → 否則 403
+2. `id` 必須是合法 UUID → 否則 400（與 `GET`/`PUT /scheduled-workouts/{id}` 一致）
+3. ScheduledWorkout 存在且 `coachId == caller.id` → 否則 `404 NOT_FOUND`（resource-scoping，非 role check，不透露它屬於另一個 coach）
+4. 尚無 `workout_sessions` row（無論 `ACTIVE` 或 `COMPLETED`）→ 否則 `409 CONFLICT`
+
+第 3-4 步與刪除都在**同一個 transaction** 內完成，並以 `SELECT ... FOR UPDATE` 鎖住該 row，與 PUT 使用完全相同的鎖與檢查路徑；因此一個併發的 `POST .../session` 不可能在檢查通過後、刪除完成前插入 session。
+
+通過後於 FK 順序刪除：`scheduled_workout_planned_sets` → `scheduled_workout_exercises` → `scheduled_workouts`。**只動這一筆 ScheduledWorkout**：
+
+- 不刪 reusable Workout template（它是正常的 Coach-owned 範本，仍留在 Workout Library，見 §3.4 的 soft delete）
+- 不動同一 template 指派給其他 athlete、或同一 athlete 其他日期的 ScheduledWorkout
+- 不動同一 athlete 同一天的其他 ScheduledWorkout（各自是獨立的 row，各有各的 id）
+
+因為第 4 步保證沒有 session，也就保證沒有任何 `set_logs` row 參照被刪除的 snapshot，刪除不會違反 FK，也不會刪到任何實際訓練資料。
+
+Response `204 No Content`，無 body。
+
+非 idempotent：對同一個 `id` 再次呼叫 → `404 NOT_FOUND`（與 `DELETE /athletes/{athleteId}` 一致）。
 
 ---
 
@@ -907,6 +936,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `GET /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 僅回自己建立的排程 | ❌ 403 | `athleteId` 選填；未連結該 athlete → `404`，見 §3.5 |
 | `GET /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | 單筆展開 snapshot，供 Coach Calendar 的 Edit 表單 prefill；list 刻意不含 exercises |
 | `PUT /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`，永久唯讀，見 §3.5 |
+| `DELETE /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 移除誤排；一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`。成功回 `204`，不動 reusable Workout template，見 §3.5 |
 | `GET /me/scheduled-workouts` | ❌ 401 | ❌ 401 | ➖ 回自己的 = 空 | ✅ | 無關聯的 application user 得到空清單 |
 | `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |

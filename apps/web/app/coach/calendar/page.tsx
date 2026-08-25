@@ -24,6 +24,13 @@ import DuplicateDayPanel from "./duplicate-day-panel";
 import { createDuplicateInFlightGuard, duplicateSourceEndpoint, submitDuplicateRequests } from "./duplicate-requests";
 import { ExistingExerciseUnavailableError, createOrResolveExercise } from "./exercise-creation";
 import {
+  areProgrammingControlsDisabled,
+  clearedBuildTransaction,
+  shouldOfferRetry,
+  type BuildStatus,
+  type PendingAssignment,
+} from "./build-transaction";
+import {
   monthGridDays,
   rangeLabel as viewRangeLabel,
   shiftView,
@@ -40,7 +47,6 @@ import type { Workout } from "./types";
 
 type Athlete = { id: string; name: string };
 type ProgrammingMode = "EXISTING" | "BUILD";
-type BuildStatus = "idle" | "creating" | "assigning" | "assignmentFailed" | "savingChanges";
 // ScheduledWorkoutDetail is the wire shape of GET/PUT /api/v1/scheduled-workouts/{id}
 // (docs/go-backend-api-contract-v0.1.md §3.5) — used only to prefill and save
 // the Coach Calendar's Edit Assigned Workout flow (Problem B).
@@ -97,11 +103,6 @@ type PendingNav =
   | { kind: "athlete"; athleteId: string }
   | { kind: "view"; nextView: CalendarView };
 
-type PendingAssignment = Readonly<{
-  workoutId: string;
-  athleteIds: readonly string[];
-  scheduledDate: string;
-}>;
 type Session = { id: string; status: "ACTIVE" | "COMPLETED" };
 type ScheduledWorkoutSummary = {
   id: string;
@@ -412,6 +413,16 @@ function initials(name: string): string {
     .toUpperCase();
 }
 
+// The confirmation shown after an assignment lands. It names the workout,
+// the date, and how many athletes got it, because the builder closes on
+// success: without this the only evidence anything happened is a new card
+// that is often below the fold on a phone, which reads as "nothing
+// happened" and invites the Coach to try again or to reach for Discard.
+function assignedSummary(workoutName: string, date: string, athleteCount: number): string {
+  const who = athleteCount === 1 ? "1 client" : `${athleteCount} clients`;
+  return `“${workoutName}” assigned to ${who} on ${displayDate(date)}.`;
+}
+
 function statusLabel(session: Session | null): string {
   return session?.status ?? "NOT STARTED";
 }
@@ -454,7 +465,11 @@ export default function CoachCalendarPage() {
   const [assigning, setAssigning] = useState(false);
   const assignmentInFlight = useRef(false);
   const [assignError, setAssignError] = useState<string | null>(null);
-  const [assignSuccess, setAssignSuccess] = useState(false);
+  // The confirmation for an assignment that just landed. Rendered OUTSIDE
+  // the builder (see the notice next to saveChangesSuccess): a successful
+  // Build & Assign closes the builder, so a notice rendered inside it is
+  // unmounted by the very action it is confirming and never appears.
+  const [assignSuccess, setAssignSuccess] = useState<string | null>(null);
   const [programmingMode, setProgrammingMode] = useState<ProgrammingMode>("EXISTING");
   const [draftName, setDraftName] = useState("");
   const [draftExercises, setDraftExercises] = useState<DraftExercise[]>([]);
@@ -472,6 +487,13 @@ export default function CoachCalendarPage() {
   const pickerRequestId = useRef(0);
   const [pendingSetsFocusId, setPendingSetsFocusId] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
+  // The assignment awaiting a Remove confirmation, and the one currently
+  // being removed. Removal is the only way to undo an accidental
+  // assignment — Discard Draft only ever clears the browser-local draft
+  // and has never touched a persisted ScheduledWorkout.
+  const [removeTarget, setRemoveTarget] = useState<ScheduledWorkoutSummary | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [calendarAthleteId, setCalendarAthleteId] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
@@ -753,6 +775,12 @@ export default function CoachCalendarPage() {
   }, [saveChangesSuccess]);
 
   useEffect(() => {
+    if (!assignSuccess) return;
+    const timeoutId = window.setTimeout(() => setAssignSuccess(null), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [assignSuccess]);
+
+  useEffect(() => {
     if (!draftJustSaved) return;
     const timeoutId = window.setTimeout(() => setDraftJustSaved(false), 2500);
     return () => window.clearTimeout(timeoutId);
@@ -778,6 +806,11 @@ export default function CoachCalendarPage() {
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
     clearDraft(coachId);
     resetBuilderDraft();
+    // Defensive: the button is disabled for the whole build transaction
+    // (areProgrammingControlsDisabled), so there should be nothing in
+    // flight to clear here. Clearing anyway means a discarded draft can
+    // never strand a created workout id for the retry button to act on.
+    applyClearedBuildTransaction();
     setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
     setDraftStatus("idle");
     setDraftRestoredNotice(false);
@@ -913,6 +946,19 @@ export default function CoachCalendarPage() {
     return undefined;
   }
 
+  // Ends the Build & Assign transaction (see build-transaction.ts): the
+  // created-but-unassigned workout id and the retry affordance that reads
+  // it. Separate from resetBuilderDraft, which clears the authoring content
+  // — the two have different lifetimes and only Discard ends both at once.
+  function applyClearedBuildTransaction() {
+    const cleared = clearedBuildTransaction();
+    setBuildStatus(cleared.buildStatus);
+    setPendingAssignment(cleared.pendingAssignment);
+    setBuildError(cleared.buildError);
+    setAssignError(cleared.assignError);
+    setAssignSuccess(cleared.assignSuccess);
+  }
+
   function resetBuilderDraft() {
     setDraftName("");
     setDraftExercises([]);
@@ -939,7 +985,7 @@ export default function CoachCalendarPage() {
     if (assignmentInFlight.current || buildStatus !== "idle") return;
     setProgrammingMode(mode);
     setAssignError(null);
-    setAssignSuccess(false);
+    setAssignSuccess(null);
     setBuildError(null);
     if (mode === "BUILD") setBuildFieldErrors(initialBuildErrors());
     setPickerOpen(false);
@@ -1125,14 +1171,16 @@ export default function CoachCalendarPage() {
     });
   }
 
-  async function completeBuildAssignment() {
+  async function completeBuildAssignment(assigned: PendingAssignment) {
+    // Read the draft's name before resetBuilderDraft clears it.
+    const assignedName = draftName.trim() || fallbackWorkoutName(assigned.scheduledDate);
     setPendingAssignment(null);
     if (coachId) clearDraft(coachId);
     resetBuilderDraft();
     setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
     setProgrammingMode("EXISTING");
     setEditorOpen(false);
-    setAssignSuccess(true);
+    setAssignSuccess(assignedSummary(assignedName, assigned.scheduledDate, assigned.athleteIds.length));
     await Promise.all([refetchAssignments(), refetchWorkouts()]);
     setBuildStatus("idle");
   }
@@ -1145,7 +1193,7 @@ export default function CoachCalendarPage() {
     setBuildFieldErrors(errors);
     setBuildError(null);
     setAssignError(null);
-    setAssignSuccess(false);
+    setAssignSuccess(null);
     if (errors.date || errors.athletes || hasBuildErrors(errors)) return;
 
     buildInFlight.current = true;
@@ -1182,7 +1230,7 @@ export default function CoachCalendarPage() {
         return;
       }
 
-      await completeBuildAssignment();
+      await completeBuildAssignment(payload);
     } finally {
       buildInFlight.current = false;
     }
@@ -1195,7 +1243,7 @@ export default function CoachCalendarPage() {
     setBuildError(null);
     try {
       await schedulePendingBuild(pendingAssignment);
-      await completeBuildAssignment();
+      await completeBuildAssignment(pendingAssignment);
     } catch (err) {
       setBuildError(errorMessage(err));
       setBuildStatus("assignmentFailed");
@@ -1217,7 +1265,7 @@ export default function CoachCalendarPage() {
     assignmentInFlight.current = true;
     setAssigning(true);
     setAssignError(null);
-    setAssignSuccess(false);
+    setAssignSuccess(null);
     try {
       await apiFetch(idToken, "/api/v1/scheduled-workouts", {
         method: "POST",
@@ -1226,8 +1274,10 @@ export default function CoachCalendarPage() {
         // another day, its date must not leak into this assignment.
         body: { workoutId: selectedWorkoutId, athleteIds: selectedAthleteIds, scheduledDate: date, ...(allowDuplicates ? { allowDuplicates: true } : {}) },
       });
+      const assignedName = workouts?.find((candidate) => candidate.id === selectedWorkoutId)?.name ?? "Workout";
+      const assignedCount = selectedAthleteIds.length;
       setSelectedAthleteIds(calendarAthleteId ? [calendarAthleteId] : []);
-      setAssignSuccess(true);
+      setAssignSuccess(assignedSummary(assignedName, date, assignedCount));
       setEditorOpen(false);
       await refetchAssignments();
     } catch (err) {
@@ -1239,6 +1289,32 @@ export default function CoachCalendarPage() {
     } finally {
       assignmentInFlight.current = false;
       setAssigning(false);
+    }
+  }
+
+  // Removes one assignment. The id comes from the card the Coach confirmed on,
+  // so this can only ever target that single ScheduledWorkout — never the
+  // reusable Workout template, and never another workout on the same day.
+  //
+  // The backend refuses with 409 once a session exists; the button is hidden
+  // in that case, but the check that matters is the server's, since the
+  // athlete may have started training since this list was last fetched.
+  async function handleRemoveAssignment(assignment: ScheduledWorkoutSummary) {
+    if (!idToken || removingId) return;
+    setRemovingId(assignment.id);
+    setRemoveError(null);
+    try {
+      await apiFetch(idToken, `/api/v1/scheduled-workouts/${assignment.id}`, { method: "DELETE" });
+      await refetchAssignments();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setRemoveError("This workout has already been started and can no longer be removed.");
+        await refetchAssignments();
+      } else {
+        setRemoveError(errorMessage(err));
+      }
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -1263,7 +1339,7 @@ export default function CoachCalendarPage() {
   if (!user) return null;
 
   const selectedCount = selectedAthleteIds.length;
-  const programmingControlsDisabled = assigning || buildStatus !== "idle";
+  const programmingControlsDisabled = areProgrammingControlsDisabled({ buildStatus }, assigning);
   const calendarAthlete = athletes?.find((athlete) => athlete.id === calendarAthleteId) ?? null;
   const athleteAssignments = assignments?.filter((assignment) => assignment.athlete.id === calendarAthleteId) ?? null;
   const dayAssignments = athleteAssignments?.filter((assignment) => assignment.scheduledDate === date) ?? null;
@@ -1291,7 +1367,7 @@ export default function CoachCalendarPage() {
     if (!hasDraftContent) setSelectedAthleteIds([athleteId]);
     setEditorOpen(false);
     setAssignError(null);
-    setAssignSuccess(false);
+    setAssignSuccess(null);
     setBuildFieldErrors(initialBuildErrors());
   }
 
@@ -1301,7 +1377,7 @@ export default function CoachCalendarPage() {
     setWeekAnchor(nextDate);
     setEditorOpen(false);
     setAssignError(null);
-    setAssignSuccess(false);
+    setAssignSuccess(null);
     setBuildFieldErrors((previous) => ({ ...previous, date: undefined }));
   }
 
@@ -1394,7 +1470,7 @@ export default function CoachCalendarPage() {
     }
     setEditorOpen(true);
     setAssignError(null);
-    setAssignSuccess(false);
+    setAssignSuccess(null);
     setBuildFieldErrors(initialBuildErrors());
   }
 
@@ -1451,7 +1527,7 @@ export default function CoachCalendarPage() {
       setBuildFieldErrors(initialBuildErrors());
       setBuildError(null);
       setAssignError(null);
-      setAssignSuccess(false);
+      setAssignSuccess(null);
     } catch (err) {
       setEditLoadError(errorMessage(err));
     } finally {
@@ -1538,7 +1614,6 @@ export default function CoachCalendarPage() {
                   </label>
                 )}
                 {assignError && <div className="mt-3"><Notice tone="error">{assignError}</Notice></div>}
-                {assignSuccess && <div className="mt-3"><Notice tone="success">Workout assigned. Your coaching board is updated below.</Notice></div>}
                 <button type="button" onClick={() => handleAssign()} disabled={assigning || !selectedWorkoutId || selectedCount === 0} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                   {assigning ? "Assigning workout…" : `Assign to ${selectedCount || ""} athlete${selectedCount === 1 ? "" : "s"}`}
                 </button>
@@ -1585,7 +1660,7 @@ export default function CoachCalendarPage() {
                     </div>
                   </div>
 
-                  {buildStatus === "assignmentFailed" && pendingAssignment ? <div className="grid gap-3">
+                  {shouldOfferRetry({ buildStatus, pendingAssignment }) ? <div className="grid gap-3">
                     <Notice tone="error"><span className="font-bold">Workout was created, but it was not assigned.</span>{buildError ? ` ${buildError}` : ""}</Notice>
                     <button type="button" onClick={handleRetryAssignment} className="min-h-14 w-full rounded-2xl bg-amber-500 px-5 text-base font-bold text-slate-950 shadow-sm transition hover:bg-amber-400">Retry Assignment</button>
                   </div> : buildError ? <Notice tone="error">{buildError}</Notice> : null}
@@ -1712,6 +1787,8 @@ export default function CoachCalendarPage() {
 
             {startError && <div className="mt-4"><Notice tone="error">{startError}</Notice></div>}
             {editLoadError && <div className="mt-4"><Notice tone="error">{editLoadError}</Notice></div>}
+            {removeError && <div className="mt-4"><Notice tone="error">{removeError}</Notice></div>}
+            {assignSuccess && <div className="mt-4"><Notice tone="success">{assignSuccess}</Notice></div>}
             {saveChangesSuccess && <div className="mt-4"><Notice tone="success">Changes saved. The athlete will see the updated prescription immediately.</Notice></div>}
             <div className="mt-5">
               {assignments === null ? <LoadingCard label="Loading scheduled training…" /> : dayAssignments?.length === 0 ? <EmptyCard title="No workouts scheduled" body="Add a workout to this athlete’s selected day." /> : (
@@ -1721,6 +1798,7 @@ export default function CoachCalendarPage() {
                       <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-500">{assignment.athlete.name}</p><p className="mt-1 text-lg font-bold">{assignment.workout.name}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusClass(assignment.session)}`}>{statusLabel(assignment.session)}</span></div>
                       <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
                         {assignment.session === null && <button type="button" onClick={() => openEditWorkout(assignment)} disabled={programmingControlsDisabled || editLoadingId === assignment.id} className="min-h-10 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-800 transition hover:bg-slate-100 disabled:opacity-50">{editLoadingId === assignment.id ? "Opening…" : "Edit"}</button>}
+                        {assignment.session === null && <button type="button" onClick={() => setRemoveTarget(assignment)} disabled={removingId === assignment.id} className="min-h-10 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-50">{removingId === assignment.id ? "Removing…" : "Remove"}</button>}
                         {assignment.session === null ? <button type="button" onClick={() => handleStart(assignment.id)} disabled={startingId === assignment.id} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white disabled:opacity-50">{startingId === assignment.id ? "Starting…" : "Start Session"}</button> : <button type="button" onClick={() => router.push(`/session/${assignment.session!.id}`)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white">{assignment.session.status === "ACTIVE" ? "Resume" : "Review"}</button>}
                       </div>
                     </li>
@@ -1791,6 +1869,20 @@ export default function CoachCalendarPage() {
           void retry();
         }}
         onCancel={() => setDuplicateConfirm(null)}
+      />}
+
+      {removeTarget && <ConfirmDialog
+        title="Remove this workout?"
+        body={<>This removes <span className="font-semibold text-slate-800">{removeTarget.workout.name}</span> from {removeTarget.athlete.name}&apos;s <span className="font-semibold text-slate-800">{displayDate(removeTarget.scheduledDate)}</span>. Nothing else on that day changes, and the workout itself stays in your library to assign again.</>}
+        confirmLabel="Remove workout"
+        cancelLabel="Keep it"
+        danger
+        onConfirm={() => {
+          const target = removeTarget;
+          setRemoveTarget(null);
+          void handleRemoveAssignment(target);
+        }}
+        onCancel={() => setRemoveTarget(null)}
       />}
 
       {pendingNav && <ConfirmDialog

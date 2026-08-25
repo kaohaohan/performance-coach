@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ExistingExerciseUnavailableError, createOrResolveExercise } from "./exercise-creation";
+import { ExistingExerciseUnavailableError, createOrResolveExercise } from "./exercise-creation.ts";
 
 const createdExercise = { id: "created", name: "Cossack Squat", scope: "PRIVATE" as const };
 const existingExercise = { id: "existing", name: "COSSACK SQUAT", scope: "SYSTEM" as const };
