@@ -6,8 +6,12 @@ CAPACITOR_DEBUG = true
 //
 // Set this to the REVERSED_CLIENT_ID from the GoogleService-Info.plist the
 // Firebase console generates when an iOS app (bundle id
-// com.performancecoach.app) is registered; the matching CLIENT_ID goes to
+// com.pumpslate.app) is registered; the matching CLIENT_ID goes to
 // NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID. Left empty the app still builds and
 // runs — only "Continue with Google" is unavailable.
 // See docs/tasks/2026-08-23-ios-google-signin-webview.md.
-GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.33959430194-oo5bu2f4jduamv97dr97trctr4ebsdtm
+//
+// Issued for the PumpSlate iOS registration (com.pumpslate.app). Its matching
+// CLIENT_ID must be set as NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID in the staging
+// Vercel environment that the Capacitor shell loads.
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.33959430194-aqvfqnmdhuoig5hr8517pc0q8mbvespf
