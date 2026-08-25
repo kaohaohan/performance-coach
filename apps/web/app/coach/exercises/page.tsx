@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import SignOutButton from "@/components/sign-out-button";
+import { AppHeader } from "@/components/app-header";
 
 type Role = "COACH" | "ATHLETE";
 type Exercise = {
@@ -153,19 +154,15 @@ export default function CoachExercisesPage() {
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
-      <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
-        <div className="mx-auto max-w-lg">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
-            <SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />
-          </div>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight">Exercise Library</h1>
-          <p className="mt-2 max-w-sm text-sm leading-6 text-slate-300">Manage the movements you use in programming.</p>
-          <button type="button" onClick={() => router.push("/coach/calendar")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
-            ← Coach Calendar
-          </button>
-        </div>
-      </header>
+      <AppHeader
+        actions={<SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />}
+      >
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Exercise Library</h1>
+        <p className="mt-2 max-w-sm text-sm leading-6 text-slate-300">Manage the movements you use in programming.</p>
+        <button type="button" onClick={() => router.push("/coach/calendar")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
+          ← Coach Calendar
+        </button>
+      </AppHeader>
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-6 px-4">
         {roleError && <Notice>{roleError}</Notice>}

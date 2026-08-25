@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
+import { AuthHero } from "@/components/auth-hero";
 
 function loginErrorMessage(err: unknown): string {
   const code = (err as { code?: string })?.code;
@@ -95,13 +96,10 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-screen bg-stone-100 text-slate-900">
-      <section className="bg-slate-950 px-6 pb-20 pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
-        <div className="mx-auto max-w-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">Performance Coach</p>
-          <h1 className="mt-6 text-4xl font-semibold tracking-tight">Train.<br />Track. Improve.</h1>
-          <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">A focused training space for coaches and athletes.</p>
-        </div>
-      </section>
+      <AuthHero>
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight">Train.<br />Track. Improve.</h1>
+        <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">A focused training space for coaches and athletes.</p>
+      </AuthHero>
       <div className="mx-auto -mt-8 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
         <form onSubmit={handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Coach &amp; Athlete Training</p>

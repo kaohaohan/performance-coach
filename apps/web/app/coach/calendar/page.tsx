@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import SignOutButton from "@/components/sign-out-button";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   clearDraft,
   isDraftContentEmpty,
@@ -1681,7 +1682,7 @@ export default function CoachCalendarPage() {
       <header className="border-b border-slate-800 bg-slate-950 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-300">{BRAND_NAME}</p>
             <h1 className="truncate text-xl font-semibold tracking-tight">Calendar</h1>
           </div>
           {/* sm and up: the full row. Below sm (phone width, most visibly

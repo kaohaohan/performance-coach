@@ -12,6 +12,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiFetch, publicApiFetch } from "@/lib/api";
 import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
+import { BRAND_NAME } from "@/lib/brand";
 
 type Preview = { code: string; coachName: string; description: string | null };
 type Redeemed = { user: { id: string; name: string; role: "ATHLETE" }; coach: { name: string } };
@@ -359,7 +360,7 @@ function JoinShell({ children }: { children: ReactNode }) {
     <main className="min-h-screen bg-stone-100 text-slate-900">
       <header className="bg-slate-950 px-6 pb-10 pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">Performance Coach</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">{BRAND_NAME}</p>
         </div>
       </header>
       <div className="mx-auto -mt-6 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
