@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import DayCard from "./day-card";
+import DayCard from "./day-card.tsx";
 
 test("renders a separate status for every assignment and no S/R footer", () => {
   const markup = renderToStaticMarkup(React.createElement(DayCard, {
