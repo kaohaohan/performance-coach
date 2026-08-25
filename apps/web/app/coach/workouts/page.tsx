@@ -337,7 +337,7 @@ export default function CoachWorkoutsPage() {
       <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-3xl">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">PumpLoop</p>
             <SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />
           </div>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">{creating ? "Create Workout" : "Workout Library"}</h1>

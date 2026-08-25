@@ -359,7 +359,7 @@ function JoinShell({ children }: { children: ReactNode }) {
     <main className="min-h-screen bg-stone-100 text-slate-900">
       <header className="bg-slate-950 px-6 pb-10 pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">Performance Coach</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">PumpLoop</p>
         </div>
       </header>
       <div className="mx-auto -mt-6 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">

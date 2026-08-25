@@ -5,7 +5,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 // placeholder. See docs/tasks/2026-08-23-ios-capacitor-staging-webview.md.
 const config: CapacitorConfig = {
   appId: "com.pumpslate.app",
-  appName: "PumpSlate",
+  appName: "PumpLoop",
   webDir: "capacitor-shell",
   server: {
     url: "https://performance-coach-git-staging-kaohaohans-projects.vercel.app",

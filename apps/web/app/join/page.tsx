@@ -38,7 +38,7 @@ export default function JoinPage() {
     <main className="min-h-screen bg-stone-100 text-slate-900">
       <section className="bg-slate-950 px-6 pb-16 pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">Performance Coach</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">PumpLoop</p>
           <h1 className="mt-6 text-4xl font-semibold tracking-tight">Join your coach.</h1>
           <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">Enter the code your coach sent you.</p>
         </div>
