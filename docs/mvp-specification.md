@@ -98,6 +98,22 @@ Unknown, expired, and revoked codes are all reported the same way: the join flow
 
 A Coach can remove an Athlete, which ends the coaching relationship only. The Athlete keeps their account, their login, and their training history, and may be invited again later.
 
+### **Account deletion (App Review 5.1.1(v))**
+
+A Coach or Athlete can delete their own account from inside the app (Settings / Account). Deletion is not deactivation, not an email request, and not an external web form as the only method.
+
+Deletion permanently ends that person's ability to sign in, and removes or anonymizes their personal account identity (`Deleted Coach` / `Deleted Athlete`). It must not corrupt the other party's legitimate historical training record:
+
+- Performed sessions, set logs, and frozen snapshots stay.
+- Unstarted future assignments are removed.
+- Invite codes belonging to a deleting Coach are deleted.
+- Coach-owned workouts and private exercises that history does not need are deleted; parent rows required by remaining FKs stay.
+- An Athlete's ACTIVE session is left `ACTIVE` (mutation-blocked). The product does not fabricate `COMPLETED`. A future `ABANDONED` status is a separate decision.
+- Calendar keeps historical rows for a deleted Athlete, labeled `Deleted Athlete`.
+- Sign in with Apple accounts revoke Apple tokens as part of deletion. Re-auth must prove the **same** currently signed-in Firebase user (`reauthenticateWithCredential`).
+
+A later sign-up with a new Firebase user creates a new empty account. It never restores the tombstone. A still-pending tombstone that still holds the old Firebase UID returns `409 ACCOUNT_DELETED` on coach-signup and invite redeem.
+
 ### **Acceptance Criteria**
 
 - A Coach can register without operator involvement.
@@ -112,6 +128,9 @@ A Coach can remove an Athlete, which ends the coaching relationship only. The At
 - Unknown, expired, and revoked codes are indistinguishable to the Athlete.
 - A Coach sees and manages only their own codes and their own Athletes.
 - Removing an Athlete ends the relationship and preserves the Athlete's account and training history.
+- A Coach or Athlete can delete their own account in-app. After deletion they cannot sign in as that account, their display name is `Deleted Coach` or `Deleted Athlete`, and the counterparty still sees performed training history.
+- Deleting an Athlete does not mark their ACTIVE sessions COMPLETED.
+- A tombstoned Firebase identity cannot recreate the old backend user via coach-signup or invite redeem (`409 ACCOUNT_DELETED`).
 
 ### **Not in V0.1**
 

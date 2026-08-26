@@ -1,6 +1,6 @@
 # DontWorkout — Go Backend API Contract (V0.1)
 
-Status: **V0.8 — implemented.** Planned-set contract shipped in migration `0002_planned_set_prescription`; onboarding and invite codes in `0003_coach_invite_codes`.
+Status: **V0.10 — account deletion approved, not yet implemented.** Planned-set contract shipped in migration `0002_planned_set_prescription`; onboarding and invite codes in `0003_coach_invite_codes`. `DELETE /api/v1/me` and tombstone semantics are the approved V0.10 contract; they must not ship until `docs/tasks/2026-08-26-account-deletion.md` is implemented.
 
 Target: 2026-08-16
 
@@ -9,6 +9,9 @@ Target: 2026-08-16
 Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
+
+> V0.10 變更（App Review Guideline 5.1.1(v) — in-app account deletion）：新增 `DELETE /api/v1/me`；`users.deleted_at` tombstone；`account_deletion_jobs` 作為 Firebase / Apple 外部清理的 durable recovery；active relationship vs historical access 拆開 `coach_athletes` 的授權語意；signup/redeem 碰上 tombstone 回 `409 ACCOUNT_DELETED`。實作見 `docs/tasks/2026-08-26-account-deletion.md`。落地前現行程式尚未提供本 endpoint。
+>
 
 > V0.8 變更（D1c — structured logging，`docs/deployment-architecture-v0.2.md` §12）：所有 response 新增 `X-Request-Id` header，純附加，不影響任何既有 route/request/response shape/status code，錯誤 body 仍是 `{"error":{"code","message"}}`。詳見上方 Base 一節。
 >
@@ -56,9 +59,9 @@ Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 
 | --- | --- | --- |
 | **Public** | 不檢查 `Authorization` | health check、`GET /invite-codes/{code}/preview` |
 | **Firebase-authenticated (app account optional)** | 驗 JWT 取 `uid`；**不要求** `users` 有對應 row | `POST /coach-signup`、`POST /invite-codes/{code}/redeem` |
-| **Application-user authenticated** | 驗 JWT 取 `uid` → 查 `users` 得 internal user + role；查不到 → `401 UNAUTHENTICATED` | 其餘所有 endpoint |
+| **Application-user authenticated** | 驗 JWT 取 `uid` → 查 `users` 得 internal user + role；查不到 → `401 UNAUTHENTICATED` | 其餘所有 endpoint。`deleted_at IS NOT NULL` 的 row 對這些 route 視同查不到（`401 UNAUTHENTICATED`），**唯一例外是 `DELETE /api/v1/me`**（見 §3.1） |
 
-Firebase-authenticated (app account optional) 的 route **不得**因為 `users` 沒有 row 就回 `401`：這兩條 endpoint 同時要服務「還沒有帳號」與「已經有帳號」兩種 caller，前者是它們的正常輸入。
+Firebase-authenticated (app account optional) 的 route **不得**因為 `users` 沒有 row 就回 `401`：這兩條 endpoint 同時要服務「還沒有帳號」與「已經有帳號」兩種 caller，前者是它們的正常輸入。若該 Firebase uid 已對應一個 `deleted_at IS NOT NULL` 的 tombstone，這兩條改回 `409 ACCOUNT_DELETED`，不得冪等回傳 tombstone、也不得另建第二個 `users` row。
 
 ### Caller states
 
@@ -73,6 +76,17 @@ Firebase-authenticated (app account optional) 的 route **不得**因為 `users`
 
 **Authentication ≠ Authorization。**Firebase 只負責「你是誰」，application identity（`users.id`）與角色權限一律由本系統決定。Role 於建立帳號時決定，之後永不變更。
 
+### Active relationship vs historical access
+
+`coach_athletes` 在 V0.10 起同時承載兩種語意，**不新增 `ended_at` 欄位**：
+
+| 語意 | 判定 | 用於 |
+| --- | --- | --- |
+| **Historical access** | 存在 `coach_athletes (coach_id, athlete_id)` row | 已發生訓練的讀取：`GET /sessions/{id}`、`GET /scheduled-workouts`（含 `athleteId`）、`GET /scheduled-workouts/{id}` |
+| **Active relationship** | 上列 row 存在，**且**雙方 `users.deleted_at IS NULL` | 名冊與寫入：`GET /athletes`、`DELETE /athletes/{athleteId}`、`POST /scheduled-workouts`、`POST .../session`、`POST /sessions/{id}/complete`、`POST /sessions/{id}/set-logs`、`PATCH/DELETE /set-logs/{id}` |
+
+Tombstone 後的 athlete 從名冊與排程 picker 消失，但不能被「解除關係」以摧毀 historical ACL：`DELETE /athletes/{athleteId}` 對 tombstoned athlete 回 `404 NOT_FOUND`。Calendar 仍顯示其歷史列，名稱為 `Deleted Athlete`。
+
 ## 錯誤格式（全 API 統一）
 
 ```json
@@ -86,11 +100,13 @@ Firebase-authenticated (app account optional) 的 route **不得**因為 `users`
 
 | HTTP | code | 使用時機 |
 | --- | --- | --- |
-| 400 | INVALID_ARGUMENT | JSON 解析失敗、欄位驗證失敗 |
-| 401 | UNAUTHENTICATED | token 缺失/無效/過期 |
+| 400 | INVALID_ARGUMENT | JSON 解析失敗、欄位驗證失敗、`DELETE /me` 的 Apple code 缺失/無效/錯綁 |
+| 401 | UNAUTHENTICATED | token 缺失/無效/過期；application-user route 對 tombstoned `users` row（`DELETE /me` 除外） |
 | 403 | FORBIDDEN | 已登入但無權操作該資源 |
+| 403 | RECENT_AUTH_REQUIRED | `DELETE /me`：ID token 的 `auth_time` 早於 5 分鐘 |
 | 404 | NOT_FOUND | 資源不存在（或無權看見 — 見下） |
 | 409 | CONFLICT | 狀態衝突（如重複完成 session） |
+| 409 | ACCOUNT_DELETED | `POST /coach-signup` 或 `POST /invite-codes/{code}/redeem` 命中 `deleted_at IS NOT NULL` 的既有 `users` row |
 | 422 | VALIDATION_FAILED | voice command schema 驗證失敗 |
 | 500 | INTERNAL | 未預期錯誤（不外洩細節） |
 
@@ -180,7 +196,7 @@ Authoring defaults and each effective snapshot position contain exactly one of n
 
 # 3. Endpoints
 
-> **Implemented contract.** The shapes in this section match the shipped `/api/v1` implementation after migrations `0002_planned_set_prescription` and `0003_coach_invite_codes`. There is no parallel V2 contract.
+> **Implemented contract through V0.8/onboarding.** The shapes in this section match the shipped `/api/v1` implementation after migrations `0002_planned_set_prescription` and `0003_coach_invite_codes`, **except** V0.10 account deletion (`DELETE /api/v1/me`, tombstone, `ACCOUNT_DELETED`, active vs historical access), which is approved here and implemented only via `docs/tasks/2026-08-26-account-deletion.md`. There is no parallel V2 contract.
 
 ## 3.1 Me
 
@@ -189,6 +205,67 @@ Authoring defaults and each effective snapshot position contain exactly one of n
 ```json
 { "id": "...", "name": "Kevin", "role": "ATHLETE" }
 ```
+
+Tombstoned caller（`deleted_at IS NOT NULL`）走一般 application-user middleware → `401 UNAUTHENTICATED`。本 endpoint **不是**刪除重試入口。
+
+### DELETE /api/v1/me — Application-user authenticated（含 tombstone 重試）
+
+呼叫者刪除自己的帳號。Coach 與 Athlete 皆可。無 path parameter。這是 App Review Guideline 5.1.1(v) 的 in-app 刪除入口，不是 deactivate。
+
+Request body：JSON object。無 body、或 `{}`，僅在該 Firebase user **未**連結 `apple.com` 時合法。
+
+```json
+{ "appleAuthorizationCode": "..." }
+```
+
+`appleAuthorizationCode`：當已驗證 token 的 Firebase identities 含 `apple.com` 時**必填**；未連結 Apple 時**必須省略**。前端必須先對 **目前這個** Firebase user 做 `reauthenticateWithCredential`，不得另開一條 generic `signIn` 換人。Apple 路徑從 `@capgo/capacitor-social-login` 取得未消耗的 authorization code（deletion helper 使用 `useProperTokenExchange: true`，且不設 `redirectUrl`）。
+
+| 情況 | HTTP | code |
+| --- | --- | --- |
+| 刪除成功，含「已 tombstone、本次只重試外部清理」 | 204 | （無 body） |
+| 缺 token / token 無效 | 401 | `UNAUTHENTICATED` |
+| JSON 無法解析、未知欄位、空的 `appleAuthorizationCode`、未連結 Apple 卻帶了 code、已連結 Apple 卻沒帶 code | 400 | `INVALID_ARGUMENT` |
+| Apple `auth/token` 拒絕該 code，或回傳的 Apple `id_token.sub` 與目前 Firebase user 的 Apple provider identity 不符 | 400 | `INVALID_ARGUMENT`（**不得**寫入任何刪除狀態） |
+| ID token `auth_time` 早於 5 分鐘 | 403 | `RECENT_AUTH_REQUIRED` |
+| 未預期錯誤 | 500 | `INTERNAL` |
+
+沒有 404：本 endpoint 沒有 resource id。沒有用 409 表示「已經刪過」——第二次呼叫是 204 並 resume 未完成的外部清理。
+
+**Recent-auth：**以已驗證 ID token 的 `auth_time` 為準，視窗 5 分鐘。前端 re-auth 成功後 token 會更新；後端不信任 client 自稱已 re-auth。
+
+**Apple 交換與綁定（1.0 必做，在任何 DB mutation 之前）：**
+
+1. `POST https://appleid.apple.com/auth/token`（`grant_type=authorization_code`，`client_id=com.pumpslate.app`）。
+2. 驗證回傳的 Apple `id_token`（簽名、`iss`、`aud`、`exp`）。
+3. `id_token.sub` **必須**等於目前已驗證 Firebase user 的 Apple provider UID（`firebase.identities['apple.com']`）。不符 → `400 INVALID_ARGUMENT`，不存 refresh token、不 revoke、不 tombstone。
+4. 通過後才把 `refresh_token` 寫入 `account_deletion_jobs`，並在 commit 後呼叫 `POST https://appleid.apple.com/auth/revoke`（`token_type_hint=refresh_token`）。
+
+未連結 Apple 的帳號略過上述步驟，並把 job 的 `apple_revoked_at` 標為完成（N/A）。
+
+**Transaction 與外部清理順序：**
+
+1. （Apple 時）先完成 token 交換與 `sub` 比對；失敗則 400，帳號不變。
+2. 單一 DB transaction：`SELECT ... FOR UPDATE` 鎖 `users` row。若已有 `deleted_at`，跳過 prune，保留既有 job。否則 anonymize `name`（`Deleted Coach` / `Deleted Athlete`）、設 `deleted_at`、prune（見下）、插入 `account_deletion_jobs`（`original_firebase_uid` 仍是目前 uid；**此時不改寫 `firebase_uid`**）。
+3. Commit。
+4. Best-effort：Apple revoke（若適用）+ Firebase Admin `DeleteUser(original_firebase_uid)`。Firebase `user-not-found` 與 Apple 對已失效 token 的成功/冪等回應都算完成。
+5. 兩者都完成 → `firebase_uid = 'deleted:' || id`，清空 `apple_refresh_token`，`status = COMPLETE`，回 204。
+6. 任一外部步驟失敗 → job 維持 `PENDING_EXTERNAL` 並寫入 `last_error`，**仍回 204**。Durable 識別存在 job 上，不是 `request_id` log。
+
+`DELETE /me` 對 tombstoned caller 仍可通過（本 route 的 middleware 例外），以便同一 Firebase token 在外部清理完成前重試。其餘 application-user route 對 tombstone 一律 401。
+
+Process boot 可 sweep `PENDING_EXTERNAL` jobs，這是 **best-effort recovery，不是保證排程**。本 task 不加 Cloud Scheduler。
+
+**Prune（同一 transaction，只刪最小集合）：**
+
+- 該 user 作為 coach 的全部 `coach_invite_codes`。
+- 該 user 參與、且 **尚無** `workout_sessions` row 的 `scheduled_workouts`（既有 FK 順序：planned sets → snapshot exercises → scheduled workout）。
+- 刪除後不再被任何剩餘 `scheduled_workouts` 參考的、該 coach 的 `workouts`（含 `workout_exercises` / overrides）。被剩餘歷史參考的 `workouts` row 必須保留（`scheduled_workouts.workout_id` NOT NULL + 歷史 `workoutName` live join）。保留的 template 可刪其 `workout_exercises` / overrides（歷史顯示不讀 template）。
+- 刪除後不再被剩餘 `scheduled_workout_exercises.exercise_id` 參考的該 coach 私有 `exercises`。System exercises（`owner_coach_id IS NULL`）永不刪。
+- **不刪** `coach_athletes`。
+- **不改** 已有 session 的 `scheduled_workouts` / snapshots / `set_logs`。
+- Athlete 刪除時 **不**把 ACTIVE session 改成 COMPLETED。狀態維持 `ACTIVE`，之後對該 session 的 mutation 依 active-relationship 規則拒絕。`ABANDONED` 是未來獨立產品/schema 決策，本契約不引入。
+
+Coach 刪除不凍結其 athlete 已開始的 session：athlete 以 self-auth 仍可 log / complete。
 
 ### POST /api/v1/coach-signup — Firebase-authenticated (app account optional)
 
@@ -209,8 +286,9 @@ Response `200`：
 | 情況 | 結果 |
 | --- | --- |
 | 該 Firebase uid 尚無 `users` row | 建立 `role = COACH` 的帳號 |
-| 已存在且 `role = COACH` | 冪等回傳既有 row，**不覆寫 `name`** |
-| 已存在且 `role = ATHLETE` | `409 CONFLICT` |
+| 已存在且 `role = COACH` 且 `deleted_at IS NULL` | 冪等回傳既有 row，**不覆寫 `name`** |
+| 已存在且 `role = ATHLETE` 且 `deleted_at IS NULL` | `409 CONFLICT` |
+| 已存在且 `deleted_at IS NOT NULL` | `409 ACCOUNT_DELETED`（不回 tombstone、不另建 row） |
 | 建立路徑上 `name` 為空或超過 80 字元 | `400 INVALID_ARGUMENT` |
 
 `name` 僅在建立路徑必填；既有 coach 重複呼叫可省略。
@@ -477,21 +555,22 @@ Response `200`：
 | 情況 | 結果 |
 | --- | --- |
 | 尚無 `users` row | 建立 `role = ATHLETE` 並連結該 coach |
-| 已是 Athlete、尚未連結 | 建立連結 |
-| 已是 Athlete、已連結同一 coach | 冪等成功，不重複建立 |
+| 已是 Athlete、尚未連結、且 `deleted_at IS NULL` | 建立連結 |
+| 已是 Athlete、已連結同一 coach、且 `deleted_at IS NULL` | 冪等成功，不重複建立 |
+| 已存在且 `deleted_at IS NOT NULL` | `409 ACCOUNT_DELETED`（不回 tombstone、不另建 row、不插入 `coach_athletes`） |
 | 已是 Coach（含兌換自己的碼） | `403 FORBIDDEN` |
 | 碼無效（同 preview 的四種情況） | `404 NOT_FOUND` |
 
 一位 Athlete 可連結多位 Coach。既有 row 的 `name` 與 `role` 一律原樣讀回，永不覆寫。
 
-### DELETE /athletes/{athleteId} — Coach only（connected）
+### DELETE /athletes/{athleteId} — Coach only（active relationship）
 
 `204 No Content`。只刪除 `coach_athletes` 關係，**不刪 `users` row、不動 Firebase 帳號、不動訓練紀錄**。
-未連結、不存在、或 `athleteId` 非合法 UUID → 一律 `404 NOT_FOUND`。
+未連結、不存在、tombstoned（`deleted_at IS NOT NULL`）、或 `athleteId` 非合法 UUID → 一律 `404 NOT_FOUND`。Tombstoned athlete 必須維持 historical ACL，故不得用本 endpoint 拆掉 `coach_athletes`。
 
 ### GET /athletes — Coach only
 
-回傳與呼叫者有 CoachAthlete 關係的 athlete 清單（排程時的多選來源）。
+回傳與呼叫者有 **active relationship** 的 athlete 清單（排程時的多選來源）。`deleted_at IS NOT NULL` 的 athlete 不出現。歷史名稱改走 Calendar / session 讀取，顯示 `Deleted Athlete`。
 
 ---
 
@@ -515,7 +594,7 @@ Response `200`：
 Service 層檢查（依序）：
 
 1. workout 存在、未封存、且 `workout.coachId == caller.id` → 否則 404
-2. `athleteIds` 非空、無重複；**每一個** athleteId 都有 `CoachAthlete(caller, athleteId)` 關係 → 任一不符回 `403 FORBIDDEN`（全有全無，不做部分成功）
+2. `athleteIds` 非空、無重複；**每一個** athleteId 都有與 caller 的 **active relationship**（`coach_athletes` 且雙方 `deleted_at IS NULL`）→ 任一不符回 `403 FORBIDDEN`（全有全無，不做部分成功）
 3. **V0.9 新增｜重複排程防呆**：`allowDuplicates` 為 `false`（或省略）時，若任一 athlete 已有**同一 coach、同一 workout、同一日期**的排程 → `409 CONFLICT`，`message` 會列出這些 athlete 的名字。與檢查 2 一致採全有全無：整批拒絕，不做部分排程。
 
    這是**防呆，不是 domain rule**。同一天排同一份 workout 兩次是合法的訓練安排（例如 AM/PM 兩堂），所以 client 可以在讓教練確認後、帶 `allowDuplicates: true` 重送同一請求來完成排程。也正因如此，`scheduled_workouts` **刻意沒有**對應的資料庫 UNIQUE constraint — 那會讓合法情境變成不可能，而不只是需要確認。
@@ -568,7 +647,7 @@ Coach template responses use numeric `plan.setCount`; scheduled responses use `e
 列出呼叫者（caller）自己建立的排程，一律以 `coachId = caller.id` 為界（不因本次調整而改變）。**這是 summary/list endpoint**：只回傳 Calendar 渲染所需的摘要欄位，不含 exercise prescription — 那屬於 `GET /sessions/{id}` 的職責，不在此重複。
 
 - `from`、`to`：**必填**，以 `scheduled_date` 篩選的日期範圍（含首尾），格式為純日期（`2026-08-14`）。缺漏或無法解析 → `400 INVALID_ARGUMENT`；`to` 早於 `from` → 同樣 `400 INVALID_ARGUMENT`。
-- `athleteId`：**選填**（V0.5 起）。有值時只回傳該 athlete 的排程，且該 athlete 必須與呼叫者存在 `CoachAthlete` 關係，否則 `404 NOT_FOUND`（不透露該 athlete 是否存在 — 見 §1 授權與隱私原則；**注意此處刻意與 §3.5 POST /scheduled-workouts 的 403 不一致，屬已知待清理項目，本次不擴大範圍處理**）。省略時回傳呼叫者在 `from`–`to` 範圍內、跨所有已連結 athlete 的排程 — 供 Coach Calendar 日/週檢視使用（見 `docs/frontend-ui-spec.md`）。
+- `athleteId`：**選填**（V0.5 起）。有值時只回傳該 athlete 的排程，且該 athlete 必須與呼叫者存在 **historical access**（`coach_athletes` row，即使 athlete 已 tombstone），否則 `404 NOT_FOUND`（不透露該 athlete 是否存在 — 見 §1 授權與隱私原則；**注意此處刻意與 §3.5 POST /scheduled-workouts 的 403 不一致，屬已知待清理項目，本次不擴大範圍處理**）。省略時回傳呼叫者在 `from`–`to` 範圍內、跨所有仍有 `coach_athletes` 列的 athlete 的排程（含 tombstoned，名稱為 `Deleted Athlete`）— 供 Coach Calendar 日/週檢視使用（見 `docs/frontend-ui-spec.md`）。
 
 > **Calendar 是前端資訊架構（information architecture），建構在既有 `ScheduledWorkout` 模型之上。** 本次調整不新增 Calendar domain object，也不新增 endpoint，只放寬既有 endpoint 的查詢維度、並明確化其回應格式。授權規則不變（角色檢查仍是 403；本 endpoint 的 resource-scoping 檢查是 404）。詳見 §7.5。
 > 
@@ -708,7 +787,7 @@ Response `204 No Content`，無 body。
 
 ### POST /scheduled-workouts/{id}/session
 
-開始訓練。允許：該排程的 athlete 本人，或其 connected coach；其他呼叫者 `404 NOT_FOUND`（不透露該 ScheduledWorkout 是否存在 — 見 §1）。`{id}` 格式錯誤 → `400 INVALID_ARGUMENT`。
+開始訓練。允許：該排程的 athlete 本人（且本人 `deleted_at IS NULL`），或其 **active relationship** coach；其他呼叫者 `404 NOT_FOUND`（不透露該 ScheduledWorkout 是否存在 — 見 §1）。Tombstoned athlete 的 coach 不再能 start/resume。`{id}` 格式錯誤 → `400 INVALID_ARGUMENT`。
 
 Response body 固定為（不含 `athleteId`、`scheduledWorkoutId`、`startedAt`、`completedAt` — 完整 session detail 屬於 `GET /sessions/{sessionId}` 的職責，不在此重複）：
 
@@ -722,7 +801,7 @@ Response body 固定為（不含 `athleteId`、`scheduledWorkoutId`、`startedAt
 
 ### POST /sessions/{sessionId}/complete
 
-結束訓練。授權同上。COMPLETED 後 session 唯讀（SetLog 不可再增刪改），且不可再轉回 ACTIVE。
+結束訓練。授權同 start（athlete 本人或 **active relationship** coach）。COMPLETED 後 session 唯讀（SetLog 不可再增刪改），且不可再轉回 ACTIVE。Athlete 帳號刪除 **不會**把 ACTIVE session 改成 COMPLETED；該 session 維持 `ACTIVE` 且對 coach/athlete mutation 皆拒絕（athlete 已無法通過 application-user middleware）。
 
 Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含 `completedAt` — 理由同上，完整 detail 屬於 `GET /sessions/{sessionId}`）：
 
@@ -764,7 +843,7 @@ Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含
 
 `plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
 
-授權：athlete 本人或 connected coach，其他人 `404`。
+授權：athlete 本人，或其有 **historical access** 的 coach；其他人 `404`。Tombstoned athlete 的名稱為 `Deleted Athlete`。此為唯讀路徑，不要求 active relationship。
 
 ---
 
@@ -822,7 +901,7 @@ Request（extra actual set）：
 Service 層規則：
 
 1. session 存在且 ACTIVE → 否則 404 / 409
-2. caller 是該 session 的 athlete 或 connected coach → 否則 404
+2. caller 是該 session 的 athlete（且 `deleted_at IS NULL`），或其 **active relationship** coach → 否則 404
 3. `scheduledWorkoutExerciseId` 屬於該 session 的 scheduled_workout → 否則 `400 INVALID_ARGUMENT`
 4. `kind` 必須為 `PLANNED` 或 `EXTRA`：
     - `PLANNED` 必須提供 `scheduledWorkoutPlannedSetId`，且該 planned set 屬於同一個 `scheduledWorkoutExerciseId`；同一 session 不得已有 SetLog 指向該 planned set
@@ -922,27 +1001,28 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | Endpoint | Unauthenticated | Firebase, no app account | Coach | Athlete | Constraints / notes |
 | --- | --- | --- | --- | --- | --- |
 | `GET /invite-codes/{code}/preview` | ✅ | ✅ | ✅ | ✅ | 除 health check 外唯一公開的 product endpoint；未知/格式錯/過期/已撤銷一律 `404`；回應不含任何 id |
-| `POST /coach-signup` | ❌ 401 | ✅ 建立 COACH | ✅ 冪等回既有，不覆寫 `name` | ❌ 409 CONFLICT | `name` 僅建立路徑必填（≤ 80）；role 永不變更 |
-| `POST /invite-codes/{code}/redeem` | ❌ 401 | ✅ 建立 ATHLETE 並連結 | ❌ 403 FORBIDDEN（含自己的碼） | ✅ 冪等連結 | 可連結多位 Coach；既有 row 的 `name`/`role` 不覆寫；無效碼 `404` |
+| `POST /coach-signup` | ❌ 401 | ✅ 建立 COACH；tombstone ❌ 409 ACCOUNT_DELETED | ✅ 冪等回既有，不覆寫 `name`；tombstone ❌ 409 ACCOUNT_DELETED | ❌ 409 CONFLICT | `name` 僅建立路徑必填（≤ 80）；role 永不變更 |
+| `POST /invite-codes/{code}/redeem` | ❌ 401 | ✅ 建立 ATHLETE 並連結；tombstone ❌ 409 ACCOUNT_DELETED | ❌ 403 FORBIDDEN（含自己的碼） | ✅ 冪等連結；tombstone ❌ 409 ACCOUNT_DELETED | 可連結多位 Coach；既有 row 的 `name`/`role` 不覆寫；無效碼 `404` |
 | `POST /invite-codes` | ❌ 401 | ❌ 401 | ✅ `201` | ❌ 403 | `expiresInDays` 省略時預設 30 |
 | `GET /invite-codes` | ❌ 401 | ❌ 401 | ✅ 僅自己的 | ❌ 403 | `createdAt` 由新到舊 |
 | `POST /invite-codes/{id}/revoke` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 403 | 冪等；forward-only，不解除已加入者 |
-| `DELETE /athletes/{athleteId}` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ❌ 403 | `204`；只解除關係，保留帳號與訓練紀錄；非法 UUID 亦回 `404` |
+| `DELETE /me` | ❌ 401 | ❌ 401 | ✅ self `204` | ✅ self `204` | recent-auth 5 分鐘；Apple-linked 必帶 `appleAuthorizationCode` 且 `id_token.sub` 必須對上目前 Firebase Apple identity；tombstone 重試仍 `204`；見 §3.1 |
+| `DELETE /athletes/{athleteId}` | ❌ 401 | ❌ 401 | ✅ active relationship；否則 ❌ 404 | ❌ 403 | `204`；只解除關係，保留帳號與訓練紀錄；tombstoned 亦 `404`；非法 UUID 亦回 `404` |
 | `GET/POST /exercises` | ❌ 401 | ❌ 401 | ✅ 公用 + 自己的；POST 僅建自己的 private Exercise | ❌ 403 | — |
 | `POST /workouts` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
 | `GET/PATCH/DELETE /workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | — |
-| `GET /athletes` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
-| `POST /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 且每個 athlete 都需 connected | ❌ 403 | 任一 athlete 未連結則整批拒絕，不做部分排程；已排同一 workout + 同一日期 → `409`，除非帶 `allowDuplicates: true`，見 §3.5 |
-| `GET /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 僅回自己建立的排程 | ❌ 403 | `athleteId` 選填；未連結該 athlete → `404`，見 §3.5 |
+| `GET /athletes` | ❌ 401 | ❌ 401 | ✅ 僅 active relationship | ❌ 403 | tombstoned athlete 不列入 |
+| `POST /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 且每個 athlete 都需 **active relationship** | ❌ 403 | 任一不符則整批拒絕，不做部分排程；已排同一 workout + 同一日期 → `409`，除非帶 `allowDuplicates: true`，見 §3.5 |
+| `GET /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 僅回自己建立的排程 | ❌ 403 | `athleteId` 選填；無 **historical access** → `404`；tombstoned 名稱為 `Deleted Athlete`，見 §3.5 |
 | `GET /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | 單筆展開 snapshot，供 Coach Calendar 的 Edit 表單 prefill；list 刻意不含 exercises |
 | `PUT /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`，永久唯讀，見 §3.5 |
 | `DELETE /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 移除誤排；一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`。成功回 `204`，不動 reusable Workout template，見 §3.5 |
 | `GET /me/scheduled-workouts` | ❌ 401 | ❌ 401 | ➖ 回自己的 = 空 | ✅ | 無關聯的 application user 得到空清單 |
-| `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
-| `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |
-| `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |
-| `POST /sessions/{id}/set-logs` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | 併發 claim 同一 planned set → `409`，見 §3.8 |
-| `PATCH/DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ connected；未連結 ❌ 404 | ✅ | — |
+| `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
+| `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
+| `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
+| `POST /sessions/{id}/set-logs` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 併發 claim 同一 planned set → `409`，見 §3.8 |
+| `PATCH/DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | — |
 
 矩陣即 service 層的測試清單：每列至少三個 test case（允許、拒絕、404 隱藏）。
 
@@ -958,6 +1038,9 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 - Service **必須**驗證 `scheduled_workout_planned_set_id` 屬於同一個 `scheduled_workout_exercise_id` 與同一 session snapshot。這是服務層規則，資料庫不強制。
 - `load` 與 `unit` 同進同出 → 只給其中一方的 SetLog 寫入回 `400 INVALID_ARGUMENT`。
 - `reps` not null → V0.1 僅支援 reps-based logging。
+- `users.deleted_at` 非空 = tombstone。Application-user middleware 視同無帳號（`DELETE /me` 除外）。`firebase_uid` 在 Firebase `DeleteUser` 成功前保持原值；成功後改寫為 `deleted:{users.id}`。
+- `account_deletion_jobs` 是 Firebase 刪除與 Apple revoke 的 durable recovery。`PENDING_EXTERNAL` 必須保留 `original_firebase_uid` 與（若適用）`apple_refresh_token`，直到兩者完成。Process-boot sweep 是 best-effort，不是保證排程。
+- Account deletion 不得對已有 `workout_sessions` 的 `scheduled_workouts` 做物理刪除，也不得把 ACTIVE 改寫成 COMPLETED。
 
 ---
 
