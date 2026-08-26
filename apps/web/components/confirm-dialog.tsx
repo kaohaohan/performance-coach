@@ -61,6 +61,7 @@ export function ConfirmDialog({
   danger,
   onConfirm,
   onCancel,
+  onDismiss,
 }: {
   title: string;
   body: ReactNode;
@@ -69,13 +70,18 @@ export function ConfirmDialog({
   danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  // Backdrop and Escape. Defaults to onCancel. Pass a distinct handler when
+  // the cancel button is a real action (e.g. Continue Draft) and closing
+  // the dialog should do neither confirm nor that action.
+  onDismiss?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  useFocusTrap(containerRef, onCancel);
+  const dismiss = onDismiss ?? onCancel;
+  useFocusTrap(containerRef, dismiss);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center" role="presentation" onClick={onCancel}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center" role="presentation" onClick={dismiss}>
       <div ref={containerRef} role="alertdialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
         <h2 id={titleId} className="text-lg font-semibold tracking-tight">{title}</h2>
         <div className="mt-2 text-sm leading-6 text-slate-600">{body}</div>

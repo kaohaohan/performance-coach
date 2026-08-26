@@ -37,7 +37,6 @@ export default function DayCard({
   assignments,
   workoutsById,
   disabled,
-  hasDraftContent,
   onSelect,
   onAddWorkout,
   onDuplicate,
@@ -57,11 +56,6 @@ export default function DayCard({
   assignments: ScheduledWorkoutSummary[];
   workoutsById: Map<string, Workout>;
   disabled: boolean;
-  // Mirrors the Day view's own "+ Add Workout" / "Resume draft" button: an
-  // open Build draft is global (one at a time, see page.tsx), not per-day,
-  // so every card shows the same relabel regardless of which day it is —
-  // clicking any of them resumes that one draft, never starts a second.
-  hasDraftContent: boolean;
   onSelect: (date: string) => void;
   onAddWorkout: (date: string) => void;
   onDuplicate?: (date: string) => void;
@@ -151,7 +145,7 @@ export default function DayCard({
         className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-lg px-1 py-1.5 text-left text-xs font-bold text-teal-700 transition hover:bg-teal-50 disabled:opacity-50 disabled:hover:bg-transparent"
       >
         <span aria-hidden="true" className="grid h-5 w-5 place-items-center rounded bg-slate-900 text-sm leading-none text-white">+</span>
-        {hasDraftContent ? "Resume draft" : "Add Workout"}
+        Add Workout
       </button>
 
     </article>

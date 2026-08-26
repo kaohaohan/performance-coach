@@ -124,6 +124,66 @@ export function toggleExtraAthlete(sourceAthleteId: string, extraAthleteIds: rea
     : [...extraAthleteIds, athleteId];
 }
 
+export type BuilderSessionKind = "new" | "resume";
+
+// + Add Workout is always New. A stored draft — even one for the same
+// athlete and date — must never be continued by that button. Continue is a
+// separate explicit action.
+export type NewWorkoutClickKind = "start-new" | "confirm-replace";
+
+export function resolveNewWorkoutClick(hasStoredDraft: boolean): NewWorkoutClickKind {
+  return hasStoredDraft ? "confirm-replace" : "start-new";
+}
+
+export function continueDraftActionLabel(athleteName: string | undefined | null): string {
+  const name = athleteName?.trim();
+  return name ? `Continue ${name}` : "Continue draft";
+}
+
+export function startNewWorkoutActionLabel(athleteName: string | undefined | null): string {
+  const name = athleteName?.trim();
+  return name ? `Start new for ${name}` : "Start new";
+}
+
+// True when the stored draft's athlete and date match the viewed Calendar.
+// Used only to describe context, never to silently continue from + Add Workout.
+export function draftMatchesCalendar(
+  sourceAthleteId: string,
+  scheduledDate: string,
+  calendarAthleteId: string,
+  browsingDate: string,
+): boolean {
+  return sourceAthleteId !== "" && sourceAthleteId === calendarAthleteId && scheduledDate !== "" && scheduledDate === browsingDate;
+}
+
+// New Workout: Assign to is a freely mutable set. Calendar athlete is the
+// default entry, not a lock. Continue Draft still uses toggleExtraAthlete.
+export function toggleSelectedAthlete(selectedAthleteIds: readonly string[], athleteId: string): string[] {
+  if (athleteId === "") return [...selectedAthleteIds];
+  return selectedAthleteIds.includes(athleteId)
+    ? selectedAthleteIds.filter((id) => id !== athleteId)
+    : [...selectedAthleteIds, athleteId];
+}
+
+export function assignmentIdsForSession(
+  kind: BuilderSessionKind,
+  sourceAthleteId: string,
+  selectedOrExtras: readonly string[],
+): string[] {
+  if (kind === "resume") return assignmentTargets(sourceAthleteId, selectedOrExtras);
+  const ids: string[] = [];
+  for (const id of selectedOrExtras) {
+    if (id !== "" && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+// Persist extras the v2 way: never include sourceAthleteId. New-mode state
+// may store the calendar athlete inside the mutable selected set.
+export function extrasForPersistence(sourceAthleteId: string, selectedOrExtras: readonly string[]): string[] {
+  return selectedOrExtras.filter((id) => id !== "" && id !== sourceAthleteId);
+}
+
 export function sanitizeExtraAthleteIds(
   sourceAthleteId: string,
   extraAthleteIds: readonly string[],
@@ -249,7 +309,7 @@ export function clearDraft(coachId: string): void {
 // builder always establishes a source athlete (the calendar it was opened
 // from), so counting that as content made a builder that had only been
 // opened look like a draft in progress: the button relabelled itself
-// "Resume draft", and every "is there a live draft?" guard downstream
+// "Continue draft", and every "is there a live draft?" guard downstream
 // started protecting an empty builder — including the one that stops a new
 // athlete's calendar from re-targeting the assignment.
 export function isDraftContentEmpty(content: Pick<WorkoutBuilderDraftContent, "name" | "exercises">): boolean {

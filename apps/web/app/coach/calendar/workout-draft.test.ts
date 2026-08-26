@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assignmentIdsForSession,
   assignmentTargets,
   clearDraft,
+  continueDraftActionLabel,
+  draftMatchesCalendar,
+  extrasForPersistence,
   isDraftContentEmpty,
   loadDraft,
+  resolveNewWorkoutClick,
   resolveStoredDraft,
   saveDraft,
   sanitizeExtraAthleteIds,
+  startNewWorkoutActionLabel,
   toggleExtraAthlete,
+  toggleSelectedAthlete,
   type DraftExercise,
   type WorkoutBuilderDraftContent,
 } from "./workout-draft.ts";
@@ -192,4 +199,68 @@ test("Case E: loadDraft drops a stored v1 whose [0] is disconnected rather than 
   memory.clear();
   memory.set(KEY, JSON.stringify(v1Draft(["athlete-gone", "athlete-b"])));
   assert.equal(loadDraft(COACH, CONNECTED), null);
+});
+
+test("draftMatchesCalendar is true only for the same athlete and date", () => {
+  assert.equal(draftMatchesCalendar("athlete-a", "2026-08-27", "athlete-a", "2026-08-27"), true);
+  assert.equal(draftMatchesCalendar("athlete-a", "2026-08-27", "athlete-b", "2026-08-27"), false);
+  assert.equal(draftMatchesCalendar("athlete-a", "2026-08-27", "athlete-a", "2026-08-28"), false);
+  assert.equal(draftMatchesCalendar("", "2026-08-27", "athlete-a", "2026-08-27"), false);
+});
+
+test("+ Add Workout never continues a stored draft, including same athlete and date", () => {
+  assert.equal(resolveNewWorkoutClick(false), "start-new");
+  assert.equal(resolveNewWorkoutClick(true), "confirm-replace");
+  assert.notEqual(resolveNewWorkoutClick(true), "start-new");
+  assert.equal(
+    draftMatchesCalendar("athlete-cheryl", "2026-08-27", "athlete-cheryl", "2026-08-27"),
+    true,
+  );
+  assert.equal(resolveNewWorkoutClick(true), "confirm-replace");
+  assert.equal(
+    draftMatchesCalendar("athlete-apple", "2026-08-27", "athlete-cheryl", "2026-08-27"),
+    false,
+  );
+  assert.equal(resolveNewWorkoutClick(true), "confirm-replace");
+});
+
+test("Continue chip copy is explicit for both same-context and different-context drafts", () => {
+  assert.equal(continueDraftActionLabel("Apple Test"), "Continue Apple Test");
+  assert.equal(continueDraftActionLabel("Cheryl Chao"), "Continue Cheryl Chao");
+  assert.equal(continueDraftActionLabel(""), "Continue draft");
+  assert.equal(continueDraftActionLabel(undefined), "Continue draft");
+  assert.equal(startNewWorkoutActionLabel("Cheryl Chao"), "Start new for Cheryl Chao");
+  assert.equal(startNewWorkoutActionLabel("Apple Test"), "Start new for Apple Test");
+});
+
+test("New Workout: calendar athlete is the default and can be deselected", () => {
+  const seeded = ["athlete-cheryl"];
+  assert.deepEqual(assignmentIdsForSession("new", "athlete-cheryl", seeded), ["athlete-cheryl"]);
+  const withoutCheryl = toggleSelectedAthlete(seeded, "athlete-cheryl");
+  assert.deepEqual(withoutCheryl, []);
+  const withColin = toggleSelectedAthlete(withoutCheryl, "athlete-colin");
+  assert.deepEqual(assignmentIdsForSession("new", "athlete-cheryl", withColin), ["athlete-colin"]);
+});
+
+test("Start new uses current calendar athlete, not a stored different-context source", () => {
+  assert.deepEqual(assignmentIdsForSession("new", "athlete-cheryl", ["athlete-cheryl"]), ["athlete-cheryl"]);
+  assert.equal(assignmentIdsForSession("new", "athlete-cheryl", ["athlete-cheryl"]).includes("athlete-apple"), false);
+});
+
+test("Continue: source stays in the payload even if toggleExtraAthlete is asked to drop it", () => {
+  const extras = toggleExtraAthlete("athlete-apple", [], "athlete-apple");
+  assert.deepEqual(assignmentIdsForSession("resume", "athlete-apple", extras), ["athlete-apple"]);
+});
+
+test("Continue restores the stored draft's original source athlete first", () => {
+  assert.deepEqual(
+    assignmentIdsForSession("resume", "athlete-apple", ["athlete-colin"]),
+    ["athlete-apple", "athlete-colin"],
+  );
+});
+
+test("New Workout persist extras exclude the calendar source; selecting only another athlete still requires ≥1 at submit", () => {
+  assert.deepEqual(extrasForPersistence("athlete-cheryl", ["athlete-cheryl", "athlete-colin"]), ["athlete-colin"]);
+  assert.deepEqual(extrasForPersistence("athlete-cheryl", ["athlete-colin"]), ["athlete-colin"]);
+  assert.equal(assignmentIdsForSession("new", "athlete-cheryl", []).length, 0);
 });

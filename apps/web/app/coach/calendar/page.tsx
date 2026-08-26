@@ -8,12 +8,18 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import SignOutButton from "@/components/sign-out-button";
 import { BRAND_NAME } from "@/lib/brand";
 import {
-  assignmentTargets,
+  assignmentIdsForSession,
   clearDraft,
+  continueDraftActionLabel,
+  extrasForPersistence,
   isDraftContentEmpty,
   loadDraft,
+  resolveNewWorkoutClick,
   saveDraft,
+  startNewWorkoutActionLabel,
   toggleExtraAthlete,
+  toggleSelectedAthlete,
+  type BuilderSessionKind,
   type DraftEditTarget,
   type DraftExercise,
   type DraftSetOverride,
@@ -555,6 +561,9 @@ export default function CoachCalendarPage() {
   // assignment's first target. Null exactly when no draft session exists,
   // and cleared only in resetBuilderDraft.
   const [builderAthleteId, setBuilderAthleteId] = useState<string | null>(null);
+  // new = Calendar-context session (Assign to is a default, not a lock).
+  // resume = stored draft origin (source athlete locked).
+  const [builderSessionKind, setBuilderSessionKind] = useState<BuilderSessionKind>("new");
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const [draftSaveFailed, setDraftSaveFailed] = useState(false);
   // Transient, set only by the explicit Save Draft button. A timestamp alone
@@ -562,6 +571,7 @@ export default function CoachCalendarPage() {
   // render the identical string, which is what made the button look dead.
   const [draftJustSaved, setDraftJustSaved] = useState(false);
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
+  const [pendingDraftChoice, setPendingDraftChoice] = useState<{ targetDate: string } | null>(null);
   // The API rejects scheduling a workout an athlete already has that day
   // (409 CONFLICT) unless allowDuplicates is set. That is a guard against an
   // accident, not a prohibition — a two-a-day is real programming — so the
@@ -580,7 +590,11 @@ export default function CoachCalendarPage() {
   }
 
   function currentAssignmentAthleteIds(): string[] {
-    return assignmentTargets(currentAssignmentSourceAthleteId(), extraAthleteIds);
+    return assignmentIdsForSession(builderSessionKind, currentAssignmentSourceAthleteId(), extraAthleteIds);
+  }
+
+  function persistableExtras(): string[] {
+    return extrasForPersistence(authoringAthleteId, extraAthleteIds);
   }
 
   // Problem B — editing one NOT_STARTED ScheduledWorkout in place. Non-null
@@ -719,31 +733,20 @@ export default function CoachCalendarPage() {
       setDraftName(draft.name);
       setDraftExercises(draft.exercises);
       setDraftSavedAt(draft.savedAt);
-      // Restore is the one moment browsing legitimately follows authoring: it
-      // also forces the editor open, and an open builder for Aug 21 next to a
-      // calendar showing Aug 28 is incoherent. There is no in-flight browsing
-      // intent to stomp on at page load.
+      // Hydrate draft identity for the Continue chip and conflict dialog, but
+      // keep the Calendar browsing context the Coach last had. Continuing is
+      // explicit (Continue chip / dialog), never silent on page load.
       if (isValidISODate(draft.scheduledDate)) {
         setBuilderDate(draft.scheduledDate);
-        setDate(draft.scheduledDate);
-        setViewMonth(draft.scheduledDate.slice(0, 7));
       }
       setExtraAthleteIds(draft.extraAthleteIds);
       if (draft.editTarget) {
-        // Resuming an Edit Assigned Workout target: the athlete picker is
-        // hidden and Save Changes never reads the assignment list — the
-        // athlete is fixed by the scheduled workout being edited.
         setBuilderAthleteId(draft.editTarget.athleteId);
-        setCalendarAthleteId(draft.editTarget.athleteId);
         setExtraAthleteIds([]);
       } else {
         setBuilderAthleteId(draft.sourceAthleteId);
-        setCalendarAthleteId(draft.sourceAthleteId);
       }
       setEditTarget(draft.editTarget);
-      setProgrammingMode("BUILD");
-      setEditorOpen(true);
-      setDraftRestoredNotice(true);
     });
   }, [coachId, athletes]);
 
@@ -761,7 +764,7 @@ export default function CoachCalendarPage() {
     Promise.resolve().then(() => setDraftStatus("saving"));
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
     draftSaveTimer.current = setTimeout(() => {
-      const savedAt = saveDraft(coachId, { name: draftName, exercises: draftExercises, sourceAthleteId: authoringAthleteId, extraAthleteIds, scheduledDate: authoringDate, editTarget });
+      const savedAt = saveDraft(coachId, { name: draftName, exercises: draftExercises, sourceAthleteId: authoringAthleteId, extraAthleteIds: persistableExtras(), scheduledDate: authoringDate, editTarget });
       setDraftSavedAt(savedAt);
       setDraftSaveFailed(savedAt === null);
       setDraftStatus("saved");
@@ -804,7 +807,7 @@ export default function CoachCalendarPage() {
   function handleSaveDraft() {
     if (!coachId) return;
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
-    const savedAt = saveDraft(coachId, { name: draftName, exercises: draftExercises, sourceAthleteId: authoringAthleteId, extraAthleteIds, scheduledDate: authoringDate, editTarget });
+    const savedAt = saveDraft(coachId, { name: draftName, exercises: draftExercises, sourceAthleteId: authoringAthleteId, extraAthleteIds: persistableExtras(), scheduledDate: authoringDate, editTarget });
     setDraftSavedAt(savedAt);
     setDraftSaveFailed(savedAt === null);
     setDraftStatus("saved");
@@ -992,6 +995,7 @@ export default function CoachCalendarPage() {
     // the next "+ Add Workout" starts fresh on whatever day is being browsed.
     setBuilderDate(null);
     setBuilderAthleteId(null);
+    setBuilderSessionKind("new");
     setDraftSavedAt(null);
     setDraftSaveFailed(false);
     setDraftJustSaved(false);
@@ -1271,7 +1275,11 @@ export default function CoachCalendarPage() {
 
   function toggleAthlete(id: string) {
     if (assignmentInFlight.current || buildStatus !== "idle") return;
-    setExtraAthleteIds((previous) => toggleExtraAthlete(currentAssignmentSourceAthleteId(), previous, id));
+    setExtraAthleteIds((previous) =>
+      builderSessionKind === "resume"
+        ? toggleExtraAthlete(currentAssignmentSourceAthleteId(), previous, id)
+        : toggleSelectedAthlete(previous, id),
+    );
     setBuildFieldErrors((previous) => ({ ...previous, athletes: undefined }));
   }
 
@@ -1361,6 +1369,7 @@ export default function CoachCalendarPage() {
   const calendarAthlete = athletes?.find((athlete) => athlete.id === calendarAthleteId) ?? null;
   const assignmentSourceAthlete = athletes?.find((athlete) => athlete.id === assignmentSourceAthleteId) ?? null;
   const draftAthleteName = athletes?.find((athlete) => athlete.id === builderAthleteId)?.name;
+  const continueDraftLabel = continueDraftActionLabel(draftAthleteName);
   const athleteAssignments = assignments?.filter((assignment) => assignment.athlete.id === calendarAthleteId) ?? null;
   const dayAssignments = athleteAssignments?.filter((assignment) => assignment.scheduledDate === date) ?? null;
   const scheduledDates = new Set(athleteAssignments?.map((assignment) => assignment.scheduledDate) ?? []);
@@ -1440,7 +1449,7 @@ export default function CoachCalendarPage() {
   // Switching Day/Week/Month is a navigation like selecting a date or
   // athlete: an open, unsaved Build draft must survive it. Week/Month cannot
   // render the full inline builder inside a grid cell, so any view change
-  // always closes the editor — reopening it (Resume draft / + Add Workout)
+  // always closes the editor — reopening it (Continue {athlete} / + Add Workout)
   // is one click away and the draft itself is untouched in localStorage.
   function changeView(nextView: CalendarView) {
     if (programmingControlsDisabled || nextView === view) return;
@@ -1467,38 +1476,54 @@ export default function CoachCalendarPage() {
     setViewMonth(shiftMonth(`${viewMonth}-01`, amount).slice(0, 7));
   }
 
-  // Serves both "+ Add Workout" (no draft yet) and "Resume draft" (one exists).
-  // targetDate defaults to the browsing `date` (the Day-view button's bare
-  // onClick={openWorkoutEditor} still works unchanged) but Week/Month grid
-  // cards pass their own date explicitly — see openWorkoutEditorOn below,
-  // which must not rely on `date` here still being stale mid-navigation.
-  function openWorkoutEditor(targetDate: string = date) {
+  function resumeStoredDraft() {
+    if (programmingControlsDisabled || !hasDraftContent) return;
+    setPendingDraftChoice(null);
+    setEditLoadError(null);
+    if (builderAthleteId) setCalendarAthleteId(builderAthleteId);
+    if (builderDate !== null && isValidISODate(builderDate)) {
+      setDate(builderDate);
+      setViewMonth(builderDate.slice(0, 7));
+      setWeekAnchor(builderDate);
+    }
+    setBuilderSessionKind("resume");
+    setProgrammingMode("BUILD");
+    setEditorOpen(true);
+    setDraftRestoredNotice(true);
+    setAssignError(null);
+    setAssignSuccess(null);
+    setBuildFieldErrors(initialBuildErrors());
+  }
+
+  function startNewWorkoutForCalendar(targetDate: string) {
     if (!calendarAthleteId || programmingControlsDisabled) return;
-    // Never resume a stale Edit Assigned Workout target left over from a
-    // previous session — that is what openEditWorkout is for.
+    setPendingDraftChoice(null);
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    if (coachId) clearDraft(coachId);
+    resetBuilderDraft();
+    applyClearedBuildTransaction();
     setEditTarget(null);
     setEditLoadError(null);
-    if (hasDraftContent) {
-      // Resuming: land on the tab that actually shows the draft, and leave
-      // both its date and its athletes alone. Re-binding either here would
-      // silently re-target a draft the Coach only asked to look at — the same
-      // class of drift this refactor removes, triggered by a click instead of
-      // by navigation, and a direct contradiction of the dialog that just
-      // promised the draft stays put. Moving it takes the explicit
-      // "Move to …" button in the editor header.
-      setProgrammingMode("BUILD");
-    } else {
-      setBuilderDate(targetDate);
-      // A new builder session binds to the calendar it was opened from, and
-      // starts with no extras — nothing from the previous session leaks in.
-      setBuilderAthleteId(calendarAthleteId);
-      setExtraAthleteIds([]);
-      setProgrammingMode("EXISTING");
-    }
+    setBuilderDate(targetDate);
+    setBuilderAthleteId(calendarAthleteId);
+    setBuilderSessionKind("new");
+    setExtraAthleteIds([calendarAthleteId]);
+    setProgrammingMode("EXISTING");
     setEditorOpen(true);
     setAssignError(null);
     setAssignSuccess(null);
     setBuildFieldErrors(initialBuildErrors());
+  }
+
+  // + Add Workout is always New for the viewed Calendar. A stored draft —
+  // including one for this same athlete and date — is never continued here.
+  function openWorkoutEditor(targetDate: string = date) {
+    if (!calendarAthleteId || programmingControlsDisabled) return;
+    if (resolveNewWorkoutClick(hasDraftContent) === "confirm-replace") {
+      setPendingDraftChoice({ targetDate });
+      return;
+    }
+    startNewWorkoutForCalendar(targetDate);
   }
 
   // Week/Month "+ Add Workout": selecting a different day is itself guarded
@@ -1622,7 +1647,7 @@ export default function CoachCalendarPage() {
 
                 {editTarget ? <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2.5 text-sm font-medium text-amber-900 ring-1 ring-amber-600/15">Editing <span className="font-bold">{editTarget.athleteName}</span>&apos;s assigned workout. This replaces only this one assignment — the reusable Workout template and any other athlete&apos;s copy of it are unaffected.</p> : <fieldset className="mt-4 rounded-xl bg-stone-50 p-3">
                   <legend className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Assign to</legend>
-                  <div className="mt-1 flex flex-wrap gap-2">{athletes?.map((athlete) => { const selected = assignmentAthleteIds.includes(athlete.id); const isSource = athlete.id === assignmentSourceAthleteId; return <label key={athlete.id} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-semibold ${selected ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600"}`}><input type="checkbox" checked={selected} onChange={() => toggleAthlete(athlete.id)} disabled={programmingControlsDisabled || isSource} className="accent-teal-600" />{athlete.name}</label>; })}</div>
+                  <div className="mt-1 flex flex-wrap gap-2">{athletes?.map((athlete) => { const selected = assignmentAthleteIds.includes(athlete.id); const isLockedSource = builderSessionKind === "resume" && athlete.id === assignmentSourceAthleteId; return <label key={athlete.id} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-semibold ${selected ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600"}`}><input type="checkbox" checked={selected} onChange={() => toggleAthlete(athlete.id)} disabled={programmingControlsDisabled || isLockedSource} className="accent-teal-600" />{athlete.name}</label>; })}</div>
                   {buildFieldErrors.athletes && <FieldError>{buildFieldErrors.athletes}</FieldError>}
                 </fieldset>}
 
@@ -1810,7 +1835,10 @@ export default function CoachCalendarPage() {
                     invisible. */}
                 {hasDraftContent && !editorOpen && builderDate !== null && <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-900 ring-1 ring-amber-500/20"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500" />Draft in progress · {draftAthleteName ? `${draftAthleteName} · ` : ""}{displayDate(builderDate)}</p>}
               </div>
-              {!editorOpen && <button type="button" onClick={() => openWorkoutEditor()} disabled={!calendarAthleteId || programmingControlsDisabled} className="min-h-12 rounded-xl bg-teal-600 px-5 text-sm font-bold text-white shadow-sm hover:bg-teal-700 disabled:bg-slate-200 disabled:text-slate-500">{hasDraftContent ? "Resume draft" : "+ Add Workout"}</button>}
+              {!editorOpen && <div className="flex flex-wrap items-center gap-2">
+                {hasDraftContent && <button type="button" onClick={() => resumeStoredDraft()} disabled={programmingControlsDisabled} className="min-h-12 rounded-xl border border-amber-600/40 bg-amber-50 px-4 text-sm font-bold text-amber-900 transition hover:bg-amber-100 disabled:opacity-50">{continueDraftLabel}</button>}
+                <button type="button" onClick={() => openWorkoutEditor()} disabled={!calendarAthleteId || programmingControlsDisabled} className="min-h-12 rounded-xl bg-teal-600 px-5 text-sm font-bold text-white shadow-sm hover:bg-teal-700 disabled:bg-slate-200 disabled:text-slate-500">+ Add Workout</button>
+              </div>}
             </div>
 
             {startError && <div className="mt-4"><Notice tone="error">{startError}</Notice></div>}
@@ -1840,6 +1868,12 @@ export default function CoachCalendarPage() {
         </div>
         ) : (
           <div className="grid gap-4">
+            {hasDraftContent && !editorOpen && builderDate !== null && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-amber-50 px-4 py-3 ring-1 ring-amber-500/20">
+                <p className="text-sm font-bold text-amber-900"><span aria-hidden="true" className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />Draft in progress · {draftAthleteName ? `${draftAthleteName} · ` : ""}{displayDate(builderDate)}</p>
+                <button type="button" onClick={() => resumeStoredDraft()} disabled={programmingControlsDisabled} className="min-h-10 rounded-xl border border-amber-600/40 bg-white px-4 text-sm font-bold text-amber-900 transition hover:bg-amber-100 disabled:opacity-50">{continueDraftLabel}</button>
+              </div>
+            )}
             <div className={view === "week"
               ? "grid grid-flow-col auto-cols-[minmax(13rem,1fr)] gap-3 overflow-x-auto p-1.5"
               : "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7"}>
@@ -1853,7 +1887,6 @@ export default function CoachCalendarPage() {
                   assignments={assignmentsByDate.get(gridDate) ?? []}
                   workoutsById={workoutsById}
                   disabled={programmingControlsDisabled}
-                  hasDraftContent={hasDraftContent}
                   onSelect={selectCalendarDate}
                   onAddWorkout={openWorkoutEditorOn}
                   onDuplicate={openDuplicatePanel}
@@ -1913,13 +1946,23 @@ export default function CoachCalendarPage() {
         onCancel={() => setRemoveTarget(null)}
       />}
 
+      {pendingDraftChoice && <ConfirmDialog
+        title="Unfinished draft"
+        body={<>You have an unfinished draft for <span className="font-semibold text-slate-800">{draftAthleteName ?? "another athlete"} · {displayDate(builderDate ?? pendingDraftChoice.targetDate)}</span>. Starting a new workout for <span className="font-semibold text-slate-800">{calendarAthlete?.name ?? "this athlete"} · {displayDate(pendingDraftChoice.targetDate)}</span> replaces that draft.</>}
+        confirmLabel={startNewWorkoutActionLabel(calendarAthlete?.name)}
+        cancelLabel={continueDraftLabel}
+        onConfirm={() => startNewWorkoutForCalendar(pendingDraftChoice.targetDate)}
+        onCancel={() => resumeStoredDraft()}
+        onDismiss={() => setPendingDraftChoice(null)}
+      />}
+
       {pendingNav && <ConfirmDialog
         title="Close the builder?"
         body={pendingNav.kind === "date"
-          ? <>Your draft is saved and stays scheduled for <span className="font-semibold text-slate-800">{displayDate(authoringDate)}</span> — nothing is lost. Going to {displayDate(pendingNav.nextDate)} just closes the builder; reopen it with <span className="font-semibold text-slate-800">Resume draft</span> whenever you&apos;re ready.</>
+          ? <>Your draft is saved and stays scheduled for <span className="font-semibold text-slate-800">{displayDate(authoringDate)}</span> — nothing is lost. Going to {displayDate(pendingNav.nextDate)} just closes the builder; reopen it with <span className="font-semibold text-slate-800">{continueDraftLabel}</span> whenever you&apos;re ready.</>
           : pendingNav.kind === "athlete"
-          ? <>Your draft is saved and stays scheduled for <span className="font-semibold text-slate-800">{displayDate(authoringDate)}</span> — nothing is lost. Switching to {athletes?.find((athlete) => athlete.id === pendingNav.athleteId)?.name ?? "another athlete"} just closes the builder; reopen it with <span className="font-semibold text-slate-800">Resume draft</span> to keep going.</>
-          : <>Your draft is saved and stays scheduled for <span className="font-semibold text-slate-800">{displayDate(authoringDate)}</span> — nothing is lost. Switching to {pendingNav.nextView} view just closes the builder; reopen it with <span className="font-semibold text-slate-800">Resume draft</span> to keep going.</>}
+          ? <>Your draft is saved and stays scheduled for <span className="font-semibold text-slate-800">{displayDate(authoringDate)}</span> — nothing is lost. Switching to {athletes?.find((athlete) => athlete.id === pendingNav.athleteId)?.name ?? "another athlete"} just closes the builder; reopen it with <span className="font-semibold text-slate-800">{continueDraftLabel}</span> to keep going.</>
+          : <>Your draft is saved and stays scheduled for <span className="font-semibold text-slate-800">{displayDate(authoringDate)}</span> — nothing is lost. Switching to {pendingNav.nextView} view just closes the builder; reopen it with <span className="font-semibold text-slate-800">{continueDraftLabel}</span> to keep going.</>}
         confirmLabel={pendingNav.kind === "date" ? "Go to that day" : pendingNav.kind === "athlete" ? "Switch athlete" : "Switch view"}
         cancelLabel="Keep editing"
         onConfirm={confirmPendingNav}
