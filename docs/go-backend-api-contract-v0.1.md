@@ -222,14 +222,15 @@ Request body：JSON object。無 body、或 `{}`，僅在該 Firebase user **未
 
 | 情況 | HTTP | code |
 | --- | --- | --- |
-| 刪除成功，含「已 tombstone、本次只重試外部清理」 | 204 | （無 body） |
+| 刪除成功，含 `PENDING_EXTERNAL` 時重試外部清理 | 204 | （無 body） |
+| Job 已 `COMPLETE`：舊 Firebase token 無法再解析為 application user | 401 | `UNAUTHENTICATED` |
 | 缺 token / token 無效 | 401 | `UNAUTHENTICATED` |
 | JSON 無法解析、未知欄位、空的 `appleAuthorizationCode`、未連結 Apple 卻帶了 code、已連結 Apple 卻沒帶 code | 400 | `INVALID_ARGUMENT` |
 | Apple `auth/token` 拒絕該 code，或回傳的 Apple `id_token.sub` 與目前 Firebase user 的 Apple provider identity 不符 | 400 | `INVALID_ARGUMENT`（**不得**寫入任何刪除狀態） |
 | ID token `auth_time` 早於 5 分鐘 | 403 | `RECENT_AUTH_REQUIRED` |
 | 未預期錯誤 | 500 | `INTERNAL` |
 
-沒有 404：本 endpoint 沒有 resource id。沒有用 409 表示「已經刪過」——第二次呼叫是 204 並 resume 未完成的外部清理。
+沒有 404：本 endpoint 沒有 resource id。沒有用 409 表示「已經刪過」。`PENDING_EXTERNAL` 的第二次呼叫是 204 並 resume 未完成的外部清理。Job 已 `COMPLETE` 後，舊 Firebase UID 不再對應 application user，同一 token 走一般 401。
 
 **Recent-auth：**以已驗證 ID token 的 `auth_time` 為準，視窗 5 分鐘。前端 re-auth 成功後 token 會更新；後端不信任 client 自稱已 re-auth。
 
@@ -248,10 +249,10 @@ Request body：JSON object。無 body、或 `{}`，僅在該 Firebase user **未
 2. 單一 DB transaction：`SELECT ... FOR UPDATE` 鎖 `users` row。若已有 `deleted_at`，跳過 prune，保留既有 job。否則 anonymize `name`（`Deleted Coach` / `Deleted Athlete`）、設 `deleted_at`、prune（見下）、插入 `account_deletion_jobs`（`original_firebase_uid` 仍是目前 uid；**此時不改寫 `firebase_uid`**）。
 3. Commit。
 4. Best-effort：Apple revoke（若適用）+ Firebase Admin `DeleteUser(original_firebase_uid)`。Firebase `user-not-found` 與 Apple 對已失效 token 的成功/冪等回應都算完成。
-5. 兩者都完成 → `firebase_uid = 'deleted:' || id`，清空 `apple_refresh_token`，`status = COMPLETE`，回 204。
+5. 兩者都完成 → 同一 transaction 把 `users.firebase_uid` 與 `account_deletion_jobs.original_firebase_uid` 都改寫為 `'deleted:' || id`，清空 `apple_refresh_token` 與 `last_error`，`status = COMPLETE`，回 204。`original_firebase_uid` 不得在 COMPLETE 後無限期保留真實 Firebase UID。
 6. 任一外部步驟失敗 → job 維持 `PENDING_EXTERNAL` 並寫入 `last_error`，**仍回 204**。Durable 識別存在 job 上，不是 `request_id` log。
 
-`DELETE /me` 對 tombstoned caller 仍可通過（本 route 的 middleware 例外），以便同一 Firebase token 在外部清理完成前重試。其餘 application-user route 對 tombstone 一律 401。
+`DELETE /me` 對 tombstoned caller 仍可通過（本 route 的 middleware 例外），**僅限 job 仍為 `PENDING_EXTERNAL`**，以便同一 Firebase token 在外部清理完成前重試。Job `COMPLETE` 後舊 token 不得再解析出 application user。其餘 application-user route 對 tombstone 一律 401（含仍持有未過期 pre-deletion ID token 的情況：Firebase 驗簽本身不保證 revocation checking）。
 
 Process boot 可 sweep `PENDING_EXTERNAL` jobs，這是 **best-effort recovery，不是保證排程**。本 task 不加 Cloud Scheduler。
 
@@ -1006,7 +1007,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST /invite-codes` | ❌ 401 | ❌ 401 | ✅ `201` | ❌ 403 | `expiresInDays` 省略時預設 30 |
 | `GET /invite-codes` | ❌ 401 | ❌ 401 | ✅ 僅自己的 | ❌ 403 | `createdAt` 由新到舊 |
 | `POST /invite-codes/{id}/revoke` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 403 | 冪等；forward-only，不解除已加入者 |
-| `DELETE /me` | ❌ 401 | ❌ 401 | ✅ self `204` | ✅ self `204` | recent-auth 5 分鐘；Apple-linked 必帶 `appleAuthorizationCode` 且 `id_token.sub` 必須對上目前 Firebase Apple identity；tombstone 重試仍 `204`；見 §3.1 |
+| `DELETE /me` | ❌ 401 | ❌ 401 | ✅ self `204` | ✅ self `204` | recent-auth 5 分鐘；Apple-linked 必帶 `appleAuthorizationCode` 且 `id_token.sub` 必須對上目前 Firebase Apple identity；`PENDING_EXTERNAL` 重試仍 `204`；`COMPLETE` 後舊 token → `401`；見 §3.1 |
 | `DELETE /athletes/{athleteId}` | ❌ 401 | ❌ 401 | ✅ active relationship；否則 ❌ 404 | ❌ 403 | `204`；只解除關係，保留帳號與訓練紀錄；tombstoned 亦 `404`；非法 UUID 亦回 `404` |
 | `GET/POST /exercises` | ❌ 401 | ❌ 401 | ✅ 公用 + 自己的；POST 僅建自己的 private Exercise | ❌ 403 | — |
 | `POST /workouts` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
@@ -1038,8 +1039,8 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 - Service **必須**驗證 `scheduled_workout_planned_set_id` 屬於同一個 `scheduled_workout_exercise_id` 與同一 session snapshot。這是服務層規則，資料庫不強制。
 - `load` 與 `unit` 同進同出 → 只給其中一方的 SetLog 寫入回 `400 INVALID_ARGUMENT`。
 - `reps` not null → V0.1 僅支援 reps-based logging。
-- `users.deleted_at` 非空 = tombstone。Application-user middleware 視同無帳號（`DELETE /me` 除外）。`firebase_uid` 在 Firebase `DeleteUser` 成功前保持原值；成功後改寫為 `deleted:{users.id}`。
-- `account_deletion_jobs` 是 Firebase 刪除與 Apple revoke 的 durable recovery。`PENDING_EXTERNAL` 必須保留 `original_firebase_uid` 與（若適用）`apple_refresh_token`，直到兩者完成。Process-boot sweep 是 best-effort，不是保證排程。
+- `users.deleted_at` 非空 = tombstone。Application-user middleware 視同無帳號。`DELETE /me` 的例外僅涵蓋 `PENDING_EXTERNAL`。`firebase_uid` 在 Firebase `DeleteUser` 成功前保持原值；成功並 finalize 後改寫為 `deleted:{users.id}`。
+- `account_deletion_jobs` 是 Firebase 刪除與 Apple revoke 的 durable recovery。`PENDING_EXTERNAL` 必須保留 `original_firebase_uid` 與（若適用）`apple_refresh_token`。finalize 時把 `original_firebase_uid` 改寫為 `deleted:{users.id}`，不得在 `COMPLETE` 後保留真實 Firebase UID。Process-boot sweep 是 best-effort，不是保證排程。
 - Account deletion 不得對已有 `workout_sessions` 的 `scheduled_workouts` 做物理刪除，也不得把 ACTIVE 改寫成 COMPLETED。
 
 ---

@@ -28,4 +28,4 @@ COMMENT ON COLUMN account_deletion_jobs.apple_refresh_token IS
     'Secret-at-rest Apple refresh token; never log; null after revoke.';
 
 COMMENT ON COLUMN account_deletion_jobs.original_firebase_uid IS
-    'Durable Firebase UID for retry until DeleteUser succeeds; kept after COMPLETE.';
+    'Durable Firebase UID for retry until DeleteUser succeeds; rewritten to deleted:{user_id} when status becomes COMPLETE.';

@@ -296,7 +296,7 @@ account_deletion_jobs(
 
 Deletion policy (service, not FK cascade):
 
-- Tombstone the `users` row: set `deleted_at`, replace `name` with `Deleted Coach` or `Deleted Athlete`. Keep `firebase_uid` until Firebase `DeleteUser(original_firebase_uid)` succeeds, then rewrite to `deleted:{users.id}`.
+- Tombstone the `users` row: set `deleted_at`, replace `name` with `Deleted Coach` or `Deleted Athlete`. Keep `firebase_uid` until Firebase `DeleteUser(original_firebase_uid)` succeeds, then atomically rewrite both `users.firebase_uid` and `account_deletion_jobs.original_firebase_uid` to `deleted:{users.id}`. The original UID is retry state, not a post-COMPLETE identity.
 - Physically delete invite codes; unstarted `scheduled_workouts` (no session) in existing snapshot FK order; unreferenced coach-owned workouts (and their template children); unreferenced private exercises. System exercises stay.
 - Retain `coach_athletes`; retain scheduled workouts that have a session, plus snapshots / sessions / set_logs; retain `workouts` rows referenced by remaining `scheduled_workouts.workout_id`; retain private `exercises` referenced by remaining `scheduled_workout_exercises.exercise_id`.
 - Do not rewrite `ACTIVE` sessions to `COMPLETED`. A future `ABANDONED` status is out of scope.

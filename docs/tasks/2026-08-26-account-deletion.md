@@ -53,7 +53,7 @@ Settings / Account
        tombstone + prune + upsert account_deletion_jobs
        commit (firebase_uid still original)
        Apple revoke + Firebase DeleteUser
-       on both success: rewrite firebase_uid, COMPLETE
+       on both success: rewrite firebase_uid and original_firebase_uid to deleted:{id}, COMPLETE
        on failure: PENDING_EXTERNAL, still 204
   → signOut → /login
 ```
@@ -75,7 +75,8 @@ Exact status/error semantics:
 
 | Case | HTTP | code |
 | --- | --- | --- |
-| Success, including already-deleted retry | 204 | (empty) |
+| Success, including `PENDING_EXTERNAL` retry | 204 | (empty) |
+| Job already `COMPLETE`; old token cannot resolve application user | 401 | `UNAUTHENTICATED` |
 | Missing/invalid Bearer | 401 | `UNAUTHENTICATED` |
 | Tombstoned user on any other application-user route | 401 | `UNAUTHENTICATED` |
 | Malformed JSON, unknown fields, empty/missing/unexpected `appleAuthorizationCode` | 400 | `INVALID_ARGUMENT` |
@@ -92,6 +93,7 @@ Exact status/error semantics:
 - `account_deletion_jobs.status`: insert `PENDING_EXTERNAL` → `COMPLETE` after Firebase delete (and Apple revoke or N/A).
 - `workout_sessions.status`: unchanged by account deletion. `ACTIVE` stays `ACTIVE`.
 - `firebase_uid`: original until Firebase `DeleteUser` succeeds, then `deleted:{users.id}`.
+- `account_deletion_jobs.original_firebase_uid`: original until finalize, then rewritten to `deleted:{users.id}` (not retained after COMPLETE).
 
 ### Frontend state/UI impact
 
@@ -117,7 +119,7 @@ No backfill. Existing users have `deleted_at` NULL. No production data rewrite i
 | `workoutsession` Complete / CreateSetLog | active | tombstone athlete → 404 for coach |
 | `invitecode.Preview/Redeem` JOIN `users` | capability | codes physically deleted for deleting coach |
 | `coachsignup.Signup` / `invitecode.reconcileAthlete` | identity create | tombstone → `409 ACCOUNT_DELETED` |
-| `authn.Middleware` | login | tombstone → 401 except `DELETE /me` |
+| `authn.Middleware` | login | tombstone → 401; `DELETE /me` exception only while `PENDING_EXTERNAL` |
 
 ### Firebase / Apple sequencing
 
@@ -125,7 +127,7 @@ No backfill. Existing users have `deleted_at` NULL. No production data rewrite i
 2. If Apple-linked: exchange `appleAuthorizationCode` **before** DB writes. Validate Apple `id_token`. Require `sub` == current Firebase Apple provider uid. Negative test: a valid code for a **different** Apple user must 400 and leave DB unchanged.
 3. DB commit: tombstone + prune + job with `original_firebase_uid` (+ `apple_refresh_token` if Apple). Do not rewrite `firebase_uid` yet.
 4. Best-effort Apple `/auth/revoke` then Firebase `DeleteUser`.
-5. Success: rewrite uid, complete job.
+5. Success: rewrite `users.firebase_uid` and `account_deletion_jobs.original_firebase_uid` to `deleted:{id}`, clear `apple_refresh_token` and `last_error`, complete job.
 6. Failure: `PENDING_EXTERNAL` + `last_error`, HTTP 204. Retry via idempotent `DELETE /me` and optional process-boot sweep.
 
 Operational limitation: boot sweep is best-effort recovery, not a guaranteed scheduler. Do not add Cloud Scheduler unless implementation proves it necessary.
@@ -148,7 +150,7 @@ Operational limitation: boot sweep is best-effort recovery, not a guaranteed sch
 | Phase 1 — read-only design audit | Done | Against `origin/staging` @ `0e1b7cdb1cee2cc80c3d736ca313237ec6bcddb5` |
 | Phase 2 — contract-first docs | Done | Commit `c95fe8322476c0a0452c7951c8728d9d6fc2cfec` |
 | Sub-task 2 — migration 0004 | Done | Additive `deleted_at` + `account_deletion_jobs`; round-trip verified on `performance_coach_test` |
-| Sub-task 3 — DELETE /me + external cleanup | Not Started | |
+| Sub-task 3 — DELETE /me + external cleanup | Done | Handler, service, Apple JWKS verify, Firebase delete, tombstone middleware exception, boot sweep |
 | Sub-task 4 — active vs historical auth | Not Started | |
 | Sub-task 5 — frontend Settings flow | Not Started | |
 | Sub-task 6 — verification | Not Started | |
@@ -169,7 +171,7 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`. Keep this table 
 - Apple: valid code for another Apple user → 400, no `deleted_at`, no job. Matching `sub` proceeds.
 - Re-auth: frontend must use `reauthenticateWithCredential` on `currentUser`; a mismatched uid must not call `DELETE /me`.
 - Sequencing: Apple exchange fail → 400, row unchanged. Firebase fail after commit → 204, job `PENDING_EXTERNAL`, uid unchanged, signup 409 `ACCOUNT_DELETED`. Retry/boot then COMPLETE and uid rewritten.
-- Second `DELETE /me` → 204 and re-drives cleanup.
-- Sign-in after COMPLETE: old credentials cannot resolve the tombstone; a new Firebase user gets a new empty app account, never the old id.
+- Second `DELETE /me` while `PENDING_EXTERNAL` → 204 and re-drives cleanup.
+- After COMPLETE: old credentials cannot resolve the tombstone (`DELETE /me` included); a new Firebase user gets a new empty app account, never the old id.
 - `RECENT_AUTH_REQUIRED`; malformed body 400; Apple-linked missing code 400.
 - Every `coach_athletes` call site in §2 covered for mutation vs read.

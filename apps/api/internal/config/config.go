@@ -14,6 +14,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strings"
 )
 
 // APIConfig holds the environment-derived settings the api entrypoint
@@ -30,6 +31,25 @@ type APIConfig struct {
 	// redirects verification to the local Auth Emulator instead of
 	// production Firebase.
 	FirebaseProjectID string
+	// Apple holds Sign in with Apple REST credentials used only for
+	// account-deletion token exchange and revoke. All four fields must be
+	// set together; if none are set, Apple-linked deletion cannot run.
+	// Secrets must come from the environment and must never be logged.
+	Apple AppleConfig
+}
+
+// AppleConfig is the Sign in with Apple REST API client configuration.
+// PrivateKey is the contents of the .p8 key (PEM). Never log it.
+type AppleConfig struct {
+	TeamID     string
+	KeyID      string
+	ClientID   string
+	PrivateKey string
+}
+
+// Enabled reports whether Apple revoke/exchange is configured.
+func (c AppleConfig) Enabled() bool {
+	return c.TeamID != "" && c.KeyID != "" && c.ClientID != "" && c.PrivateKey != ""
 }
 
 // LoadAPI reads api entrypoint configuration from environment variables.
@@ -52,11 +72,46 @@ func LoadAPI() (APIConfig, error) {
 		port = "8080"
 	}
 
+	apple, err := loadAppleConfig()
+	if err != nil {
+		return APIConfig{}, err
+	}
+
 	return APIConfig{
 		DatabaseURL:       dbURL,
 		Port:              port,
 		FirebaseProjectID: firebaseProjectID,
+		Apple:             apple,
 	}, nil
+}
+
+func loadAppleConfig() (AppleConfig, error) {
+	cfg := AppleConfig{
+		TeamID:     strings.TrimSpace(os.Getenv("APPLE_TEAM_ID")),
+		KeyID:      strings.TrimSpace(os.Getenv("APPLE_KEY_ID")),
+		ClientID:   strings.TrimSpace(os.Getenv("APPLE_CLIENT_ID")),
+		PrivateKey: strings.TrimSpace(os.Getenv("APPLE_PRIVATE_KEY")),
+	}
+	set := 0
+	if cfg.TeamID != "" {
+		set++
+	}
+	if cfg.KeyID != "" {
+		set++
+	}
+	if cfg.ClientID != "" {
+		set++
+	}
+	if cfg.PrivateKey != "" {
+		set++
+	}
+	if set == 0 {
+		return AppleConfig{}, nil
+	}
+	if set != 4 {
+		return AppleConfig{}, errors.New("config: APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_CLIENT_ID, and APPLE_PRIVATE_KEY must all be set together")
+	}
+	return cfg, nil
 }
 
 // MigrateConfig holds the environment-derived settings the migrate
