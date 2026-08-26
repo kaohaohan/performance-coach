@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 import SignOutButton from "@/components/sign-out-button";
+import { AppHeader } from "@/components/app-header";
 
 type PlannedSet = {
   scheduledWorkoutPlannedSetId: string;
@@ -127,22 +128,19 @@ export default function AthleteTodayPage() {
 
   return (
     <main className="min-h-screen bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
-      <header className="bg-slate-950 px-5 pb-9 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
-        <div className="mx-auto max-w-lg">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
-            <SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />
-          </div>
-          <p className="mt-7 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{selectedDate === today ? "Today" : "Training"}</p>
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <button type="button" aria-label="Previous day" onClick={() => setSelectedDate((current) => shiftLocalDate(current, -1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">‹</button>
-            <h1 className="min-w-0 text-center text-xl font-semibold tracking-tight sm:text-2xl">{displayDate(selectedDate)}</h1>
-            <button type="button" aria-label="Next day" onClick={() => setSelectedDate((current) => shiftLocalDate(current, 1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">›</button>
-          </div>
-          {selectedDate !== today && <button type="button" onClick={() => setSelectedDate(today)} className="mx-auto mt-3 block rounded-full bg-teal-400/15 px-3 py-1 text-xs font-bold text-teal-300 transition hover:bg-teal-400/25">Today</button>}
-          <p className="mt-2 text-sm text-slate-300">Your training, scheduled by your coach.</p>
+      <AppHeader
+        padding="pb-9"
+        actions={<SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />}
+      >
+        <p className="mt-7 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{selectedDate === today ? "Today" : "Training"}</p>
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <button type="button" aria-label="Previous day" onClick={() => setSelectedDate((current) => shiftLocalDate(current, -1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">‹</button>
+          <h1 className="min-w-0 text-center text-xl font-semibold tracking-tight sm:text-2xl">{displayDate(selectedDate)}</h1>
+          <button type="button" aria-label="Next day" onClick={() => setSelectedDate((current) => shiftLocalDate(current, 1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">›</button>
         </div>
-      </header>
+        {selectedDate !== today && <button type="button" onClick={() => setSelectedDate(today)} className="mx-auto mt-3 block rounded-full bg-teal-400/15 px-3 py-1 text-xs font-bold text-teal-300 transition hover:bg-teal-400/25">Today</button>}
+        <p className="mt-2 text-sm text-slate-300">Your training, scheduled by your coach.</p>
+      </AppHeader>
 
       <div className="mx-auto -mt-3 max-w-lg px-4">
         {loadError && <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 ring-1 ring-red-600/10">{loadError}</p>}

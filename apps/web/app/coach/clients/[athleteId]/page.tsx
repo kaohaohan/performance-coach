@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { AppHeader } from "@/components/app-header";
 
 type Role = "COACH" | "ATHLETE";
 type Athlete = { id: string; name: string; role: "ATHLETE" };
@@ -175,14 +176,11 @@ export default function CoachClientDetailPage() {
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
-      <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
-        <div className="mx-auto max-w-lg">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
-          <h1 className="mt-3 break-words text-3xl font-semibold tracking-tight">{athleteName}</h1>
-          <p className="mt-2 text-sm text-slate-300">Athlete Training</p>
-          <button type="button" onClick={() => router.push("/coach/clients")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">← Clients</button>
-        </div>
-      </header>
+      <AppHeader>
+        <h1 className="mt-3 break-words text-3xl font-semibold tracking-tight">{athleteName}</h1>
+        <p className="mt-2 text-sm text-slate-300">Athlete Training</p>
+        <button type="button" onClick={() => router.push("/coach/clients")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">← Clients</button>
+      </AppHeader>
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-4 px-4">
         <section>
