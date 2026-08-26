@@ -115,7 +115,7 @@ A Coach can remove an Athlete, which ends the coaching relationship only. The At
 
 ### **Not in V0.1**
 
-- Google / Apple sign-in — email and password only.
+- ~~Google / Apple sign-in~~ — Google sign-in is implemented (web popup + native iOS), and Sign in with Apple is implemented on iOS for App Review Guideline 4.8 (see `docs/tasks/2026-08-25-ios-apple-signin.md`). No other social providers.
 - A "Pending" Athlete state.
 - Single-use codes, bulk upload, SMS or email delivery, Groups / Teams.
 - Assigning workouts during onboarding.

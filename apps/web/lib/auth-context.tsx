@@ -32,17 +32,19 @@ import {
 } from "firebase/auth";
 import { Capacitor } from "@capacitor/core";
 import { getFirebaseAuth } from "./firebase";
+import { nativeAppleCredential } from "./native-apple-auth";
 import { nativeGoogleCredential } from "./native-google-auth";
 import { setAuthTokenProvider } from "./api";
 
-// GoogleSignInResult carries both halves a caller needs after a Google
+// SocialSignInResult carries both halves a caller needs after a social
 // sign-in: the fresh ID token to authenticate the very next API call, and
 // the Firebase user itself — coach signup reads displayName off it to
 // pre-fill the Coach's name.
-export type GoogleSignInResult = {
+export type SocialSignInResult = {
   idToken: string;
   user: User;
 };
+export type GoogleSignInResult = SocialSignInResult;
 
 type AuthContextValue = {
   user: User | null;
@@ -76,6 +78,15 @@ type AuthContextValue = {
   // Google. This app never resolves identity by email and never merges
   // application users; see docs/tasks/2026-08-20-google-signin-account-continuity.md.
   signInWithGoogle: () => Promise<GoogleSignInResult>;
+  // signInWithApple is iOS-only (Guideline 4.8 — see
+  // docs/tasks/2026-08-25-ios-apple-signin.md). It provisions nothing by
+  // itself and never links or merges accounts: identity is firebase_uid,
+  // and if Firebase rejects the credential with
+  // auth/account-exists-with-different-credential the error propagates
+  // untouched so the UI can direct the person back to their existing
+  // sign-in method — preserving their existing backend account and data.
+  // Automatic provider linking is a separate future feature, not 1.0.
+  signInWithApple: () => Promise<SocialSignInResult>;
   signOut: () => Promise<void>;
 };
 
@@ -192,13 +203,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { idToken: await credential.user.getIdToken(), user: credential.user };
   }
 
+  // signInWithApple mirrors signInWithGoogle's native branch. There is no
+  // web branch: the Apple button is only rendered inside the iOS shell
+  // (Guideline 4.8 requires it as an equivalent option there), so calling
+  // this off-platform is a programmer error, not a user-facing state.
+  async function signInWithApple(): Promise<SocialSignInResult> {
+    if (!Capacitor.isNativePlatform()) {
+      throw new Error(
+        "auth-context: Sign in with Apple is only available in the iOS app",
+      );
+    }
+    const auth = getFirebaseAuth();
+    const credential = await nativeAppleCredential();
+    const result = await signInWithCredential(auth, credential);
+    // Same reasoning as signIn/signInWithGoogle: return the token directly
+    // rather than racing the onIdTokenChanged update above.
+    return { idToken: await result.user.getIdToken(), user: result.user };
+  }
+
   async function signOut() {
     const auth = getFirebaseAuth();
     await firebaseSignOut(auth);
   }
 
   return (
-    <AuthContext.Provider value={{ user, idToken, getIdToken, loading, signIn, signUp, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ user, idToken, getIdToken, loading, signIn, signUp, signInWithGoogle, signInWithApple, signOut }}>
       {children}
     </AuthContext.Provider>
   );

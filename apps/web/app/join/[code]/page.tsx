@@ -13,6 +13,7 @@ import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiFetch, publicApiFetch } from "@/lib/api";
 import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
 import { BRAND_NAME } from "@/lib/brand";
+import { AppleSignInButton, appleAuthErrorMessage } from "@/components/apple-sign-in-button";
 
 type Preview = { code: string; coachName: string; description: string | null };
 type Redeemed = { user: { id: string; name: string; role: "ATHLETE" }; coach: { name: string } };
@@ -56,7 +57,7 @@ export default function JoinCodePage() {
   const params = useParams<{ code: string }>();
   const code = params.code;
   const router = useRouter();
-  const { user, loading: authLoading, signIn, signUp, signInWithGoogle, signOut } = useAuth();
+  const { user, loading: authLoading, signIn, signUp, signInWithGoogle, signInWithApple, signOut } = useAuth();
 
   const [step, setStep] = useState<Step>("loading");
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -66,6 +67,7 @@ export default function JoinCodePage() {
   const [password, setPassword] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [googlePending, setGooglePending] = useState(false);
+  const [applePending, setApplePending] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [redeemed, setRedeemed] = useState<Redeemed | null>(null);
@@ -225,6 +227,33 @@ export default function JoinCodePage() {
     }
   }
 
+  // handleAppleJoin reuses the Google join path exactly — same
+  // continueWithToken gate, same redeem call; only the provider differs.
+  // When Apple returns no displayName (it only grants one on first-ever
+  // authorization) the typed name stands alone, and if both are empty the
+  // redeem request's name validation fails visibly rather than a name
+  // being invented.
+  async function handleAppleJoin() {
+    setApplePending(true);
+    setAuthError(null);
+    setRedeemError(null);
+    try {
+      const { idToken, user: appleUser } = await signInWithApple();
+      const athleteName = name.trim() || appleUser.displayName?.trim() || "";
+      await continueWithToken(idToken, athleteName);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setAuthError(errorMessage(err));
+      } else {
+        const message = appleAuthErrorMessage(err);
+        if (message) setAuthError(message);
+      }
+      setStep("authenticating");
+    } finally {
+      setApplePending(false);
+    }
+  }
+
   // Signing the Coach out returns the browser to a clean slate so the
   // athlete can authenticate as themselves — with Google or with
   // email/password.
@@ -301,7 +330,12 @@ export default function JoinCodePage() {
 
       {(step === "authenticating" || step === "redeeming") && (
         <div className="mt-6">
-          <GoogleSignInButton onClick={handleGoogleJoin} pending={googlePending} disabled={authSubmitting || step === "redeeming"} />
+          <div className="grid gap-3">
+            {/* Apple first on iOS (Guideline 4.8 equivalent prominence);
+                null on web, where only the Google button renders. */}
+            <AppleSignInButton onClick={handleAppleJoin} pending={applePending} disabled={authSubmitting || googlePending || step === "redeeming"} />
+            <GoogleSignInButton onClick={handleGoogleJoin} pending={googlePending} disabled={authSubmitting || applePending || step === "redeeming"} />
+          </div>
           <AuthDivider />
 
           <div className="flex gap-2" role="tablist" aria-label="Sign in or create account">
@@ -327,7 +361,7 @@ export default function JoinCodePage() {
 
             {(authError || redeemError) && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{authError ?? redeemError}</p>}
 
-            <button type="submit" disabled={authSubmitting || googlePending || step === "redeeming"} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+            <button type="submit" disabled={authSubmitting || googlePending || applePending || step === "redeeming"} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
               {step === "redeeming" ? "Connecting…" : redeemError ? "Try again" : authSubmitting ? (authMode === "create" ? "Creating account…" : "Signing in…") : authMode === "create" ? "Create account" : "Sign in"}
             </button>
           </form>
