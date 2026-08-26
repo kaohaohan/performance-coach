@@ -146,8 +146,8 @@ Operational limitation: boot sweep is best-effort recovery, not a guaranteed sch
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | Phase 1 — read-only design audit | Done | Against `origin/staging` @ `0e1b7cdb1cee2cc80c3d736ca313237ec6bcddb5` |
-| Phase 2 — contract-first docs | Done | Contract first, then this Task Doc + schema/mvp/UI |
-| Sub-task 2 — migration 0004 | Not Started | No schema files until implementation session |
+| Phase 2 — contract-first docs | Done | Commit `c95fe8322476c0a0452c7951c8728d9d6fc2cfec` |
+| Sub-task 2 — migration 0004 | Done | Additive `deleted_at` + `account_deletion_jobs`; round-trip verified on `performance_coach_test` |
 | Sub-task 3 — DELETE /me + external cleanup | Not Started | |
 | Sub-task 4 — active vs historical auth | Not Started | |
 | Sub-task 5 — frontend Settings flow | Not Started | |
