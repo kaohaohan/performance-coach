@@ -249,9 +249,18 @@ export default function CoachSignupPage() {
 
           <div className={socialConfirm ? "mt-6 grid gap-4" : "grid gap-4"}>
             <label>
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Name</span>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Name{socialConfirm && <span className="text-red-600"> *</span>}</span>
               <input type="text" required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
             </label>
+            {/* Apple (and occasionally Google) does not share a displayName,
+                so the confirm card can open with an empty field. Without a
+                cue that reads as a backend failure — say why it is empty
+                and that typing a name is the way forward. */}
+            {socialConfirm && !name.trim() && (
+              <p role="alert" className="-mt-2 text-sm font-medium text-red-600">
+                {socialProvider === "apple" ? "Apple didn't share your name" : "Your sign-in didn't include a name"} — enter it above to continue.
+              </p>
+            )}
             {!socialConfirm && (
               <>
                 <label>
@@ -271,7 +280,7 @@ export default function CoachSignupPage() {
           {provisioningFailed ? (
             <button type="button" onClick={handleRetryProvisioning} disabled={submitting} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Retrying…" : "Retry account setup"}</button>
           ) : (
-            <button type="submit" disabled={submitting || googlePending || applePending} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Creating account…" : "Create Coach Account"}</button>
+            <button type="submit" disabled={submitting || googlePending || applePending || (socialConfirm && !name.trim())} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Creating account…" : "Create Coach Account"}</button>
           )}
 
           {socialConfirm && (
