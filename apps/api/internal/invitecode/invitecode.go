@@ -241,7 +241,7 @@ func PreviewInviteCode(ctx context.Context, pool *pgxpool.Pool, rawCode string) 
 		SELECT ic.code, ic.description, ic.revoked_at, ic.expires_at, u.name
 		FROM coach_invite_codes ic
 		JOIN users u ON u.id = ic.coach_id
-		WHERE ic.code = $1`
+		WHERE ic.code = $1 AND u.deleted_at IS NULL`
 
 	var (
 		p         Preview
@@ -294,6 +294,10 @@ type Redeemed struct {
 // coach's own application user is COACH-role by construction, so this
 // also covers a coach attempting to redeem their own code.
 var ErrCoachCannotRedeem = errors.New("invitecode: a coach account cannot redeem an invite code")
+
+// ErrAccountDeleted indicates the Firebase UID already maps to a
+// tombstoned users row. Handlers map this to 409 ACCOUNT_DELETED.
+var ErrAccountDeleted = errors.New("invitecode: account has been deleted")
 
 // Redeem resolves identity's verified Firebase UID to an application user
 // — creating one with role ATHLETE if none exists yet — and connects that
@@ -370,7 +374,7 @@ func loadActiveInviteForUpdate(ctx context.Context, tx pgx.Tx, code string) (coa
 		SELECT ic.coach_id, ic.revoked_at, ic.expires_at, u.name
 		FROM coach_invite_codes ic
 		JOIN users u ON u.id = ic.coach_id
-		WHERE ic.code = $1`
+		WHERE ic.code = $1 AND u.deleted_at IS NULL`
 
 	var (
 		revokedAt *time.Time
@@ -431,15 +435,19 @@ func reconcileAthlete(ctx context.Context, tx pgx.Tx, identity authn.Identity, r
 		return u, nil
 
 	case errors.Is(err, pgx.ErrNoRows):
+		var deletedAt *time.Time
 		// ON CONFLICT fired: a users row for this firebase_uid already
 		// existed (this is also the path both concurrent goroutines that
 		// lose the INSERT race take). Re-select it verbatim — name and
 		// role are never overwritten by this or any HTTP-facing caller;
 		// see Redeem's doc comment on why that must never become
 		// bootstrap's DO UPDATE pattern.
-		if err := tx.QueryRow(ctx, `SELECT id, name, role FROM users WHERE firebase_uid = $1`, identity.UID).
-			Scan(&u.ID, &u.Name, &u.Role); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT id, name, role, deleted_at FROM users WHERE firebase_uid = $1`, identity.UID).
+			Scan(&u.ID, &u.Name, &u.Role, &deletedAt); err != nil {
 			return reconciledUser{}, fmt.Errorf("invitecode: redeem: load existing user: %w", err)
+		}
+		if deletedAt != nil {
+			return reconciledUser{}, ErrAccountDeleted
 		}
 		if u.Role == "COACH" {
 			return reconciledUser{}, ErrCoachCannotRedeem

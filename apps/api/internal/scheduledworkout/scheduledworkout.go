@@ -442,7 +442,10 @@ func lookupConnectedAthletes(ctx context.Context, tx pgx.Tx, coachID string, ath
 		SELECT u.id, u.name
 		FROM coach_athletes ca
 		JOIN users u ON u.id = ca.athlete_id
-		WHERE ca.coach_id = $1 AND ca.athlete_id = ANY($2)`
+		JOIN users coach ON coach.id = ca.coach_id
+		WHERE ca.coach_id = $1 AND ca.athlete_id = ANY($2)
+		  AND u.deleted_at IS NULL
+		  AND coach.deleted_at IS NULL`
 
 	rows, err := tx.Query(ctx, query, coachID, athleteIDs)
 	if err != nil {
@@ -1143,8 +1146,9 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, fr
 }
 
 // isConnected reports whether a coach_athletes row links coachID to
-// athleteID. It does not distinguish "athlete doesn't exist" from "athlete
-// exists but isn't connected" — both are ErrAthleteNotFound to the caller.
+// athleteID (historical access). Tombstoned users still count: Calendar
+// and GET /scheduled-workouts?athleteId= must keep retained history.
+// Active-relationship checks belong in lookupConnectedAthletes.
 func isConnected(ctx context.Context, pool *pgxpool.Pool, coachID, athleteID string) (bool, error) {
 	const query = `SELECT 1 FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2`
 	var exists int

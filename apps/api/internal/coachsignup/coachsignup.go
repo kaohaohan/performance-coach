@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -31,6 +32,11 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string { return e.Message }
+
+// ErrAccountDeleted indicates the Firebase UID already maps to a
+// tombstoned users row (deleted_at IS NOT NULL). Handlers map this to
+// 409 ACCOUNT_DELETED — never idempotent success, never a second users row.
+var ErrAccountDeleted = errors.New("coachsignup: account has been deleted")
 
 // ErrAthleteConflict indicates the verified Firebase identity already
 // resolves to an existing users row with role ATHLETE. An athlete account
@@ -108,13 +114,17 @@ func Signup(ctx context.Context, pool *pgxpool.Pool, identity authn.Identity, ra
 		}
 
 	case errors.Is(err, pgx.ErrNoRows):
+		var deletedAt *time.Time
 		// ON CONFLICT fired: a users row for this firebase_uid already
 		// existed (also the path both concurrent goroutines that lose the
 		// INSERT race take). Re-select it verbatim — name and role are
 		// never overwritten by this endpoint.
-		if err := tx.QueryRow(ctx, `SELECT id, name, role FROM users WHERE firebase_uid = $1`, identity.UID).
-			Scan(&u.ID, &u.Name, &u.Role); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT id, name, role, deleted_at FROM users WHERE firebase_uid = $1`, identity.UID).
+			Scan(&u.ID, &u.Name, &u.Role, &deletedAt); err != nil {
 			return User{}, fmt.Errorf("coachsignup: load existing user: %w", err)
+		}
+		if deletedAt != nil {
+			return User{}, ErrAccountDeleted
 		}
 		if u.Role == "ATHLETE" {
 			return User{}, ErrAthleteConflict
