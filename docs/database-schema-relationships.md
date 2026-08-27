@@ -31,7 +31,8 @@ users
   ├──< coach_invite_codes
   ├──< workouts
   ├──< exercises (owner_coach_id nullable)
-  └──< set_logs (logged_by_user_id)
+  ├──< set_logs (logged_by_user_id)
+  └──1:0..1── account_deletion_jobs
 
 workouts
   └──< workout_exercises >── exercises
@@ -59,8 +60,9 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 
 | Table | Important fields | Relationship | Responsibility |
 | --- | --- | --- | --- |
-| `users` | `id`, `firebase_uid`, `name`, `role` | Root entity | Application identity. Firebase authenticates the user; this row determines internal identity and role. |
-| `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Defines which coaches may access and operate on which athletes. |
+| `users` | `id`, `firebase_uid`, `name`, `role`, `deleted_at` | Root entity | Application identity. Firebase authenticates the user; this row determines internal identity and role. `deleted_at` non-null is a tombstone: login identity is gone; the row remains so historical FKs stay valid. Display name becomes `Deleted Coach` or `Deleted Athlete`. |
+| `account_deletion_jobs` | `user_id`, `original_firebase_uid`, `apple_refresh_token`, `firebase_deleted_at`, `apple_revoked_at`, `status` | User 1:0..1 | Durable external-cleanup record for Firebase `DeleteUser` and Apple `/auth/revoke`. Not an audit log. |
+| `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Join row retained after account deletion as **historical access** ACL. Service layer distinguishes that from an **active relationship** (`deleted_at IS NULL` on both users). No `ended_at` column in V0.10. |
 | `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
 | `exercises` | `id`, `name`, `owner_coach_id` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
@@ -72,7 +74,7 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 | `workout_sessions` | `scheduled_workout_id`, `athlete_id`, `status`, timestamps | ScheduledWorkout 1:0..1 | Actual training occurrence. One scheduled workout can create at most one session. |
 | `set_logs` | `session_id`, `scheduled_workout_exercise_id`, optional `scheduled_workout_planned_set_id`, `set_number`, actual fields | Session 1:N; ScheduledWorkoutExercise 1:N; optional PlannedSet link | Actual performance. Non-null planned-set link = PLANNED; null link = EXTRA. |
 
-The rows above describe the implemented responsibilities. `0001_init_schema` established the scalar baseline; `0002_planned_set_prescription` added the override and planned-set rows recorded in §3.1; `0003_coach_invite_codes` added the invite table. §3 records the current checked-in shape.
+The rows above describe the implemented responsibilities. `0001_init_schema` established the scalar baseline; `0002_planned_set_prescription` added the override and planned-set rows recorded in §3.1; `0003_coach_invite_codes` added the invite table. §3 records the current checked-in shape. §3.3 is the approved account-deletion additive shape (`0004_account_deletion`); it must not be applied until `docs/tasks/2026-08-26-account-deletion.md` is implemented.
 
 ## 3. Current implemented PostgreSQL shape
 
@@ -268,6 +270,39 @@ Existing `workout_exercises.target_reps`, `target_prescription_note`, and `targe
 7. Validate cardinality, ordering, association, and uniqueness before adding final constraints.
 8. Deploy the revised `/api/v1` backend and frontend as one controlled coordinated change. Do not maintain dual reads/writes. Removing deprecated scalar columns is a later cleanup only after the new path is verified.
 
+### 3.3 Approved account-deletion shape (`0004_account_deletion`)
+
+Additive. No user-level `ON DELETE CASCADE`. Current `0001`–`0003` FKs to `users` remain `NO ACTION`.
+
+```sql
+users(
+  ...existing columns...,
+  deleted_at timestamptz null
+)
+
+account_deletion_jobs(
+  user_id uuid primary key references users(id),
+  original_firebase_uid text not null,
+  apple_refresh_token text null,
+  firebase_deleted_at timestamptz null,
+  apple_revoked_at timestamptz null,
+  status text not null,
+  last_error text null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  check (status in ('PENDING_EXTERNAL', 'COMPLETE'))
+)
+```
+
+Deletion policy (service, not FK cascade):
+
+- Tombstone the `users` row: set `deleted_at`, replace `name` with `Deleted Coach` or `Deleted Athlete`. Keep `firebase_uid` until Firebase `DeleteUser(original_firebase_uid)` succeeds, then atomically rewrite both `users.firebase_uid` and `account_deletion_jobs.original_firebase_uid` to `deleted:{users.id}`. The original UID is retry state, not a post-COMPLETE identity.
+- Physically delete invite codes; unstarted `scheduled_workouts` (no session) in existing snapshot FK order; unreferenced coach-owned workouts (and their template children); unreferenced private exercises. System exercises stay.
+- Retain `coach_athletes`; retain scheduled workouts that have a session, plus snapshots / sessions / set_logs; retain `workouts` rows referenced by remaining `scheduled_workouts.workout_id`; retain private `exercises` referenced by remaining `scheduled_workout_exercises.exercise_id`.
+- Do not rewrite `ACTIVE` sessions to `COMPLETED`. A future `ABANDONED` status is out of scope.
+
+`apple_refresh_token` is secret-at-rest and must be nulled when `apple_revoked_at` is set.
+
 ## 4. Exercise Library Uniqueness
 
 System exercises and private coach exercises use separate partial unique indexes:
@@ -355,6 +390,8 @@ The target representation is the normalized hybrid shape in §3.1. Because this 
 - `set_logs (session_id, scheduled_workout_exercise_id, set_number)` is unique: the database is the final correctness boundary for set numbering.
 - A partial unique index on `(session_id, scheduled_workout_planned_set_id)` prevents two normal actual logs from claiming one planned target; null references allow multiple extras.
 - Workout deletion is soft delete only in V0.1. Do not use `ON DELETE CASCADE` from `scheduled_workouts.workout_id` to Workout.
+- Account deletion must not use `ON DELETE CASCADE` from any `users` FK. Performed-training rows stay; identity is anonymized. Unstarted assignments and unreferenced coach-owned library rows are service-layer physical deletes.
+- `account_deletion_jobs` is the durable recovery record for Firebase and Apple cleanup. Process-boot sweep of `PENDING_EXTERNAL` is best-effort, not a guaranteed scheduler.
 - Authorization is enforced in the service layer; foreign keys and constraints enforce structural integrity, not application permissions.
 
 ## 7. V0.1 Scope Boundary
@@ -372,7 +409,7 @@ Coach
 
 V0.1 SetLog is currently reps-based. Actual `load` and `unit` are nullable for bodyweight movements. Time/distance actual metrics remain future extensions; preserving a planned text prescription such as `30 sec` does not itself make duration an actual SetLog metric.
 
-Implemented: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association (`0002_planned_set_prescription`); coach invite codes (`0003_coach_invite_codes`). Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed.
+Implemented: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association (`0002_planned_set_prescription`); coach invite codes (`0003_coach_invite_codes`). Approved, not yet migrated: account-deletion tombstone (`0004_account_deletion`). Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed, `ABANDONED` session status.
 
 ## 8. Future Extension Points
 

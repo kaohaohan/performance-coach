@@ -1745,6 +1745,7 @@ export default function CoachCalendarPage() {
             <button type="button" onClick={() => router.push("/coach/workouts")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Workouts</button>
             <button type="button" onClick={() => router.push("/coach/exercises")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Exercises</button>
             <button type="button" onClick={() => router.push("/coach/clients")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Clients</button>
+            <button type="button" onClick={() => router.push("/settings")} disabled={programmingControlsDisabled} className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50">Account</button>
             <SignOutButton className="rounded-lg px-2 py-2 hover:bg-slate-800 disabled:opacity-50" />
           </nav>
           <details className="relative shrink-0 sm:hidden">
@@ -1753,6 +1754,7 @@ export default function CoachCalendarPage() {
               <button type="button" onClick={() => router.push("/coach/workouts")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Workouts</button>
               <button type="button" onClick={() => router.push("/coach/exercises")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Exercises</button>
               <button type="button" onClick={() => router.push("/coach/clients")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Clients</button>
+              <button type="button" onClick={() => router.push("/settings")} disabled={programmingControlsDisabled} className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50">Account</button>
               <SignOutButton className="block w-full px-4 py-2.5 text-left hover:bg-slate-800 disabled:opacity-50" />
             </nav>
           </details>

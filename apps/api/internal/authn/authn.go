@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	firebase "firebase.google.com/go/v4"
 	fbauth "firebase.google.com/go/v4/auth"
@@ -27,19 +28,37 @@ import (
 )
 
 // User is the internal application identity resolved from a verified
-// Firebase ID token, matching the users table.
+// Firebase ID token, matching the users table. AuthTime and
+// AppleProviderUIDs come from the verified token, never from the client.
 type User struct {
-	ID          string
-	FirebaseUID string
-	Name        string
-	Role        string
+	ID                string
+	FirebaseUID       string
+	Name              string
+	Role              string
+	DeletedAt         *time.Time
+	AuthTime          time.Time
+	AppleProviderUIDs []string
 }
 
-// TokenVerifier verifies a Firebase ID token and returns the Firebase UID.
-// Satisfied by the Firebase Admin SDK's *auth.Client; kept as an interface
-// so tests can substitute a fake without a live Firebase project/emulator.
+// VerifiedToken is the subset of a verified Firebase ID token that
+// application-user routes need: identity, recent-auth, and linked IdPs.
+type VerifiedToken struct {
+	UID               string
+	AuthTime          time.Time
+	AppleProviderUIDs []string
+}
+
+// TokenVerifier verifies a Firebase ID token. Satisfied by the Firebase
+// Admin SDK wrapper; kept as an interface so tests can substitute a fake
+// without a live Firebase project/emulator.
 type TokenVerifier interface {
-	VerifyIDToken(ctx context.Context, idToken string) (uid string, err error)
+	VerifyIDToken(ctx context.Context, idToken string) (VerifiedToken, error)
+}
+
+// UserDeleter deletes a Firebase Auth user. Implementations must treat
+// user-not-found as success so account-deletion retry is idempotent.
+type UserDeleter interface {
+	DeleteUser(ctx context.Context, uid string) error
 }
 
 // Verifier satisfies both TokenVerifier (used by Middleware) and
@@ -56,6 +75,7 @@ type TokenVerifier interface {
 type Verifier interface {
 	TokenVerifier
 	IdentityVerifier
+	UserDeleter
 }
 
 // NewVerifier initializes the Firebase Admin SDK auth client for the given
@@ -80,12 +100,50 @@ type firebaseVerifier struct {
 	client *fbauth.Client
 }
 
-func (v *firebaseVerifier) VerifyIDToken(ctx context.Context, idToken string) (string, error) {
+func (v *firebaseVerifier) VerifyIDToken(ctx context.Context, idToken string) (VerifiedToken, error) {
 	token, err := v.client.VerifyIDToken(ctx, idToken)
 	if err != nil {
-		return "", err
+		return VerifiedToken{}, err
 	}
-	return token.UID, nil
+	return VerifiedToken{
+		UID:               token.UID,
+		AuthTime:          time.Unix(token.AuthTime, 0).UTC(),
+		AppleProviderUIDs: appleProviderUIDs(token.Firebase.Identities),
+	}, nil
+}
+
+func (v *firebaseVerifier) DeleteUser(ctx context.Context, uid string) error {
+	err := v.client.DeleteUser(ctx, uid)
+	if err == nil || fbauth.IsUserNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func appleProviderUIDs(identities map[string]any) []string {
+	if identities == nil {
+		return nil
+	}
+	raw, ok := identities["apple.com"]
+	if !ok {
+		return nil
+	}
+	var out []string
+	switch ids := raw.(type) {
+	case []any:
+		for _, id := range ids {
+			if s, ok := id.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+	case []string:
+		for _, s := range ids {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // Identity is the verified-but-unreconciled Firebase identity attached by
@@ -187,24 +245,40 @@ func FirebaseOnlyMiddleware(v IdentityVerifier) func(http.Handler) http.Handler 
 
 // Middleware verifies the Firebase ID token on each request, resolves it to
 // an internal user, and attaches that user to the request context before
-// calling next. Missing/invalid tokens and unknown Firebase UIDs both
-// result in 401 UNAUTHENTICATED, per the API contract.
+// calling next. Missing/invalid tokens, unknown Firebase UIDs, and
+// tombstoned users (deleted_at IS NOT NULL) all result in 401
+// UNAUTHENTICATED. Use TombstoneRetryMiddleware for DELETE /me.
 func Middleware(verifier TokenVerifier, pool *pgxpool.Pool) func(http.Handler) http.Handler {
+	return applicationUserMiddleware(verifier, pool, false)
+}
+
+// TombstoneRetryMiddleware is the application-user middleware for
+// DELETE /api/v1/me. It resolves tombstoned users while external cleanup
+// is still PENDING_EXTERNAL, including the window after Firebase
+// DeleteUser succeeds but before firebase_uid is rewritten. COMPLETE jobs
+// no longer retain the original Firebase UID, so an old token cannot
+// regain an application user. Other application-user routes must use
+// Middleware, which treats tombstones as unauthenticated.
+func TombstoneRetryMiddleware(verifier TokenVerifier, pool *pgxpool.Pool) func(http.Handler) http.Handler {
+	return applicationUserMiddleware(verifier, pool, true)
+}
+
+func applicationUserMiddleware(verifier TokenVerifier, pool *pgxpool.Pool, allowTombstone bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := bearerToken(r)
+			rawToken, ok := bearerToken(r)
 			if !ok {
 				writeUnauthenticated(w)
 				return
 			}
 
-			uid, err := verifier.VerifyIDToken(r.Context(), token)
+			verified, err := verifier.VerifyIDToken(r.Context(), rawToken)
 			if err != nil {
 				writeUnauthenticated(w)
 				return
 			}
 
-			user, err := lookupByFirebaseUID(r.Context(), pool, uid)
+			user, err := lookupApplicationUser(r.Context(), pool, verified.UID, allowTombstone)
 			if err != nil {
 				if errors.Is(err, errUserNotFound) {
 					writeUnauthenticated(w)
@@ -213,6 +287,9 @@ func Middleware(verifier TokenVerifier, pool *pgxpool.Pool) func(http.Handler) h
 				WriteInternalError(w, r, err)
 				return
 			}
+
+			user.AuthTime = verified.AuthTime
+			user.AppleProviderUIDs = verified.AppleProviderUIDs
 
 			ctx := context.WithValue(r.Context(), userContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -235,12 +312,45 @@ func bearerToken(r *http.Request) (string, bool) {
 
 var errUserNotFound = errors.New("authn: no internal user for firebase uid")
 
-// lookupByFirebaseUID resolves a Firebase UID to the internal user row.
-func lookupByFirebaseUID(ctx context.Context, pool *pgxpool.Pool, firebaseUID string) (User, error) {
-	const query = `SELECT id, firebase_uid, name, role FROM users WHERE firebase_uid = $1`
+func lookupApplicationUser(ctx context.Context, pool *pgxpool.Pool, firebaseUID string, allowTombstone bool) (User, error) {
+	user, err := scanUser(ctx, pool,
+		`SELECT id, firebase_uid, name, role, deleted_at FROM users WHERE firebase_uid = $1`,
+		firebaseUID,
+	)
+	if err == nil {
+		if user.DeletedAt != nil && !allowTombstone {
+			return User{}, errUserNotFound
+		}
+		return user, nil
+	}
+	if !errors.Is(err, errUserNotFound) || !allowTombstone {
+		return User{}, err
+	}
 
+	// Firebase DeleteUser may succeed before the final uid rewrite. While
+	// the job is still PENDING_EXTERNAL, original_firebase_uid is the
+	// retry key. COMPLETE jobs scrub that column, so this lookup must not
+	// restore a finished identity.
+	user, err = scanUser(ctx, pool,
+		`SELECT u.id, u.firebase_uid, u.name, u.role, u.deleted_at
+		 FROM account_deletion_jobs j
+		 JOIN users u ON u.id = j.user_id
+		 WHERE j.original_firebase_uid = $1
+		   AND j.status = 'PENDING_EXTERNAL'`,
+		firebaseUID,
+	)
+	if err != nil {
+		return User{}, err
+	}
+	if user.DeletedAt == nil {
+		return User{}, errUserNotFound
+	}
+	return user, nil
+}
+
+func scanUser(ctx context.Context, pool *pgxpool.Pool, query string, firebaseUID string) (User, error) {
 	var u User
-	err := pool.QueryRow(ctx, query, firebaseUID).Scan(&u.ID, &u.FirebaseUID, &u.Name, &u.Role)
+	err := pool.QueryRow(ctx, query, firebaseUID).Scan(&u.ID, &u.FirebaseUID, &u.Name, &u.Role, &u.DeletedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return User{}, errUserNotFound

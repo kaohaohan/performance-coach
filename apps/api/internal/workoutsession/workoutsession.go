@@ -156,10 +156,9 @@ type querier interface {
 
 // lookupAccessibleScheduledWorkout returns scheduledWorkoutID's athlete_id
 // if it exists and caller is authorized to start/resume its session (the
-// athlete themself, or a coach connected to that athlete via
-// coach_athletes); otherwise ErrNotFound. Deliberately does not export or
-// reuse scheduledworkout.isConnected — this is a small, local lookup
-// specific to this endpoint's authorization needs.
+// athlete themself, or a coach with an **active** relationship: the
+// coach_athletes row exists and both users have deleted_at IS NULL);
+// otherwise ErrNotFound. Tombstoned counterparties cannot start/resume.
 //
 // The scheduled_workouts row is locked FOR UPDATE — see Start's concurrency
 // comment above for why.
@@ -180,14 +179,12 @@ func lookupAccessibleScheduledWorkout(ctx context.Context, q querier, caller aut
 	}
 
 	if caller.Role == "COACH" {
-		const connectedQuery = `SELECT 1 FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2`
-		var exists int
-		err := q.QueryRow(ctx, connectedQuery, caller.ID, athleteID).Scan(&exists)
-		if err == nil {
-			return athleteID, nil
+		ok, err := hasActiveRelationship(ctx, q, caller.ID, athleteID)
+		if err != nil {
+			return "", err
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("workoutsession: check coach connection: %w", err)
+		if ok {
+			return athleteID, nil
 		}
 	}
 
@@ -228,7 +225,11 @@ func Complete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessio
 		return Session{}, &ValidationError{Message: "sessionId must be a valid UUID"}
 	}
 
-	if _, err := lookupAccessibleSession(ctx, pool, caller, sessionID); err != nil {
+	header, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, header.athleteID); err != nil {
 		return Session{}, err
 	}
 
@@ -239,7 +240,7 @@ func Complete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessio
 		RETURNING id, status`
 
 	var session Session
-	err := pool.QueryRow(ctx, complete, sessionID).Scan(&session.ID, &session.Status)
+	err = pool.QueryRow(ctx, complete, sessionID).Scan(&session.ID, &session.Status)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Session{}, ErrCompleted
@@ -367,12 +368,10 @@ func Get(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID s
 	}, nil
 }
 
-// lookupAccessibleSession resolves sessionID to its header (status,
-// athlete, and owning scheduled_workout_id) if it exists and caller is
-// authorized to read it (the session's athlete, or a coach connected to
-// that athlete via coach_athletes); otherwise ErrNotFound. Nonexistent and
-// inaccessible are deliberately indistinguishable, matching Start's
-// privacy principle (docs/go-backend-api-contract-v0.1.md §1).
+// lookupAccessibleSession resolves sessionID to its header if it exists
+// and caller is authorized to **read** it: the session's athlete, or a
+// coach with historical coach_athletes access (row exists even if a
+// party is tombstoned). Mutations must also call requireActiveCoachMutation.
 func lookupAccessibleSession(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID string) (sessionHeader, error) {
 	const query = `
 		SELECT ws.id, ws.status, ws.scheduled_workout_id, u.id, u.name
@@ -406,6 +405,40 @@ func lookupAccessibleSession(ctx context.Context, pool *pgxpool.Pool, caller aut
 	}
 
 	return sessionHeader{}, ErrNotFound
+}
+
+func requireActiveCoachMutation(ctx context.Context, q querier, caller authn.User, athleteID string) error {
+	if caller.Role != "COACH" {
+		return nil
+	}
+	ok, err := hasActiveRelationship(ctx, q, caller.ID, athleteID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func hasActiveRelationship(ctx context.Context, q querier, coachID, athleteID string) (bool, error) {
+	const query = `
+		SELECT 1
+		FROM coach_athletes ca
+		JOIN users c ON c.id = ca.coach_id
+		JOIN users a ON a.id = ca.athlete_id
+		WHERE ca.coach_id = $1 AND ca.athlete_id = $2
+		  AND c.deleted_at IS NULL
+		  AND a.deleted_at IS NULL`
+	var exists int
+	err := q.QueryRow(ctx, query, coachID, athleteID).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("workoutsession: check active relationship: %w", err)
+	}
+	return true, nil
 }
 
 // loadExercisesWithSetLogs returns scheduledWorkoutID's snapshot exercises,
@@ -660,6 +693,9 @@ func CreateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 
 	header, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
 	if err != nil {
+		return SetLog{}, err
+	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, header.athleteID); err != nil {
 		return SetLog{}, err
 	}
 	if header.status != "ACTIVE" {

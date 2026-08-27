@@ -37,13 +37,14 @@ This is a frontend information-architecture decision. It introduces no new backe
 
 | Route | Role | Backs onto | Purpose |
 |---|---|---|---|
-| `/today` | Primary (Athlete's only real destination in V0.1) | `GET /me/scheduled-workouts?date=` | Athlete's primary training destination. It defaults to the Athlete's **local current date** and allows lightweight previous/next day navigation so the Athlete can view ScheduledWorkouts already assigned for nearby dates. A Today action returns to the local current date. Each selected-date change calls `GET /api/v1/me/scheduled-workouts?date={selectedDate}`. This is day navigation inside `/today`, not a new Athlete Calendar route. It remains the only primary Athlete route in V0.1. |
+| `/today` | Primary (Athlete's only real destination in V0.1) | `GET /me/scheduled-workouts?date=` | Athlete's primary training destination. It defaults to the Athlete's **local current date** and allows lightweight previous/next day navigation so the Athlete can view ScheduledWorkouts already assigned for nearby dates. A Today action returns to the local current date. Each selected-date change calls `GET /api/v1/me/scheduled-workouts?date={selectedDate}`. This is day navigation inside `/today`, not a new Athlete Calendar route. It remains the only primary Athlete route in V0.1. Account deletion is reached from `/settings`, not from a second primary destination. |
 
 ### Shared
 
 | Route | Role | Backs onto | Purpose |
 |---|---|---|---|
-| `/session/[id]` | Coach (connected) + Athlete (self) | `POST /scheduled-workouts/{id}/session`, `GET /sessions/{id}`, `POST/PATCH/DELETE /sessions/{id}/set-logs`, `POST /sessions/{id}/complete` | The Training Session UI. Both roles use the same screen/domain: start or resume a session, log/edit/delete SetLogs, view plan vs. actual, complete the session. This is what makes Story 2 (Coach runs a live 1:1 session) possible without a separate coach-only UI. |
+| `/session/[id]` | Coach (connected) + Athlete (self) | `POST /scheduled-workouts/{id}/session`, `GET /sessions/{id}`, `POST/PATCH/DELETE /sessions/{id}/set-logs`, `POST /sessions/{id}/complete` | The Training Session UI. Both roles use the same screen/domain: start or resume a session, log/edit/delete SetLogs, view plan vs. actual, complete the session. This is what makes Story 2 (Coach runs a live 1:1 session) possible without a separate coach-only UI. After an Athlete deletes their account, a Coach may still open historical sessions as read-only (`GET /sessions/{id}`); start/complete/set-log are refused. |
+| `/settings` | Coach + Athlete (self) | `DELETE /api/v1/me` | Account settings. The only in-app account-deletion surface (Guideline 5.1.1(v)). Not a primary programming destination. |
 
 ### Onboarding (unauthenticated)
 
@@ -78,6 +79,8 @@ This is a frontend information-architecture decision. It introduces no new backe
 - Coach and Athlete share the same Training Session UI/domain wherever the underlying authorization allows it (session start, set-log CRUD).
 - Voice / Video / AI are deferred — not part of any V0.1 route.
 - `/today` supports lightweight day navigation only; a full month calendar is not required in V0.1.
+- Calendar retains historical rows for a tombstoned Athlete, labeled `Deleted Athlete`. Those rows are not in the Assign-to roster.
+- Account deletion lives at `/settings`: Delete Account → destructive confirmation → `reauthenticateWithCredential` on the **current** Firebase user (Apple-linked accounts use a deletion-only native Apple login that yields `authorizationCode`, then that credential is passed to `reauthenticateWithCredential`; Google/password use the matching provider credential) → `DELETE /api/v1/me` → sign out → `/login`. Do not present deactivate, email-only deletion, or an external web form as the only method. `403 RECENT_AUTH_REQUIRED` returns the user to re-auth. Apple sheet cancel stays silent.
 - Day navigation does not introduce a Calendar domain object or a new backend endpoint; it uses the existing `GET /me/scheduled-workouts?date=` endpoint.
 - Client invite/onboarding mechanism is explicitly undecided (see below).
 - Do not copy TeamBuildr's enterprise Calendar/Program/Offset model — Calendar here is a UI over per-athlete `ScheduledWorkout`, not a new scheduling domain.
@@ -93,6 +96,7 @@ This is a frontend information-architecture decision. It introduces no new backe
 - **Exercise Library slice boundaries** — no Exercise edit/archive, video, description, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, standalone Exercise-Library Workout Builder, or System exercise seed implementation.
 - **Build & Assign partial failure** — `POST /api/v1/workouts` and `POST /api/v1/scheduled-workouts` are not atomic together. If Workout creation succeeds but scheduling fails, preserve the created `workout.id`, selected date, selected Athletes, and builder state; report that the Workout was created but not assigned; and offer explicit retry-assignment using only the existing `workout.id`. Do not blindly auto-retry ambiguous network failures: scheduled-workouts has no idempotency key and duplicate scheduling is possible.
 - **Future Workout modes** — one-off scheduled Workouts, a “Save as template” toggle, and ephemeral prescriptions are not V0.1.
+- **Abandoned sessions** — `workout_sessions.status` remains `ACTIVE` \| `COMPLETED`. Account deletion does not invent `ABANDONED`. An Athlete-deleted ACTIVE session stays ACTIVE and mutation-blocked.
 - **Prescription scope** — approved V0.1 planned-set behavior is limited to ordered positions, uniform defaults, sparse individual overrides, reps or an existing text prescription, one planned load unit per WorkoutExercise, and RPE. Template authoring and scheduled snapshot representations are defined in the canonical API/schema docs. Explicit-none overrides, mixed planned units within one exercise, percentages, velocity, tempo, rest, supersets, circuits, arbitrary custom properties, and TeamBuildr-style property systems remain out of scope.
 
 ---

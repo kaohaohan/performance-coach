@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/kaohaohan/performance-coach/apps/api/internal/accountdeletion"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/athlete"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/coachsignup"
@@ -87,6 +88,11 @@ func run(logger *slog.Logger) error {
 	if migrationKnown {
 		bootFields = append(bootFields, "migration_version", migrationVersion)
 	}
+	if cfg.Apple.Enabled() {
+		bootFields = append(bootFields, "apple_token_revoke", "configured")
+	} else {
+		bootFields = append(bootFields, "apple_token_revoke", "unconfigured")
+	}
 	logger.Info("api starting", bootFields...)
 
 	firebaseCtx, firebaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -98,6 +104,17 @@ func run(logger *slog.Logger) error {
 	}
 	authMiddleware := authn.Middleware(verifier, pool)
 	firebaseOnlyMiddleware := authn.FirebaseOnlyMiddleware(verifier)
+	tombstoneRetryMiddleware := authn.TombstoneRetryMiddleware(verifier, pool)
+
+	var appleClient accountdeletion.AppleClient
+	if cfg.Apple.Enabled() {
+		client, err := accountdeletion.NewAppleClient(cfg.Apple)
+		if err != nil {
+			return err
+		}
+		appleClient = client
+	}
+	deletionSvc := accountdeletion.New(pool, appleClient, verifier, time.Now)
 
 	// Preview and redeem are the only publicly (or Firebase-only)
 	// reachable domain routes; both get a per-IP token bucket
@@ -112,6 +129,7 @@ func run(logger *slog.Logger) error {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
+	mux.Handle("DELETE /api/v1/me", tombstoneRetryMiddleware(accountdeletion.HandleDelete(deletionSvc)))
 	mux.Handle("POST /api/v1/coach-signup", firebaseOnlyMiddleware(handleCoachSignup(pool)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
 	mux.Handle("DELETE /api/v1/athletes/{athleteId}", authMiddleware(handleRemoveAthlete(pool)))
@@ -175,6 +193,14 @@ func run(logger *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	go func() {
+		sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer sweepCancel()
+		if err := deletionSvc.SweepPending(sweepCtx); err != nil {
+			logger.Warn("account deletion pending-external sweep failed", "error", err.Error())
+		}
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -271,6 +297,8 @@ func handleCoachSignup(pool *pgxpool.Pool) http.HandlerFunc {
 			switch {
 			case errors.Is(err, coachsignup.ErrAthleteConflict):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "firebase account is already registered as an athlete")
+			case errors.Is(err, coachsignup.ErrAccountDeleted):
+				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
@@ -484,6 +512,8 @@ func handleRedeemInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code is not valid")
 			case errors.Is(err, invitecode.ErrCoachCannotRedeem):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "a coach account cannot redeem an invite code")
+			case errors.Is(err, invitecode.ErrAccountDeleted):
+				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:

@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
+	"github.com/kaohaohan/performance-coach/apps/api/migrations"
 )
 
 // This is D1b's "dry/local validation path against a clean PostgreSQL
@@ -110,6 +112,189 @@ func TestUpRefusesChangedHistoricalMigration(t *testing.T) {
 
 	if _, err := migrate.Up(ctx, pool, nil); err == nil {
 		t.Fatal("Up() with a changed historical migration checksum unexpectedly succeeded")
+	}
+}
+
+func TestAccountDeletionMigration0004RoundTrip(t *testing.T) {
+	pool := requireIsolatedTestDB(t)
+	ctx := context.Background()
+
+	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public;`); err != nil {
+		t.Fatalf("reset schema: %v", err)
+	}
+
+	applied, err := migrate.Up(ctx, pool, nil)
+	if err != nil {
+		t.Fatalf("Up() on clean database: %v", err)
+	}
+	if !containsVersion(applied, "0004_account_deletion") {
+		t.Fatalf("Up() did not apply 0004_account_deletion; applied = %v", applied)
+	}
+
+	assertAccountDeletionSchema(t, ctx, pool, true)
+	assertNoUserFKCascade(t, ctx, pool)
+
+	downSQL, err := migrations.FS.ReadFile("0004_account_deletion.down.sql")
+	if err != nil {
+		t.Fatalf("read 0004 down: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(downSQL), pgx.QueryExecModeSimpleProtocol); err != nil {
+		t.Fatalf("apply 0004 down: %v", err)
+	}
+	assertAccountDeletionSchema(t, ctx, pool, false)
+
+	var leftover int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('users', 'workouts', 'coach_invite_codes')`).Scan(&leftover); err != nil {
+		t.Fatalf("count remaining tables: %v", err)
+	}
+	if leftover != 3 {
+		t.Fatalf("0004 down removed unrelated tables; found %d of users/workouts/coach_invite_codes", leftover)
+	}
+
+	if _, err := pool.Exec(ctx, `DELETE FROM schema_migrations WHERE version = '0004_account_deletion'`); err != nil {
+		t.Fatalf("remove 0004 ledger row: %v", err)
+	}
+
+	reapplied, err := migrate.Up(ctx, pool, nil)
+	if err != nil {
+		t.Fatalf("Up() after 0004 down: %v", err)
+	}
+	if len(reapplied) != 1 || reapplied[0] != "0004_account_deletion" {
+		t.Fatalf("Up() after down re-applied %v, want only 0004_account_deletion", reapplied)
+	}
+	assertAccountDeletionSchema(t, ctx, pool, true)
+	assertNoUserFKCascade(t, ctx, pool)
+	assertStatusConstraint(t, ctx, pool)
+}
+
+func containsVersion(applied []string, version string) bool {
+	for _, v := range applied {
+		if v == version {
+			return true
+		}
+	}
+	return false
+}
+
+func assertAccountDeletionSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool, present bool) {
+	t.Helper()
+
+	var deletedAtCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'users'
+		  AND column_name = 'deleted_at'`).Scan(&deletedAtCount); err != nil {
+		t.Fatalf("query users.deleted_at: %v", err)
+	}
+
+	var jobTableCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM information_schema.tables
+		WHERE table_schema = 'public'
+		  AND table_name = 'account_deletion_jobs'`).Scan(&jobTableCount); err != nil {
+		t.Fatalf("query account_deletion_jobs: %v", err)
+	}
+
+	want := 0
+	if present {
+		want = 1
+	}
+	if deletedAtCount != want {
+		t.Fatalf("users.deleted_at present=%d, want %d", deletedAtCount, want)
+	}
+	if jobTableCount != want {
+		t.Fatalf("account_deletion_jobs present=%d, want %d", jobTableCount, want)
+	}
+	if !present {
+		return
+	}
+
+	var nullable, dataType string
+	if err := pool.QueryRow(ctx, `
+		SELECT is_nullable, data_type
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'users'
+		  AND column_name = 'deleted_at'`).Scan(&nullable, &dataType); err != nil {
+		t.Fatalf("describe users.deleted_at: %v", err)
+	}
+	if nullable != "YES" || dataType != "timestamp with time zone" {
+		t.Fatalf("users.deleted_at = nullable %s type %s, want YES timestamptz", nullable, dataType)
+	}
+
+	var statusCheck int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM pg_constraint
+		WHERE conrelid = 'account_deletion_jobs'::regclass
+		  AND conname = 'account_deletion_jobs_status_check'`).Scan(&statusCheck); err != nil {
+		t.Fatalf("query status check: %v", err)
+	}
+	if statusCheck != 1 {
+		t.Fatal("account_deletion_jobs_status_check missing")
+	}
+
+	var confdeltype string
+	if err := pool.QueryRow(ctx, `
+		SELECT confdeltype::text
+		FROM pg_constraint
+		WHERE conrelid = 'account_deletion_jobs'::regclass
+		  AND contype = 'f'
+		  AND confrelid = 'users'::regclass`).Scan(&confdeltype); err != nil {
+		t.Fatalf("query job FK delete action: %v", err)
+	}
+	if confdeltype != "a" && confdeltype != "r" {
+		t.Fatalf("account_deletion_jobs.user_id confdeltype=%s, want a (NO ACTION) or r (RESTRICT)", confdeltype)
+	}
+}
+
+func assertNoUserFKCascade(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	var cascades int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM pg_constraint
+		WHERE contype = 'f'
+		  AND confrelid = 'users'::regclass
+		  AND confdeltype = 'c'`).Scan(&cascades); err != nil {
+		t.Fatalf("query user FK cascades: %v", err)
+	}
+	if cascades != 0 {
+		t.Fatalf("found %d ON DELETE CASCADE FK(s) referencing users", cascades)
+	}
+}
+
+func assertStatusConstraint(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+
+	var userID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (id, firebase_uid, name, role, created_at)
+		VALUES (gen_random_uuid(), 'migrate-0004-status-check', 'Constraint Probe', 'COACH', now())
+		RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("insert probe user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM account_deletion_jobs WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO account_deletion_jobs (
+			user_id, original_firebase_uid, status, created_at, updated_at
+		) VALUES ($1, 'firebase-uid', 'INVALID', now(), now())`, userID)
+	if err == nil {
+		t.Fatal("invalid job status was accepted")
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO account_deletion_jobs (
+			user_id, original_firebase_uid, status, created_at, updated_at
+		) VALUES ($1, 'firebase-uid', 'PENDING_EXTERNAL', now(), now())`, userID); err != nil {
+		t.Fatalf("valid PENDING_EXTERNAL insert: %v", err)
 	}
 }
 
