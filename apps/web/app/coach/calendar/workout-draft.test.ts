@@ -9,6 +9,7 @@ import {
   extrasForPersistence,
   isDraftContentEmpty,
   loadDraft,
+  parseSessionKind,
   resolveNewWorkoutClick,
   resolveStoredDraft,
   saveDraft,
@@ -44,6 +45,7 @@ function content(overrides: Partial<WorkoutBuilderDraftContent> = {}): WorkoutBu
     exercises: [EXERCISE],
     sourceAthleteId: "athlete-a",
     extraAthleteIds: [],
+    sessionKind: "resume",
     scheduledDate: "2026-08-26",
     editTarget: null,
     ...overrides,
@@ -260,7 +262,87 @@ test("Continue restores the stored draft's original source athlete first", () =>
 });
 
 test("New Workout persist extras exclude the calendar source; selecting only another athlete still requires ≥1 at submit", () => {
-  assert.deepEqual(extrasForPersistence("athlete-cheryl", ["athlete-cheryl", "athlete-colin"]), ["athlete-colin"]);
-  assert.deepEqual(extrasForPersistence("athlete-cheryl", ["athlete-colin"]), ["athlete-colin"]);
+  assert.deepEqual(extrasForPersistence("resume", "athlete-cheryl", ["athlete-cheryl", "athlete-colin"]), ["athlete-colin"]);
+  assert.deepEqual(extrasForPersistence("new", "athlete-cheryl", ["athlete-cheryl", "athlete-colin"]), ["athlete-cheryl", "athlete-colin"]);
+  assert.deepEqual(extrasForPersistence("new", "athlete-cheryl", ["athlete-colin"]), ["athlete-colin"]);
   assert.equal(assignmentIdsForSession("new", "athlete-cheryl", []).length, 0);
+});
+
+test("empty New for B does not require clearing A's stored draft", () => {
+  memory.clear();
+  assert.ok(saveDraft(COACH, content({ sourceAthleteId: "athlete-a", name: "A draft", exercises: [EXERCISE] })));
+  const storedBefore = loadDraft(COACH, CONNECTED);
+  assert.equal(storedBefore?.sourceAthleteId, "athlete-a");
+  assert.equal(storedBefore?.name, "A draft");
+  assert.equal(isDraftContentEmpty({ name: "", exercises: [] }), true);
+  assert.equal(loadDraft(COACH, CONNECTED)?.sourceAthleteId, "athlete-a");
+  assert.equal(loadDraft(COACH, CONNECTED)?.name, "A draft");
+});
+
+test("assigning an existing workout does not need to clear a stored Build draft", () => {
+  memory.clear();
+  assert.ok(saveDraft(COACH, content({ sourceAthleteId: "athlete-a", name: "Keep me" })));
+  assert.equal(loadDraft(COACH, CONNECTED)?.name, "Keep me");
+});
+
+test("persistable Build content for B replaces A's single stored draft", () => {
+  memory.clear();
+  assert.ok(saveDraft(COACH, content({ sourceAthleteId: "athlete-a", name: "A draft" })));
+  assert.ok(saveDraft(COACH, content({
+    sourceAthleteId: "athlete-b",
+    extraAthleteIds: ["athlete-b"],
+    sessionKind: "new",
+    name: "B draft",
+    exercises: [EXERCISE],
+    scheduledDate: "2026-08-30",
+  })));
+  const loaded = loadDraft(COACH, CONNECTED);
+  assert.equal(loaded?.sourceAthleteId, "athlete-b");
+  assert.equal(loaded?.name, "B draft");
+  assert.equal(loaded?.sessionKind, "new");
+  assert.notEqual(loaded?.sourceAthleteId, "athlete-a");
+});
+
+test("New draft that unchecked the calendar athlete restores without silently re-adding them", () => {
+  const restored = resolveStoredDraft(
+    {
+      version: 2,
+      savedAt: "2026-08-27T00:00:00.000Z",
+      ...content({
+        sourceAthleteId: "athlete-b",
+        extraAthleteIds: ["athlete-c"],
+        sessionKind: "new",
+        name: "B without B",
+      }),
+    },
+    CONNECTED,
+  );
+  assert.equal(restored?.sessionKind, "new");
+  assert.deepEqual(restored?.extraAthleteIds, ["athlete-c"]);
+  assert.deepEqual(assignmentIdsForSession("new", restored!.sourceAthleteId, restored!.extraAthleteIds), ["athlete-c"]);
+  assert.equal(assignmentIdsForSession("new", restored!.sourceAthleteId, restored!.extraAthleteIds).includes("athlete-b"), false);
+});
+
+test("legacy drafts without sessionKind restore as resume and keep source locked", () => {
+  const restored = resolveStoredDraft(
+    {
+      version: 2,
+      savedAt: "2026-08-26T00:00:00.000Z",
+      name: "Wednesday Lower",
+      exercises: [EXERCISE],
+      sourceAthleteId: "athlete-a",
+      extraAthleteIds: ["athlete-c"],
+      scheduledDate: "2026-08-26",
+      editTarget: null,
+    },
+    CONNECTED,
+  );
+  assert.equal(parseSessionKind(undefined), "resume");
+  assert.equal(restored?.sessionKind, "resume");
+  assert.deepEqual(assignmentIdsForSession("resume", restored!.sourceAthleteId, restored!.extraAthleteIds), ["athlete-a", "athlete-c"]);
+});
+
+test("same athlete and date still treats + Add Workout as New, never silent Continue", () => {
+  assert.equal(resolveNewWorkoutClick(true), "confirm-replace");
+  assert.equal(draftMatchesCalendar("athlete-a", "2026-08-27", "athlete-a", "2026-08-27"), true);
 });
