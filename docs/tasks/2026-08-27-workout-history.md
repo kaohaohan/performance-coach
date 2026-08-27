@@ -23,7 +23,7 @@
   - `GET /api/v1/scheduled-workouts` returns ascending dates, so the frontend must sort newest first.
   - The summary omits frozen exercises. Deriving an exercise count from the live Workout template could become inaccurate after assignment edits, so History deliberately omits the count.
   - A Not started assignment has no session detail route. Entering `/session/[id]` requires explicit session creation; History must therefore retain an explicit Start Session action and must not create a session from a generic card tap.
-  - All Time still requires the endpoint's mandatory `from`/`to`; the frontend will use the earliest PostgreSQL-supported application date needed by this product (`1970-01-01`) through the Coach's local today.
+  - All Time still requires the endpoint's mandatory `from`/`to`; the frontend will use Go's earliest representable ISO date (`0001-01-01`) through the Coach's local today.
   - The current working tree contains unrelated login, Apple sign-in, local Capacitor screenshot, iOS plist, Next config, and `.cursor/` changes. They are user-owned, remain unstaged, and must not enter task commits.
 - Dependencies / blockers:
   - Existing Coach-only `GET /api/v1/scheduled-workouts?from=&to=&athleteId=`.
@@ -80,10 +80,10 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Existing ScheduledWorkout summary is sufficient; no backend/schema/API change needed. |
 | Phase 1 — Task Doc and canonical definitions | Done | Canonical MVP/UI definitions now make `/coach/workouts` Workout History and preserve Calendar → From saved. |
-| Phase 2 — history helpers and tests | Not Started | |
-| Phase 3 — Workout History UI | Not Started | |
-| Phase 4 — local verification | Not Started | |
-| Phase 5 — task-only commit | Not Started | |
+| Phase 2 — history helpers and tests | Done | 5 focused tests cover inclusive ranges, encoded athlete filter, future exclusion, newest-first grouping, separate assignments, and status labels. |
+| Phase 3 — Workout History UI | Done | Existing builder preserved; History uses athletes + scheduled-workout summaries and explicit Not started session creation. |
+| Phase 4 — local verification | In Progress | Focused lint/typecheck, 5 History tests, 45 Calendar draft/build tests, webpack production build, and read-only local API scenarios pass. Task-only clean-tree full lint/build and visual verification remain. |
+| Phase 5 — task-only commit | In Progress | Unrelated local changes remain unstaged. |
 | Phase 6 — staging deployment and smoke test | Not Started | Production explicitly excluded. |
 
 ## 5. Outcome (filled at completion)
