@@ -16,6 +16,8 @@ import {
   loadDraft,
   resolveNewWorkoutClick,
   saveDraft,
+  shouldClearStoredDraftOnDiscard,
+  shouldWriteStoredDraftOnSave,
   startNewWorkoutActionLabel,
   toggleExtraAthlete,
   toggleSelectedAthlete,
@@ -841,7 +843,7 @@ export default function CoachCalendarPage() {
   }, [draftJustSaved]);
 
   function handleSaveDraft() {
-    if (!coachId) return;
+    if (!coachId || !shouldWriteStoredDraftOnSave({ name: draftName, exercises: draftExercises })) return;
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
     const content = draftContentToSave();
     const savedAt = saveDraft(coachId, content);
@@ -856,9 +858,13 @@ export default function CoachCalendarPage() {
 
   function handleDiscardDraft() {
     if (!coachId) return;
-    if (!window.confirm("Discard this draft? Everything unsaved in the builder will be permanently deleted.")) return;
+    const live = { name: draftName, exercises: draftExercises };
+    const clearStored = shouldClearStoredDraftOnDiscard(live);
+    if (clearStored) {
+      if (!window.confirm("Discard this draft? Everything unsaved in the builder will be permanently deleted.")) return;
+    }
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
-    forgetStoredDraft();
+    if (clearStored) forgetStoredDraft();
     resetBuilderDraft();
     // Defensive: the button is disabled for the whole build transaction
     // (areProgrammingControlsDisabled), so there should be nothing in
@@ -868,6 +874,7 @@ export default function CoachCalendarPage() {
     setExtraAthleteIds([]);
     setDraftStatus("idle");
     setDraftRestoredNotice(false);
+    if (!clearStored) setEditorOpen(false);
   }
 
   async function refetchAssignments() {
@@ -1751,7 +1758,7 @@ export default function CoachCalendarPage() {
                           left, so changing only that line reads as "nothing
                           happened" — it is small, grey, in a corner, and not
                           where the Coach is looking when they click. */}
-                      <button type="button" onClick={handleSaveDraft} disabled={programmingControlsDisabled} className={`min-h-10 rounded-xl border px-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${draftJustSaved ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}>{draftJustSaved ? "Saved ✓" : "Save Draft"}</button>
+                      <button type="button" onClick={handleSaveDraft} disabled={programmingControlsDisabled || !hasDraftContent} className={`min-h-10 rounded-xl border px-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${draftJustSaved ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}>{draftJustSaved ? "Saved ✓" : "Save Draft"}</button>
                       <button type="button" onClick={handleDiscardDraft} disabled={programmingControlsDisabled} className="min-h-10 rounded-xl border border-red-200 px-3 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">Discard Draft</button>
                     </div>
                   </div>

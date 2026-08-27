@@ -345,3 +345,18 @@ export function clearDraft(coachId: string): void {
 export function isDraftContentEmpty(content: Pick<WorkoutBuilderDraftContent, "name" | "exercises">): boolean {
   return content.name.trim() === "" && content.exercises.length === 0;
 }
+
+export type LiveBuilderContent = Pick<WorkoutBuilderDraftContent, "name" | "exercises">;
+
+// Explicit Save must use the same persistable-content rule as autosave. An
+// empty New Workout builder must not overwrite another athlete's stored draft.
+export function shouldWriteStoredDraftOnSave(live: LiveBuilderContent): boolean {
+  return !isDraftContentEmpty(live);
+}
+
+// Discard of persistable live content clears the single stored slot. Discard
+// of an empty New session only resets the transient builder and must leave
+// the stored draft in place.
+export function shouldClearStoredDraftOnDiscard(live: LiveBuilderContent): boolean {
+  return !isDraftContentEmpty(live);
+}

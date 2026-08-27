@@ -44,9 +44,10 @@
 | Tests + lint/tsc/build | Done | |
 | Staging merge of split | Done | `94df6b4` / `47532da` |
 | Keep stored draft on empty New + exact New checkboxes | Done | Follow-up after founder QA |
+| Empty New Save/Discard must not touch stored draft | Done | Save disabled/no-op; Discard resets transient New only |
 
 ## 5. Outcome (filled at completion)
 
 - Final status: Implemented keep-on-empty-New on `fix/calendar-keep-draft-on-empty-new`.
-- Deviations from original Option 3: Start new no longer immediately replaces the stored draft; replacement waits for persistable Build content. New-mode Continue restores exact checkboxes instead of re-adding the calendar athlete.
+- Deviations from original Option 3: Start new no longer immediately replaces the stored draft; replacement waits for persistable Build content. New-mode Continue restores exact checkboxes instead of re-adding the calendar athlete. Empty New Save/Discard cannot overwrite or delete the stored slot.
 - Follow-ups: none.
