@@ -6,6 +6,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { AuthHero } from "@/components/auth-hero";
 
 // normalizeInput mirrors the server's canonical-form normalizer
 // (apps/api/internal/invitecode/code.go Normalize): uppercase, strip
@@ -36,13 +37,10 @@ export default function JoinPage() {
 
   return (
     <main className="min-h-screen bg-stone-100 text-slate-900">
-      <section className="bg-slate-950 px-6 pb-16 pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
-        <div className="mx-auto max-w-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-300">Performance Coach</p>
-          <h1 className="mt-6 text-4xl font-semibold tracking-tight">Join your coach.</h1>
-          <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">Enter the code your coach sent you.</p>
-        </div>
-      </section>
+      <AuthHero padding="pb-16">
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight">Join your coach.</h1>
+        <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">Enter the code your coach sent you.</p>
+      </AuthHero>
 
       <div className="mx-auto -mt-8 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
         <form onSubmit={handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/kaohaohan/performance-coach/apps/api/internal/accountdeletion"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/athlete"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/coachsignup"
@@ -87,6 +88,11 @@ func run(logger *slog.Logger) error {
 	if migrationKnown {
 		bootFields = append(bootFields, "migration_version", migrationVersion)
 	}
+	if cfg.Apple.Enabled() {
+		bootFields = append(bootFields, "apple_token_revoke", "configured")
+	} else {
+		bootFields = append(bootFields, "apple_token_revoke", "unconfigured")
+	}
 	logger.Info("api starting", bootFields...)
 
 	firebaseCtx, firebaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -98,6 +104,17 @@ func run(logger *slog.Logger) error {
 	}
 	authMiddleware := authn.Middleware(verifier, pool)
 	firebaseOnlyMiddleware := authn.FirebaseOnlyMiddleware(verifier)
+	tombstoneRetryMiddleware := authn.TombstoneRetryMiddleware(verifier, pool)
+
+	var appleClient accountdeletion.AppleClient
+	if cfg.Apple.Enabled() {
+		client, err := accountdeletion.NewAppleClient(cfg.Apple)
+		if err != nil {
+			return err
+		}
+		appleClient = client
+	}
+	deletionSvc := accountdeletion.New(pool, appleClient, verifier, time.Now)
 
 	// Preview and redeem are the only publicly (or Firebase-only)
 	// reachable domain routes; both get a per-IP token bucket
@@ -112,6 +129,7 @@ func run(logger *slog.Logger) error {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady(pool))
 	mux.Handle("GET /api/v1/me", authMiddleware(http.HandlerFunc(handleMe)))
+	mux.Handle("DELETE /api/v1/me", tombstoneRetryMiddleware(accountdeletion.HandleDelete(deletionSvc)))
 	mux.Handle("POST /api/v1/coach-signup", firebaseOnlyMiddleware(handleCoachSignup(pool)))
 	mux.Handle("GET /api/v1/athletes", authMiddleware(handleAthletes(pool)))
 	mux.Handle("DELETE /api/v1/athletes/{athleteId}", authMiddleware(handleRemoveAthlete(pool)))
@@ -128,6 +146,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts/{id}", authMiddleware(handleGetScheduledWorkout(pool)))
 	mux.Handle("PUT /api/v1/scheduled-workouts/{id}", authMiddleware(handleUpdateScheduledWorkout(pool)))
+	mux.Handle("DELETE /api/v1/scheduled-workouts/{id}", authMiddleware(handleDeleteScheduledWorkout(pool)))
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
@@ -174,6 +193,14 @@ func run(logger *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	go func() {
+		sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer sweepCancel()
+		if err := deletionSvc.SweepPending(sweepCtx); err != nil {
+			logger.Warn("account deletion pending-external sweep failed", "error", err.Error())
+		}
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -270,6 +297,8 @@ func handleCoachSignup(pool *pgxpool.Pool) http.HandlerFunc {
 			switch {
 			case errors.Is(err, coachsignup.ErrAthleteConflict):
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "firebase account is already registered as an athlete")
+			case errors.Is(err, coachsignup.ErrAccountDeleted):
+				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
@@ -483,6 +512,8 @@ func handleRedeemInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code is not valid")
 			case errors.Is(err, invitecode.ErrCoachCannotRedeem):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "a coach account cannot redeem an invite code")
+			case errors.Is(err, invitecode.ErrAccountDeleted):
+				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
@@ -830,6 +861,41 @@ func handleGetScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(got)
+	}
+}
+
+// handleDeleteScheduledWorkout removes one ScheduledWorkout, delegating
+// authorization, editability, and persistence to scheduledworkout.Delete.
+// Coach only, owner only, and only while no session exists — the only way to
+// undo an accidental assignment (docs/go-backend-api-contract-v0.1.md §3.5).
+// Error mapping mirrors handleGetScheduledWorkout, plus the 409 that
+// handleUpdateScheduledWorkout returns for an already-started workout.
+func handleDeleteScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		if err := scheduledworkout.Delete(r.Context(), pool, user, r.PathValue("id")); err != nil {
+			var validationErr *scheduledworkout.ValidationError
+			switch {
+			case errors.Is(err, scheduledworkout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, scheduledworkout.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "scheduled workout not found")
+			case errors.Is(err, scheduledworkout.ErrSessionStarted):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "this workout has already been started and can no longer be removed")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

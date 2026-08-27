@@ -14,6 +14,14 @@
 // out" — dismissing the account chooser is not a failure, and showing a red
 // alert for it just makes the app look broken.
 export function googleAuthErrorMessage(err: unknown): string | null {
+  // The iOS shell signs in through Google's native sheet rather than a
+  // popup (see lib/native-google-auth.ts), so dismissing it arrives as this
+  // sentinel instead of auth/popup-closed-by-user. Same meaning, same
+  // silence — backing out is not a failure.
+  if ((err as { name?: string })?.name === "NativeGoogleCancelledError") {
+    return null;
+  }
+
   const code = (err as { code?: string })?.code;
   switch (code) {
     case "auth/popup-closed-by-user":

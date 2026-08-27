@@ -442,7 +442,10 @@ func lookupConnectedAthletes(ctx context.Context, tx pgx.Tx, coachID string, ath
 		SELECT u.id, u.name
 		FROM coach_athletes ca
 		JOIN users u ON u.id = ca.athlete_id
-		WHERE ca.coach_id = $1 AND ca.athlete_id = ANY($2)`
+		JOIN users coach ON coach.id = ca.coach_id
+		WHERE ca.coach_id = $1 AND ca.athlete_id = ANY($2)
+		  AND u.deleted_at IS NULL
+		  AND coach.deleted_at IS NULL`
 
 	rows, err := tx.Query(ctx, query, coachID, athleteIDs)
 	if err != nil {
@@ -836,6 +839,90 @@ type updateHeader struct {
 // UPDATE and returns its identity if it exists and belongs to coachID;
 // otherwise ErrNotFound. The lock is held for the rest of the caller's
 // transaction — see Update's doc comment for why that matters.
+// Delete removes one ScheduledWorkout and its frozen prescription snapshot.
+// Coach only, owner only, and only while the athlete has not started training
+// (docs/go-backend-api-contract-v0.1.md §3.5, DELETE /scheduled-workouts/{id}).
+//
+// This is the only way to undo an accidental assignment. It deliberately
+// reuses Update's exact lookup and session checks rather than re-deriving
+// them: the two operations answer the same question ("may this caller still
+// change this one assignment?") and must never drift apart, because a
+// divergence here would mean deleting something Update would have refused.
+//
+// Scope is one row. The reusable Workout template is not touched — it stays a
+// normal Coach-owned template in the Workout Library — and neither is any
+// other athlete's copy of it, nor any other ScheduledWorkout for the same
+// athlete on the same date. Those are separate rows with separate ids.
+func Delete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, scheduledWorkoutID string) error {
+	if caller.Role != "COACH" {
+		return ErrForbidden
+	}
+	if _, err := uuid.Parse(scheduledWorkoutID); err != nil {
+		return &ValidationError{Message: "id must be a valid UUID"}
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("scheduledworkout: begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit succeeds
+
+	// Ownership is in the WHERE clause and the row is locked FOR UPDATE, so a
+	// row belonging to another coach is indistinguishable from one that does
+	// not exist, and a concurrent POST .../session cannot slip in between the
+	// session check below and the delete.
+	if _, err := lookupOwnedScheduledWorkoutForUpdate(ctx, tx, caller.ID, scheduledWorkoutID); err != nil {
+		return err
+	}
+
+	hasSession, err := scheduledWorkoutHasSession(ctx, tx, scheduledWorkoutID)
+	if err != nil {
+		return err
+	}
+	if hasSession {
+		// ACTIVE or COMPLETED alike: real training happened against this
+		// assignment. Deleting it would take the athlete's set logs with it.
+		return ErrSessionStarted
+	}
+
+	// FK order: planned sets reference scheduled_workout_exercises, which
+	// reference scheduled_workouts. The hasSession check above guarantees no
+	// set_logs row references either snapshot table for this scheduled
+	// workout, so these deletes cannot orphan or destroy actual training data.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM scheduled_workout_planned_sets
+		 WHERE scheduled_workout_exercise_id IN (
+		     SELECT id FROM scheduled_workout_exercises WHERE scheduled_workout_id = $1
+		 )`,
+		scheduledWorkoutID,
+	); err != nil {
+		return fmt.Errorf("scheduledworkout: delete planned sets: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM scheduled_workout_exercises WHERE scheduled_workout_id = $1`,
+		scheduledWorkoutID,
+	); err != nil {
+		return fmt.Errorf("scheduledworkout: delete scheduled workout exercises: %w", err)
+	}
+	// coach_id stays in the WHERE clause even though the lock above already
+	// proved ownership: it keeps the destructive statement self-contained.
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM scheduled_workouts WHERE id = $1 AND coach_id = $2`,
+		scheduledWorkoutID, caller.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("scheduledworkout: delete scheduled workout: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("scheduledworkout: commit transaction: %w", err)
+	}
+	return nil
+}
+
 func lookupOwnedScheduledWorkoutForUpdate(ctx context.Context, tx pgx.Tx, coachID, scheduledWorkoutID string) (updateHeader, error) {
 	const query = `
 		SELECT sw.athlete_id, u.name, sw.workout_id, w.name, sw.scheduled_date
@@ -1059,8 +1146,9 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, fr
 }
 
 // isConnected reports whether a coach_athletes row links coachID to
-// athleteID. It does not distinguish "athlete doesn't exist" from "athlete
-// exists but isn't connected" — both are ErrAthleteNotFound to the caller.
+// athleteID (historical access). Tombstoned users still count: Calendar
+// and GET /scheduled-workouts?athleteId= must keep retained history.
+// Active-relationship checks belong in lookupConnectedAthletes.
 func isConnected(ctx context.Context, pool *pgxpool.Pool, coachID, athleteID string) (bool, error) {
 	const query = `SELECT 1 FROM coach_athletes WHERE coach_id = $1 AND athlete_id = $2`
 	var exists int

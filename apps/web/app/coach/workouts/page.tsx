@@ -4,8 +4,20 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import SignOutButton from "@/components/sign-out-button";
+import { AppHeader } from "@/components/app-header";
+import {
+  groupHistory,
+  historyEndpoint,
+  historyStatusLabel,
+  prepareHistory,
+  type HistoryEntry,
+  type HistoryRange,
+  type HistorySession,
+} from "./history";
 
 type Role = "COACH" | "ATHLETE";
+type Athlete = { id: string; name: string; role: "ATHLETE" };
 type Exercise = { id: string; name: string; scope: "SYSTEM" | "PRIVATE" };
 type PrescriptionMode = "REPS" | "TEXT";
 type PlannedUnit = "kg" | "lb";
@@ -66,24 +78,18 @@ function clearDraftOverrideProperty(overrides: DraftSetOverride[], position: num
   return updateDraftOverride(overrides, position, { [property]: undefined });
 }
 
-function planLabel(plan: Plan): string {
-  const defaults = plan.defaults;
-  const prescription = defaults.reps === undefined ? `${plan.setCount} set${plan.setCount === 1 ? "" : "s"} · ${defaults.prescriptionNote ?? ""}` : `${plan.setCount} × ${defaults.reps}`;
-  const details = [prescription];
-  if (defaults.load !== undefined) details.push(`${defaults.load}${defaults.unit ? ` ${defaults.unit}` : ""}`);
-  if (defaults.rpe !== undefined) details.push(`RPE ${defaults.rpe}`);
-  if (plan.overrides.length > 0) details.push(`${plan.overrides.length} custom set${plan.overrides.length === 1 ? "" : "s"}`);
-  return details.filter(Boolean).join(" · ");
-}
-
 export default function CoachWorkoutsPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
   const [role, setRole] = useState<Role | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
-  const [workouts, setWorkouts] = useState<Workout[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
+  const [athletes, setAthletes] = useState<Athlete[] | null>(null);
+  const [athleteError, setAthleteError] = useState<string | null>(null);
+  const [selectedAthleteId, setSelectedAthleteId] = useState("");
+  const [historyRange, setHistoryRange] = useState<HistoryRange>("30");
+  const [history, setHistory] = useState<HistoryEntry[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [startingId, setStartingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [draftExercises, setDraftExercises] = useState<DraftExercise[]>([]);
@@ -96,9 +102,11 @@ export default function CoachWorkoutsPage() {
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const roleRequestId = useRef(0);
-  const workoutRequestId = useRef(0);
+  const athleteRequestId = useRef(0);
+  const historyRequestId = useRef(0);
   const pickerRequestId = useRef(0);
   const saveInFlight = useRef(false);
+  const startingRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
@@ -127,27 +135,51 @@ export default function CoachWorkoutsPage() {
 
   useEffect(() => {
     if (!idToken || role !== "COACH") return;
-    const requestId = ++workoutRequestId.current;
+    const requestId = ++athleteRequestId.current;
     let cancelled = false;
     (async () => {
+      setAthleteError(null);
       try {
-        const result = await apiFetch<Workout[]>(idToken, "/api/v1/workouts");
-        if (!cancelled && requestId === workoutRequestId.current) {
-          setWorkouts(result);
-          setLoadError(null);
+        const result = await apiFetch<Athlete[]>(idToken, "/api/v1/athletes");
+        if (!cancelled && requestId === athleteRequestId.current) {
+          setAthletes(result);
+          setAthleteError(null);
         }
       } catch (error) {
-        if (!cancelled && requestId === workoutRequestId.current) setLoadError(errorMessage(error));
+        if (!cancelled && requestId === athleteRequestId.current) setAthleteError(errorMessage(error));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, reloadKey, role]);
+  }, [idToken, role]);
+
+  useEffect(() => {
+    if (!idToken || role !== "COACH") return;
+    const requestId = ++historyRequestId.current;
+    const requestToday = new Date();
+    const endpoint = historyEndpoint(historyRange, requestToday, selectedAthleteId);
+    let cancelled = false;
+    (async () => {
+      setHistory(null);
+      setHistoryError(null);
+      try {
+        const result = await apiFetch<HistoryEntry[]>(idToken, endpoint);
+        if (!cancelled && requestId === historyRequestId.current) {
+          setHistory(prepareHistory(result, requestToday));
+          setHistoryError(null);
+        }
+      } catch (error) {
+        if (!cancelled && requestId === historyRequestId.current) setHistoryError(errorMessage(error));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [historyRange, idToken, role, selectedAthleteId]);
 
   useEffect(() => {
     if (!idToken || role !== "COACH" || !pickerOpen) return;
     const requestId = ++pickerRequestId.current;
     const trimmedQuery = pickerQuery.trim();
-    const endpoint = trimmedQuery === "" ? "/api/v1/exercises" : `/api/v1/exercises?q=${encodeURIComponent(pickerQuery)}`;
+    if (trimmedQuery === "") return;
+    const endpoint = `/api/v1/exercises?q=${encodeURIComponent(trimmedQuery)}`;
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       (async () => {
@@ -167,7 +199,7 @@ export default function CoachWorkoutsPage() {
           if (!cancelled && requestId === pickerRequestId.current) setPickerLoading(false);
         }
       })();
-    }, trimmedQuery === "" ? 0 : 275);
+    }, 275);
     return () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
@@ -315,13 +347,30 @@ export default function CoachWorkoutsPage() {
       });
       resetDraft();
       setCreating(false);
-      setWorkouts(null);
-      setReloadKey((value) => value + 1);
     } catch (error) {
       setSaveError(errorMessage(error));
     } finally {
       saveInFlight.current = false;
       setSaving(false);
+    }
+  }
+
+  async function handleHistoryAction(entry: HistoryEntry) {
+    if (entry.session !== null) {
+      router.push(`/session/${entry.session.id}`);
+      return;
+    }
+    if (!idToken || startingRef.current !== null) return;
+    startingRef.current = entry.id;
+    setStartingId(entry.id);
+    setHistoryError(null);
+    try {
+      const session = await apiFetch<HistorySession>(idToken, `/api/v1/scheduled-workouts/${entry.id}/session`, { method: "POST" });
+      router.push(`/session/${session.id}`);
+    } catch (error) {
+      setHistoryError(errorMessage(error));
+      startingRef.current = null;
+      setStartingId(null);
     }
   }
 
@@ -332,14 +381,14 @@ export default function CoachWorkoutsPage() {
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
-      <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
-        <div className="mx-auto max-w-3xl">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Performance Coach</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight">{creating ? "Create Workout" : "Workout Library"}</h1>
-          <p className="mt-2 max-w-lg text-sm leading-6 text-slate-300">{creating ? "Build a reusable training template." : "Build reusable training templates."}</p>
-          <button type="button" onClick={() => router.push("/coach/calendar")} disabled={saving} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50">← Coach Calendar</button>
-        </div>
-      </header>
+      <AppHeader
+        maxWidth="max-w-3xl"
+        actions={<SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />}
+      >
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">{creating ? "Create Workout" : "Workout History"}</h1>
+        <p className="mt-2 max-w-lg text-sm leading-6 text-slate-300">{creating ? "Build a reusable training template." : "Review past workouts across athletes."}</p>
+        <button type="button" onClick={() => router.push("/coach/calendar")} disabled={saving} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50">← Coach Calendar</button>
+      </AppHeader>
 
       <div className="mx-auto -mt-3 flex max-w-3xl flex-col gap-6 px-4">
         {roleError && <Notice>{roleError}</Notice>}
@@ -374,18 +423,118 @@ export default function CoachWorkoutsPage() {
               <button type="button" onClick={cancelCreate} disabled={saving} className="min-h-14 rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-900 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
             </div>
           </form>
-        ) : <WorkoutLibrary workouts={workouts} loadError={loadError} onCreate={startCreate} />)}
+        ) : <WorkoutHistory
+          athletes={athletes}
+          athleteError={athleteError}
+          selectedAthleteId={selectedAthleteId}
+          historyRange={historyRange}
+          history={history}
+          historyError={historyError}
+          startingId={startingId}
+          onAthleteChange={setSelectedAthleteId}
+          onRangeChange={setHistoryRange}
+          onHistoryAction={handleHistoryAction}
+          onCreate={startCreate}
+        />)}
       </div>
     </main>
   );
 }
 
-function WorkoutLibrary({ workouts, loadError, onCreate }: { workouts: Workout[] | null; loadError: string | null; onCreate: () => void }) {
+function WorkoutHistory({
+  athletes,
+  athleteError,
+  selectedAthleteId,
+  historyRange,
+  history,
+  historyError,
+  startingId,
+  onAthleteChange,
+  onRangeChange,
+  onHistoryAction,
+  onCreate,
+}: {
+  athletes: Athlete[] | null;
+  athleteError: string | null;
+  selectedAthleteId: string;
+  historyRange: HistoryRange;
+  history: HistoryEntry[] | null;
+  historyError: string | null;
+  startingId: string | null;
+  onAthleteChange: (athleteId: string) => void;
+  onRangeChange: (range: HistoryRange) => void;
+  onHistoryAction: (entry: HistoryEntry) => void;
+  onCreate: () => void;
+}) {
+  const groups = history === null ? [] : groupHistory(history);
   return <>
-    <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5"><button type="button" onClick={onCreate} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">+ Create Workout</button></section>
-    {loadError && <Notice>{loadError}</Notice>}
-    {workouts === null ? <LoadingCard label="Loading workouts…" /> : workouts.length === 0 ? <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5"><h2 className="text-xl font-semibold tracking-tight">No workouts yet.</h2><p className="mt-2 text-sm leading-6 text-slate-500">Create your first reusable training template.</p><button type="button" onClick={onCreate} className="mt-4 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700">Create Workout</button></section> : <section><div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Workouts</p></div><ul className="grid gap-3">{workouts.map((workout) => <li key={workout.id} className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5"><h2 className="text-xl font-semibold tracking-tight">{workout.name}</h2><p className="mt-1 text-sm font-medium text-slate-500">{workout.exercises.length} exercise{workout.exercises.length === 1 ? "" : "s"}</p><ul className="mt-4 grid gap-2 border-t border-slate-100 pt-4">{workout.exercises.map((exercise) => <li key={exercise.workoutExerciseId} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm"><span className="font-semibold text-slate-800">{exercise.name}</span><span className="text-slate-500">{planLabel(exercise.plan)}</span></li>)}</ul></li>)}</ul></section>}
+    <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
+      <button type="button" onClick={onCreate} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">+ Create Workout</button>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <label className="min-w-0">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Athlete</span>
+          <select value={selectedAthleteId} onChange={(event) => onAthleteChange(event.target.value)} disabled={athletes === null} className="min-h-12 w-full min-w-0 rounded-xl border border-slate-200 bg-stone-50 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60">
+            <option value="">All Athletes</option>
+            {athletes?.map((athlete) => <option key={athlete.id} value={athlete.id}>{athlete.name}</option>)}
+          </select>
+        </label>
+        <label className="min-w-0">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Date range</span>
+          <select value={historyRange} onChange={(event) => onRangeChange(event.target.value as HistoryRange)} className="min-h-12 w-full min-w-0 rounded-xl border border-slate-200 bg-stone-50 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15">
+            <option value="7">Last 7 Days</option>
+            <option value="30">Last 30 Days</option>
+            <option value="90">Last 90 Days</option>
+            <option value="all">All Time</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    {athleteError && <Notice>{athleteError}</Notice>}
+    {historyError && <Notice>{historyError}</Notice>}
+    {history === null ? <LoadingCard label="Loading workout history…" /> : groups.length === 0 ? (
+      <section className="rounded-3xl border border-dashed border-slate-200 bg-stone-50 px-5 py-5"><p className="font-semibold">{selectedAthleteId === "" ? "No workout history yet." : "No workouts found for this athlete."}</p></section>
+    ) : (
+      <div className="grid gap-6">
+        {groups.map((group) => <HistoryDateGroup key={group.date} date={group.date} entries={group.entries} startingId={startingId} onAction={onHistoryAction} />)}
+      </div>
+    )}
   </>;
+}
+
+function displayHistoryDate(date: string): string {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00`)).toUpperCase();
+}
+
+function historyStatusClass(session: HistorySession | null): string {
+  if (session?.status === "COMPLETED") return "bg-emerald-50 text-emerald-700 ring-emerald-600/20";
+  if (session?.status === "ACTIVE") return "bg-teal-50 text-teal-700 ring-teal-600/20";
+  return "bg-slate-100 text-slate-600 ring-slate-500/10";
+}
+
+function HistoryDateGroup({ date, entries, startingId, onAction }: { date: string; entries: HistoryEntry[]; startingId: string | null; onAction: (entry: HistoryEntry) => void }) {
+  return <section aria-labelledby={`history-${date}`}>
+    <h2 id={`history-${date}`} className="mb-3 px-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{displayHistoryDate(date)}</h2>
+    <ul className="grid gap-3">
+      {entries.map((entry) => {
+        const actionLabel = entry.session === null ? "Start Session" : entry.session.status === "ACTIVE" ? "Resume" : "Review";
+        const starting = startingId === entry.id;
+        return <li key={entry.id} className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="break-words text-sm font-semibold text-slate-500">{entry.athlete.name}</p>
+              <h3 className="mt-1 break-words text-xl font-semibold tracking-tight">{entry.workout.name}</h3>
+            </div>
+            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${historyStatusClass(entry.session)}`}>{historyStatusLabel(entry.session)}</span>
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <time dateTime={entry.scheduledDate} className="text-sm font-medium text-slate-500">{displayHistoryDate(entry.scheduledDate)}</time>
+            <button type="button" onClick={() => onAction(entry)} disabled={startingId !== null} className="min-h-11 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">{starting ? "Starting…" : actionLabel}</button>
+          </div>
+        </li>;
+      })}
+    </ul>
+  </section>;
 }
 
 function DraftExerciseCard({ item, index, total, errors, saving, onChange, onSetCountChange, onMove, onRemove }: { item: DraftExercise; index: number; total: number; errors?: FieldErrors["items"][number]; saving: boolean; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void }) {
@@ -428,9 +577,13 @@ function DraftExerciseCard({ item, index, total, errors, saving, onChange, onSet
 }
 
 function ExercisePicker({ query, exercises, loading, error, selectedIds, onQueryChange, onAdd, onClose, onOpenLibrary }: { query: string; exercises: Exercise[] | null; loading: boolean; error: string | null; selectedIds: Set<string>; onQueryChange: (value: string) => void; onAdd: (exercise: Exercise) => void; onClose: () => void; onOpenLibrary: () => void }) {
-  const system = exercises?.filter((exercise) => exercise.scope === "SYSTEM") ?? [];
-  const privateExercises = exercises?.filter((exercise) => exercise.scope === "PRIVATE") ?? [];
-  return <div><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">Add Exercise</p><button type="button" onClick={onClose} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100">Close</button></div><label className="mt-3 block"><span className="sr-only">Search exercises</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search exercises…" autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" /></label>{error && <FieldError>{error}</FieldError>}{loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">Loading exercises…</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">No exercises found.</p><p className="mt-1 text-sm text-slate-500">Can&apos;t find the movement you need?</p><button type="button" onClick={onOpenLibrary} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700">Open Exercise Library</button></div> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title="System exercises" exercises={system} selectedIds={selectedIds} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title="My exercises" exercises={privateExercises} selectedIds={selectedIds} onAdd={onAdd} />}{loading && <p className="text-sm font-medium text-slate-500">Updating exercises…</p>}</div>}</div>;
+  const availableExercises = exercises?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
+  const visibleExercises = availableExercises.slice(0, 8);
+  const system = visibleExercises.filter((exercise) => exercise.scope === "SYSTEM");
+  const privateExercises = visibleExercises.filter((exercise) => exercise.scope === "PRIVATE");
+  const hiddenCount = availableExercises.length - visibleExercises.length;
+  const trimmedQuery = query.trim();
+  return <div><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">Add Exercise</p><button type="button" onClick={onClose} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100">Close</button></div><label className="mt-3 block"><span className="sr-only">Search exercises</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search exercises…" autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">Start typing to find an exercise.</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">Loading exercises…</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">No exercises found.</p><p className="mt-1 text-sm text-slate-500">Can&apos;t find the movement you need?</p><button type="button" onClick={onOpenLibrary} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700">Open Exercise Library</button></div> : exercises !== null && availableExercises.length === 0 ? <p className="mt-4 text-sm font-medium text-slate-500">All matching exercises are already added.</p> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title="System exercises" exercises={system} selectedIds={selectedIds} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title="My exercises" exercises={privateExercises} selectedIds={selectedIds} onAdd={onAdd} />}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{hiddenCount} more result{hiddenCount === 1 ? "" : "s"}. Keep typing to narrow the list.</p>}{loading && <p className="text-sm font-medium text-slate-500">Updating exercises…</p>}</div>}</div>;
 }
 
 function PickerGroup({ title, exercises, selectedIds, onAdd }: { title: string; exercises: Exercise[]; selectedIds: Set<string>; onAdd: (exercise: Exercise) => void }) {

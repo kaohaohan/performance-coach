@@ -16,6 +16,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/exercise"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 )
 
@@ -216,6 +217,110 @@ func TestWorkoutCreationReusesPrivateExercise(t *testing.T) {
 	}
 }
 
+// TestExerciseLibraryListRanksUsageAboveAlphabetical verifies that an
+// exercise this coach has actually scheduled for an athlete ranks above one
+// they have never used, even when the unused exercise sorts first
+// alphabetically — falsifying pure-alphabetical ordering within a scope
+// block. System-before-private grouping must still hold regardless of
+// usage.
+func TestExerciseLibraryListRanksUsageAboveAlphabetical(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	athlete := createUser(t, "ATHLETE")
+	if _, err := testPool.Exec(ctx, `INSERT INTO coach_athletes (coach_id, athlete_id) VALUES ($1, $2)`, coach.ID, athlete.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	insertExercise(t, ctx, testPrefix+" System Fixture", nil)
+	unusedName := testPrefix + " Aardvark Stretch"
+	usedName := testPrefix + " Zebra Deadlift"
+	if _, err := exercise.CreatePrivate(ctx, testPool, coach, unusedName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exercise.CreatePrivate(ctx, testPool, coach, usedName); err != nil {
+		t.Fatal(err)
+	}
+
+	reps := 5
+	createdWorkout, err := workout.Create(ctx, testPool, coach, workout.CreateInput{
+		Name: testPrefix + " Usage Workout",
+		Exercises: []workout.CreateExerciseInput{{
+			Name: usedName,
+			Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduledworkout.Create(ctx, testPool, coach, scheduledworkout.CreateInput{
+		WorkoutID: createdWorkout.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-16",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := exercise.ListForCoach(ctx, testPool, coach, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Other tests in this binary share testPrefix and are not cleaned up
+	// between tests (only once, in TestMain), so index-of-name lookups are
+	// used here rather than fixed positions/counts — this test only asserts
+	// the relative order of the exercises it itself created.
+	fixtures := exercisesWithPrefix(listed)
+	usedIndex, unusedIndex := indexOfName(fixtures, usedName), indexOfName(fixtures, unusedName)
+	if usedIndex == -1 || unusedIndex == -1 {
+		t.Fatalf("expected both %q and %q in %#v", usedName, unusedName, fixtures)
+	}
+	if fixtures[usedIndex].Scope != "PRIVATE" || fixtures[unusedIndex].Scope != "PRIVATE" {
+		t.Fatalf("expected both fixtures PRIVATE, got %#v", fixtures)
+	}
+	if usedIndex >= unusedIndex {
+		t.Fatalf("private ordering = %#v, want used exercise %q before unused, alphabetically-earlier exercise %q", fixtures, usedName, unusedName)
+	}
+	systemIndex := indexOfName(fixtures, testPrefix+" System Fixture")
+	if systemIndex == -1 || systemIndex > usedIndex {
+		t.Fatalf("expected the SYSTEM fixture to sort before any PRIVATE exercise regardless of usage: %#v", fixtures)
+	}
+}
+
+func indexOfName(exercises []exercise.Exercise, name string) int {
+	for i, item := range exercises {
+		if item.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestExerciseLibrarySearchRanksEarlierMatchAboveLaterMatch verifies that,
+// under a search query, a name where the query appears earlier ranks above
+// one where it appears later — relevance, not just alphabetical order.
+func TestExerciseLibrarySearchRanksEarlierMatchAboveLaterMatch(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+
+	earlyMatch := testPrefix + " Squat Back"
+	lateMatch := testPrefix + " A Squat Variation"
+	if _, err := exercise.CreatePrivate(ctx, testPool, coach, earlyMatch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exercise.CreatePrivate(ctx, testPool, coach, lateMatch); err != nil {
+		t.Fatal(err)
+	}
+
+	matched, err := exercise.ListForCoach(ctx, testPool, coach, "Squat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures := exercisesWithPrefix(matched)
+	earlyIndex, lateIndex := indexOfName(fixtures, earlyMatch), indexOfName(fixtures, lateMatch)
+	if earlyIndex == -1 || lateIndex == -1 || earlyIndex >= lateIndex {
+		t.Fatalf("search ordering = %#v, want %q before %q", fixtures, earlyMatch, lateMatch)
+	}
+}
+
 func requireIntegrationDB(t *testing.T) {
 	t.Helper()
 	if skipReason != "" {
@@ -272,9 +377,16 @@ func cleanupTestRows(ctx context.Context) {
 		return
 	}
 	pattern := testPrefix + "%"
+	_, _ = testPool.Exec(ctx, `DELETE FROM set_logs WHERE session_id IN (SELECT id FROM workout_sessions WHERE scheduled_workout_id IN (SELECT id FROM scheduled_workouts WHERE workout_id IN (SELECT id FROM workouts WHERE name LIKE $1)))`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM workout_sessions WHERE scheduled_workout_id IN (SELECT id FROM scheduled_workouts WHERE workout_id IN (SELECT id FROM workouts WHERE name LIKE $1))`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM scheduled_workout_planned_sets WHERE scheduled_workout_exercise_id IN (SELECT swe.id FROM scheduled_workout_exercises swe JOIN scheduled_workouts sw ON sw.id = swe.scheduled_workout_id JOIN workouts w ON w.id = sw.workout_id WHERE w.name LIKE $1)`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM scheduled_workout_exercises WHERE scheduled_workout_id IN (SELECT sw.id FROM scheduled_workouts sw JOIN workouts w ON w.id = sw.workout_id WHERE w.name LIKE $1)`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM scheduled_workouts WHERE workout_id IN (SELECT id FROM workouts WHERE name LIKE $1)`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM workout_exercise_set_overrides WHERE workout_exercise_id IN (SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id WHERE w.name LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE name LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM workouts WHERE name LIKE $1`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM exercises WHERE name LIKE $1`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM coach_athletes WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1) OR athlete_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM users WHERE firebase_uid LIKE $1`, pattern)
 }
 

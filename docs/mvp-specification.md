@@ -53,11 +53,11 @@ The MVP follows this principle:
 
 ### **Navigation Principle**
 
-**Calendar (`/coach/calendar`) is the PRIMARY Coach programming workspace on Web/Desktop.** From a selected date and one-or-more selected Athletes, the Coach has two first-class paths: choose an existing saved Workout and assign it, or build a Workout inline and Build & Assign it. The Coach is not required to visit Workout Library before scheduling training. Client management (`/coach/clients`), Workout Library (`/coach/workouts`), and Exercise Library (`/coach/exercises`) are SECONDARY tools, not separate primary destinations. There is no Coach dashboard as a landing page.
+**Calendar (`/coach/calendar`) is the PRIMARY Coach programming workspace on Web/Desktop.** From a selected date and one-or-more selected Athletes, the Coach has two first-class paths: choose an existing saved Workout and assign it, or build a Workout inline and Build & Assign it. The Coach is not required to visit a separate template library before scheduling training. Client management (`/coach/clients`), Workout History (`/coach/workouts`), and Exercise Library (`/coach/exercises`) are SECONDARY tools, not separate primary destinations. There is no Coach dashboard as a landing page.
 
-**Workout Library (`/coach/workouts`) is the SECONDARY reusable-template tool.** Coaches can create saved Workout templates in advance, view saved Workout templates, and later reuse them from Calendar. It is optional pre-programming, not a prerequisite for Calendar scheduling.
+**Workout History (`/coach/workouts`) is the SECONDARY cross-athlete review tool.** It lists the Coach's past and current-day ScheduledWorkout assignments separately per Athlete, including Not started, In progress, and Done outcomes. It excludes future assignments and supports Athlete and date-range filtering. Reusable saved Workouts remain available through Calendar → Create Workout → From saved; the History page keeps `+ Create Workout` as a direct entry into the existing saved-template builder but does not duplicate a standalone template list.
 
-**Exercise Library (`/coach/exercises`) is the SECONDARY Exercise-management tool and canonical V0.1 surface for creating private Exercises.** The Calendar inline Workout Builder searches existing Exercises through `GET /api/v1/exercises?q=`. If a Coach cannot find a movement, they open Exercise Library; V0.1 does not create Exercises inline from Calendar.
+**Exercise Library (`/coach/exercises`) is the SECONDARY Exercise-management tool for private Exercises.** The Calendar inline Workout Builder searches existing Exercises through `GET /api/v1/exercises?q=` and may create one missing private Exercise through the existing Exercise API without leaving the programming flow. Exercise Library remains the secondary surface for browsing and managing existing Exercises.
 
 Route/navigation detail lives in `docs/frontend-ui-spec.md`; this document defines product behavior only.
 
@@ -98,6 +98,22 @@ Unknown, expired, and revoked codes are all reported the same way: the join flow
 
 A Coach can remove an Athlete, which ends the coaching relationship only. The Athlete keeps their account, their login, and their training history, and may be invited again later.
 
+### **Account deletion (App Review 5.1.1(v))**
+
+A Coach or Athlete can delete their own account from inside the app (Settings / Account). Deletion is not deactivation, not an email request, and not an external web form as the only method.
+
+Deletion permanently ends that person's ability to sign in, and removes or anonymizes their personal account identity (`Deleted Coach` / `Deleted Athlete`). It must not corrupt the other party's legitimate historical training record:
+
+- Performed sessions, set logs, and frozen snapshots stay.
+- Unstarted future assignments are removed.
+- Invite codes belonging to a deleting Coach are deleted.
+- Coach-owned workouts and private exercises that history does not need are deleted; parent rows required by remaining FKs stay.
+- An Athlete's ACTIVE session is left `ACTIVE` (mutation-blocked). The product does not fabricate `COMPLETED`. A future `ABANDONED` status is a separate decision.
+- Calendar keeps historical rows for a deleted Athlete, labeled `Deleted Athlete`.
+- Sign in with Apple accounts revoke Apple tokens as part of deletion. Re-auth must prove the **same** currently signed-in Firebase user (`reauthenticateWithCredential`).
+
+A later sign-up with a new Firebase user creates a new empty account. It never restores the tombstone. A still-pending tombstone that still holds the old Firebase UID returns `409 ACCOUNT_DELETED` on coach-signup and invite redeem.
+
 ### **Acceptance Criteria**
 
 - A Coach can register without operator involvement.
@@ -112,10 +128,13 @@ A Coach can remove an Athlete, which ends the coaching relationship only. The At
 - Unknown, expired, and revoked codes are indistinguishable to the Athlete.
 - A Coach sees and manages only their own codes and their own Athletes.
 - Removing an Athlete ends the relationship and preserves the Athlete's account and training history.
+- A Coach or Athlete can delete their own account in-app. After deletion they cannot sign in as that account, their display name is `Deleted Coach` or `Deleted Athlete`, and the counterparty still sees performed training history.
+- Deleting an Athlete does not mark their ACTIVE sessions COMPLETED.
+- A tombstoned Firebase identity cannot recreate the old backend user via coach-signup or invite redeem (`409 ACCOUNT_DELETED`).
 
 ### **Not in V0.1**
 
-- Google / Apple sign-in — email and password only.
+- ~~Google / Apple sign-in~~ — Google sign-in is implemented (web popup + native iOS), and Sign in with Apple is implemented on iOS for App Review Guideline 4.8 (see `docs/tasks/2026-08-25-ios-apple-signin.md`). No other social providers.
 - A "Pending" Athlete state.
 - Single-use codes, bulk upload, SMS or email delivery, Groups / Teams.
 - Assigning workouts during onboarding.
@@ -124,17 +143,17 @@ A Coach can remove an Athlete, which ends the coaching relationship only. The At
 
 # **Exercise Library — Coach Programming Support** (`/coach/exercises`)
 
-The Coach may maintain a small Exercise Library used by Calendar and Workout Library programming. This is secondary tooling around the existing `Exercise` domain; it does not change the primary MVP loop or introduce a new domain object.
+The Coach may maintain a small Exercise Library used by Calendar and saved Workout programming. This is secondary tooling around the existing `Exercise` domain; it does not change the primary MVP loop or introduce a new domain object.
 
 ## **Acceptance Criteria**
 
 - Coach can open the Exercise Library and see SYSTEM exercises plus MY EXERCISES (the caller Coach's private exercises).
 - Coach can search visible exercises by name and create one private Exercise by name.
-- A newly created private Exercise becomes available in the Calendar inline Workout Builder and Workout Library builder.
+- A newly created private Exercise becomes available in the Calendar inline Workout Builder and the saved Workout builder reached from Workout History.
 - Zero SYSTEM exercises does not block listing or creating private Exercises.
 - Another Coach's private Exercise is invisible.
 - Athlete cannot manage the Exercise Library.
-- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, inline Exercise creation from Calendar, and System exercise seed implementation remain out of scope for this slice.
+- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, and System exercise seed implementation remain out of scope for this slice.
 
 ---
 
@@ -156,7 +175,7 @@ Inline Build
 Calendar → date → Athlete(s) → Build Workout → exercises / prescription → Build & Assign
 ```
 
-The Coach is not required to visit Workout Library before either path.
+The Coach is not required to visit Workout History before either path.
 
 Example:
 
@@ -177,7 +196,7 @@ For the existing Workout path, the selected saved `Workout` is scheduled to each
 
 For the inline Build path, V0.1 persists two things in order:
 
-1. The frontend validates one Workout draft and calls `POST /api/v1/workouts` once. The returned `workout.id` is a normal saved Coach-owned `Workout` template: it appears in Workout Library and later in Choose Existing Workout. There is no ephemeral, scheduled-only, or one-off Workout domain in V0.1.
+1. The frontend validates one Workout draft and calls `POST /api/v1/workouts` once. The returned `workout.id` is a normal saved Coach-owned `Workout` template: it remains available in Calendar → From saved. There is no ephemeral, scheduled-only, or one-off Workout domain in V0.1.
 2. The frontend calls `POST /api/v1/scheduled-workouts` once with that `workout.id`, all selected `athleteIds`, and the selected `scheduledDate`. The batch creates one `ScheduledWorkout` plus a frozen `ScheduledWorkoutExercise` prescription snapshot for each Athlete.
 
 Changing the saved Workout template later must not alter any previously scheduled prescription.
@@ -209,17 +228,20 @@ Refreshing the page does not remove the workout or the schedule.
 
 ## **Acceptance Criteria**
 
-- Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout Library.
+- Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout History.
 - Existing Workout path: Coach can choose a saved Workout and assign it to all selected Athletes.
-- Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions. If an Exercise is unavailable, Coach opens Exercise Library; V0.1 does not create Exercises inline from Calendar.
+- Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`, or create one missing private Exercise through `POST /api/v1/exercises`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
-- Workout persists in the workout library after refresh.
+- Workout persists and remains available in Calendar → From saved after refresh.
 - ScheduledWorkout persists on the Calendar after refresh.
 - Each Athlete receives an independent frozen ScheduledWorkoutExercise snapshot; later template edits do not alter previously scheduled prescriptions.
 - Workout belongs to the Coach who created it.
 - Coach cannot schedule a workout to an unrelated (unconnected) athlete.
 - Athlete cannot create, edit, or schedule Coach workouts.
-- Workout Library (`/coach/workouts`) remains the secondary reusable-template tool for creating templates in advance, viewing saved templates, and later reusing them from Calendar; it is not a prerequisite for Calendar scheduling.
+- **Removing a mistaken assignment:** a scheduled workout that has not been started can be removed from the Calendar day card, which calls `DELETE /api/v1/scheduled-workouts/{id}`. This is the only way to undo an accidental assignment. It removes exactly that one assignment: the reusable Workout template stays available through From saved, other Athletes scheduled from the same template are unaffected, and other workouts on the same Athlete's same date are unaffected. Once a WorkoutSession exists (`ACTIVE` or `COMPLETED`) the assignment is permanent and removal is refused with `409 CONFLICT`, because deleting it would destroy training the Athlete actually performed.
+- **Discard Draft is not an undo.** The inline Build draft lives only in the Coach's browser (localStorage) until Build & Assign; Discard Draft clears that local draft and never issues a request, so it cannot remove — and has never created — a persisted ScheduledWorkout. Removing an already-assigned workout is the Remove action above.
+- A successful assignment reports what was assigned (workout name, date, and how many Athletes) outside the builder, since Build & Assign closes the builder on success.
+- Workout History (`/coach/workouts`) remains the secondary cross-athlete review tool. It shows one entry per past or current-day Athlete assignment, supports Athlete and date-range filters, and includes Not started, In progress, and Done statuses. Saved templates remain reusable through Calendar → From saved, and `+ Create Workout` remains available on History.
 - Full workout creation on mobile is not required.
 - **Partial failure / retry:** `POST /api/v1/workouts` and `POST /api/v1/scheduled-workouts` are separate operations and are not atomic together. If Workout creation succeeds but scheduling fails, frontend preserves the created `workout.id`, selected date, selected Athletes, and builder state; reports “Workout was created, but it was not assigned”; and offers an explicit retry-assignment action. Retry calls only `POST /api/v1/scheduled-workouts` with the existing `workout.id`, never `POST /api/v1/workouts` again. Frontend must not blindly auto-retry after an ambiguous network failure: scheduled-workouts has no idempotency key and duplicate scheduling is structurally possible, so Coach explicitly retries after reviewing current Calendar state.
 - **Prescription and programming scope:** V0.1 supports the planned-set semantics defined below: ordered planned positions, a uniform shorthand/default, individual overrides, planned reps or text prescription, planned load with one unit per WorkoutExercise, and planned RPE. Template authoring stores defaults plus sparse overrides; scheduling stores fully resolved frozen planned-set rows; normal SetLogs explicitly associate with a frozen planned set. Percentages, velocity, tempo, rest prescription, supersets, circuits, arbitrary custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture remain deferred.
@@ -242,7 +264,7 @@ Calendar
 → Build & Assign
 ```
 
-Workout Library remains the secondary reusable-template workflow. This behavior must not be moved out of Calendar.
+Saved Workout selection remains part of the Calendar workflow through From saved. Workout History is a read-only view over ScheduledWorkout and WorkoutSession data and must not replace Calendar programming behavior.
 
 For each prescribed exercise:
 

@@ -17,33 +17,16 @@ function prescriptionSummary(exercise: WorkoutExercise): string {
   return `${setCount} set${setCount === 1 ? "" : "s"}`;
 }
 
-// plannedTotals sums sets and reps across every workout scheduled that day.
-//
-// The reference UI's footer reads "S 17 R 0 V 0", where R and V are what the
-// athlete actually completed — 0 until they train. The coach list endpoint
-// carries no set logs, so these are PLANNED totals instead. Volume is omitted
-// entirely: it needs load, and per-exercise kg/lb units cannot be summed into
-// one honest number.
-function plannedTotals(exercises: WorkoutExercise[]): { sets: number; reps: number } {
-  return exercises.reduce(
-    (totals, exercise) => {
-      const { setCount, defaults, overrides } = exercise.plan;
-      const overrideByPosition = new Map(overrides.map((override) => [override.position, override]));
-      let reps = 0;
-      for (let position = 1; position <= setCount; position += 1) {
-        const effective = overrideByPosition.get(position)?.reps ?? defaults.reps;
-        if (effective !== undefined) reps += effective;
-      }
-      return { sets: totals.sets + setCount, reps: totals.reps + reps };
-    },
-    { sets: 0, reps: 0 },
-  );
+function statusLabel(session: Session | null): string {
+  if (session?.status === "COMPLETED") return "Done";
+  if (session?.status === "ACTIVE") return "In progress";
+  return "Not started";
 }
 
-function statusDotClass(session: Session | null): string {
-  if (session?.status === "COMPLETED") return "bg-emerald-500";
-  if (session?.status === "ACTIVE") return "bg-teal-500";
-  return "border border-slate-300";
+function statusClass(session: Session | null): string {
+  if (session?.status === "COMPLETED") return "bg-emerald-50 text-emerald-700 ring-emerald-600/20";
+  if (session?.status === "ACTIVE") return "bg-teal-50 text-teal-700 ring-teal-600/20";
+  return "bg-slate-100 text-slate-600 ring-slate-500/10";
 }
 
 export default function DayCard({
@@ -54,10 +37,9 @@ export default function DayCard({
   assignments,
   workoutsById,
   disabled,
-  hasDraftContent,
   onSelect,
   onAddWorkout,
-  onCopy,
+  onDuplicate,
 }: {
   date: string;
   // The day currently marked selected (highlighted with a stronger ring).
@@ -74,14 +56,9 @@ export default function DayCard({
   assignments: ScheduledWorkoutSummary[];
   workoutsById: Map<string, Workout>;
   disabled: boolean;
-  // Mirrors the Day view's own "+ Add Workout" / "Resume draft" button: an
-  // open Build draft is global (one at a time, see page.tsx), not per-day,
-  // so every card shows the same relabel regardless of which day it is —
-  // clicking any of them resumes that one draft, never starts a second.
-  hasDraftContent: boolean;
   onSelect: (date: string) => void;
   onAddWorkout: (date: string) => void;
-  onCopy?: (date: string) => void;
+  onDuplicate?: (date: string) => void;
 }) {
   const isToday = date === todayLocalISODate();
   const isSelected = date === selectedDate;
@@ -92,8 +69,6 @@ export default function DayCard({
   const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(new Date(`${date}T00:00:00`));
   const heading = density === "week" ? `${weekday.toUpperCase()} ${dayNumber}` : `${weekday.toUpperCase()}, ${monthShort.toUpperCase()} ${dayNumber}`;
 
-  const exercises = assignments.flatMap((assignment) => workoutsById.get(assignment.workout.id)?.exercises ?? []);
-  const totals = plannedTotals(exercises);
   const hasTraining = assignments.length > 0;
 
   return (
@@ -115,13 +90,12 @@ export default function DayCard({
           {heading}
         </button>
         <div className="flex shrink-0 items-center gap-1">
-          <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${statusDotClass(assignments[0]?.session ?? null)}`} />
-          {onCopy !== undefined && <button
+          {onDuplicate !== undefined && <button
             type="button"
-            onClick={() => onCopy(date)}
+            onClick={() => onDuplicate(date)}
             disabled={disabled || !hasTraining}
-            aria-label={`Copy training from ${date}`}
-            title="Copy Workout"
+            aria-label={`Duplicate workouts from ${date}`}
+            title="Duplicate workouts"
             className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
           >
             <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
@@ -141,7 +115,10 @@ export default function DayCard({
               const workout = workoutsById.get(assignment.workout.id);
               return (
                 <li key={assignment.id}>
-                  <p className="truncate px-1 text-xs font-bold text-slate-800">{assignment.workout.name}</p>
+                  <div className="flex items-start justify-between gap-2 px-1">
+                    <p className="min-w-0 truncate text-xs font-bold text-slate-800">{assignment.workout.name}</p>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide ring-1 ${statusClass(assignment.session)}`}>{statusLabel(assignment.session)}</span>
+                  </div>
                   {workout === undefined ? (
                     <p className="px-1 pt-0.5 text-[11px] font-medium text-slate-400">Prescription unavailable</p>
                   ) : (
@@ -168,17 +145,9 @@ export default function DayCard({
         className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-lg px-1 py-1.5 text-left text-xs font-bold text-teal-700 transition hover:bg-teal-50 disabled:opacity-50 disabled:hover:bg-transparent"
       >
         <span aria-hidden="true" className="grid h-5 w-5 place-items-center rounded bg-slate-900 text-sm leading-none text-white">+</span>
-        {hasDraftContent ? "Resume draft" : "Add Workout"}
+        Add Workout
       </button>
 
-      <div className="flex justify-center gap-3 border-t border-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-400">
-        <span>
-          S <span className="text-slate-600">{totals.sets}</span>
-        </span>
-        <span>
-          R <span className="text-slate-600">{totals.reps}</span>
-        </span>
-      </div>
     </article>
   );
 }
