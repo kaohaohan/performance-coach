@@ -82,8 +82,8 @@
 | Phase 1 — Task Doc and canonical definitions | Done | Canonical MVP/UI definitions now make `/coach/workouts` Workout History and preserve Calendar → From saved. |
 | Phase 2 — history helpers and tests | Done | 5 focused tests cover inclusive ranges, encoded athlete filter, future exclusion, newest-first grouping, separate assignments, and status labels. |
 | Phase 3 — Workout History UI | Done | Existing builder preserved; History uses athletes + scheduled-workout summaries and explicit Not started session creation. |
-| Phase 4 — local verification | In Progress | Focused lint/typecheck, 5 History tests, 45 Calendar draft/build tests, webpack production build, and read-only local API scenarios pass. Task-only clean-tree full lint/build and visual verification remain. |
-| Phase 5 — task-only commit | In Progress | Unrelated local changes remain unstaged. |
+| Phase 4 — local verification | Done | `node --test app/coach/workouts/history.test.ts` 5/5 pass. `node --test app/coach/calendar/*.test.ts lib/*.test.ts` 50/52 pass; the 2 failures are pre-existing `.tsx`-under-`node --experimental-strip-types` limitations, unrelated to this task (confirmed against unmodified calendar test files). `tsc --noEmit` clean. `eslint app/coach/workouts/` clean (repo-wide `eslint .` has one pre-existing error in the unrelated, unstaged `apple-sign-in-button.tsx`). `next build` succeeds, including `/coach/workouts`. Auth-gated redirect (`/coach/workouts` → `/login`) verified at 390×844 mobile viewport with a clean console. |
+| Phase 5 — task-only commit | Done | Unrelated local changes (login/Apple sign-in/iOS/Capacitor/next.config, `.cursor/`) remain unstaged and excluded from the task commit. |
 | Phase 6 — staging deployment and smoke test | Not Started | Production explicitly excluded. |
 
 ## 5. Outcome (filled at completion)
