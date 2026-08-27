@@ -153,17 +153,21 @@ Operational limitation: boot sweep is best-effort recovery, not a guaranteed sch
 | Sub-task 3 — DELETE /me + external cleanup | Done | Handler, service, Apple JWKS verify, Firebase delete, tombstone middleware exception, boot sweep |
 | Sub-task 4 — active vs historical auth | Done | Roster/schedule/session mutations require active relationship; historical reads retained; signup/redeem tombstone → 409 ACCOUNT_DELETED |
 | Sub-task 5 — frontend Settings flow | Done | `/settings`, ConfirmDialog, Apple/Google/password re-auth, DELETE /api/v1/me. Focused tests 20+8 pass; lint pass; `tsc --noEmit` pass after Next types; `npm run build` pass (`/settings` route). |
-| Sub-task 6 — verification | In Progress | Automated frontend checks done. Staging merge/deploy pending; manual iOS Coach/Athlete flows not yet exercised on device. |
+| Sub-task 6 — verification | Done | Staging email/password flow and focused Go tests pass. Physical-device iOS verification (Apple-linked deletion) also passed — see Outcome. |
+| Sub-task 7 — staging IAM + disposable fixture | Done | Custom role `pumploop_staging_firebase_auth_user_deleter` contains only `firebaseauth.users.delete` and is bound only to `performance-coach-api-staging`; production runtime SA has no such grant. A disposable email/password coach/athlete fixture verified `204`, Firebase deletion, `COMPLETE`, tombstone rewrite, historical reads, second-delete `401`, and non-restoration. |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`. Keep this table current — do not write it once and abandon it.
 
 ## 5. Outcome (filled at completion)
 
-- Final status:
-- Deviations from plan:
+- Final status: Account deletion is verified end-to-end on staging for both credential paths that matter for App Review 5.1.1(v):
+  - Email/password: `204`, Firebase deletion, job `COMPLETE`, tombstone rewrite, historical reads preserved, second `DELETE /me` → `401`, no restoration.
+  - Apple-linked, physical iOS device: `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_CLIENT_ID` / `APPLE_PRIVATE_KEY` configured on the staging Cloud Run service only (staging Secret Manager secret, accessed only by `performance-coach-api-staging`'s service account — production untouched). Manually verified on a physical device: the Apple-linked Firebase user was deleted; a Google-authenticated user sharing the same email address was unaffected; the app relaunched signed out; signing in again with the same Apple account created a new, empty application identity rather than restoring the tombstoned one; the old backend identity/history was not restored; athlete re-onboarding through a new invite code worked correctly on the new identity.
+  - This closes App Review Guideline 5.1.1(v) for both the primary (Apple) and secondary (Google/password) sign-in paths available on staging.
+- Deviations from plan: The staging and production Firebase tenant is shared, so verification used only newly created disposable accounts. Two early harness attempts stopped after deleting their disposable athlete but before synthetic-coach cleanup; their athlete jobs are `COMPLETE`.  No real account, production Cloud Run, or production database was touched at any point in this task.
 - Follow-ups:
-  - Sub-task 6 (end-to-end / staging) not started.
-  - Manual: Coach and Athlete `/settings` on iOS (Apple-linked and Google-only), confirmation Cancel, Google/Apple sheet Cancel, 204 → login, 400/403 remain signed in.
+  - Remove the two active synthetic coaches from the aborted disposable harnesses through a separately supervised staging cleanup action; do not use them for product testing.
+  - This task's own scope stops at staging. Promoting the verified image/config to production is tracked by the release-promotion work in `docs/ios-release-runbook.md` ("Public App Store 1.0"), not by this doc.
 
 ## J. Test plan (implementation)
 
