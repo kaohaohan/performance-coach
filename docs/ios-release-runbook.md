@@ -147,7 +147,26 @@ Required order — do not skip or reorder:
 
 1. Staging final verification of all App Review blockers (see Task Docs under
    `docs/tasks/`; account deletion is Guideline 5.1.1(v)).
-2. Neon Launch upgrade **before** real athlete/coach data (ADR-002).
+2. Neon Launch upgrade **before** real athlete/coach data (ADR-002). **Do not
+   remove or weaken this step.** It remains the default required order.
+
+   **Approved exception for the current release (recorded 2026-08-27, see
+   ADR-002's release-scoped exception note):** the founder explicitly
+   deferred this upgrade past App Store submission for this release only.
+   Production's `0004_account_deletion` migration and the rest of this
+   promotion proceed on Neon **Free**. This is **not** a blanket waiver of
+   step 2 for future releases — it is a one-time, informed exception with a
+   mandatory make-good gate:
+
+   - Launch upgrade is a **mandatory gate after App Review approval and
+     before public availability / real-user rollout.** Do not open the app
+     to real users while production is still on Free.
+   - Until that upgrade happens, production data (including anything
+     App Review's reviewer account creates) has only Free's 6-hour/1
+     GB-month PITR window, not Launch's 7-day window.
+   - Re-verify the Neon plan (Free vs. Launch) as part of production
+     Phase 0 preflight on every subsequent release until this gate closes.
+
 3. Production schema migrate, then production Cloud Run API from the verified
    staging digest (or a new digest built from that SHA).
 4. Vercel **Production** env, not Preview/`staging` only:
