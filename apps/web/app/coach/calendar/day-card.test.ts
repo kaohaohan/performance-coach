@@ -17,7 +17,6 @@ test("renders a separate status for every assignment and no S/R footer", () => {
     ],
     workoutsById: new Map(),
     disabled: false,
-    hasDraftContent: false,
     onSelect: () => {},
     onAddWorkout: () => {},
   }));
