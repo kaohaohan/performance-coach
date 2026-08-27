@@ -18,7 +18,27 @@ import { OAuthProvider, type AuthCredential } from "firebase/auth";
 // they can never use.
 type SocialLoginModule = typeof import("@capgo/capacitor-social-login");
 
-let initialized = false;
+// Login and deletion require different Apple initialize options. A single
+// `initialized = true` flag would skip re-init and leave deletion without
+// an unused authorizationCode (useProperTokenExchange defaults false).
+export type AppleAuthPurpose = "login" | "deletion";
+
+let applePurpose: AppleAuthPurpose | null = null;
+
+export function appleInitializeConfig(purpose: AppleAuthPurpose): {
+  apple: { useProperTokenExchange?: boolean };
+} {
+  if (purpose === "deletion") {
+    // Do not set redirectUrl — empty keeps the unused authorization code
+    // on iOS (docs/tasks/2026-08-26-account-deletion.md).
+    return { apple: { useProperTokenExchange: true } };
+  }
+  return { apple: {} };
+}
+
+export function resetAppleInitializationForTests(): void {
+  applePurpose = null;
+}
 
 // nativeAppleCancelled marks the "person dismissed the Apple sheet" case so
 // the UI can stay silent about it. A thrown sentinel (rather than a null
@@ -43,19 +63,22 @@ export function isAppleCancellation(err: unknown): boolean {
   return (e?.message?.toLowerCase() ?? "").includes("cancel");
 }
 
-async function ensureInitialized(mod: SocialLoginModule): Promise<void> {
-  if (initialized) {
+async function ensureInitialized(mod: SocialLoginModule, purpose: AppleAuthPurpose): Promise<void> {
+  if (applePurpose === purpose) {
     return;
   }
 
   // Native iOS needs no clientId/redirectUrl — those configure the web and
-  // Android flows only. The empty block must still be passed: the native
-  // plugin rejects Apple initialize/login when no apple settings object was
-  // ever provided (and when capacitor.config.ts lacks apple: true).
+  // Android flows only. The apple settings object must still be passed: the
+  // native plugin rejects Apple initialize/login when none was ever
+  // provided (and when capacitor.config.ts lacks apple: true).
   // Initialize is per-provider in the native implementation, so this cannot
   // clobber the Google settings initialized by native-google-auth.ts.
-  await mod.SocialLogin.initialize({ apple: {} });
-  initialized = true;
+  // Re-init when purpose changes so a prior login init cannot starve
+  // deletion of authorizationCode, and a prior deletion init cannot change
+  // ordinary login.
+  await mod.SocialLogin.initialize(appleInitializeConfig(purpose));
+  applePurpose = purpose;
 }
 
 // rawNonce/hashedNonce implement Firebase's recommended replay protection
@@ -87,9 +110,14 @@ export async function sha256Hex(input: string): Promise<string> {
 // first-ever authorization of this app. Callers that pre-fill a name from
 // user.displayName must already tolerate null — the existing signup/join
 // forms do.
-export async function nativeAppleCredential(): Promise<AuthCredential> {
+type AppleLoginPayload = {
+  idToken?: string | null;
+  authorizationCode?: string | null;
+};
+
+async function runNativeAppleSheet(purpose: AppleAuthPurpose): Promise<{ payload: AppleLoginPayload; nonce: string }> {
   const mod = await import("@capgo/capacitor-social-login");
-  await ensureInitialized(mod);
+  await ensureInitialized(mod, purpose);
 
   const nonce = rawNonce();
   let result;
@@ -108,13 +136,50 @@ export async function nativeAppleCredential(): Promise<AuthCredential> {
     throw err;
   }
 
-  const payload = result.result;
+  return { payload: result.result, nonce };
+}
+
+function appleFirebaseCredential(payload: AppleLoginPayload, nonce: string): AuthCredential {
   if (!payload.idToken) {
     throw new Error("native apple sign-in: Apple returned no identity token");
   }
-
   return new OAuthProvider("apple.com").credential({
     idToken: payload.idToken,
     rawNonce: nonce,
   });
+}
+
+export function appleAuthorizationCodeFromPayload(payload: AppleLoginPayload): string {
+  const code = payload.authorizationCode?.trim() ?? "";
+  if (code === "") {
+    throw new Error("native apple deletion: Apple returned no authorization code");
+  }
+  return code;
+}
+
+// nativeAppleCredential runs Apple's native sign-in sheet and returns a
+// Firebase credential for the identity chosen. Throws
+// NativeAppleCancelledError if the person dismissed the sheet.
+//
+// Note: Apple only includes the person's name (and grants email) on the
+// first-ever authorization of this app. Callers that pre-fill a name from
+// user.displayName must already tolerate null — the existing signup/join
+// forms do.
+export async function nativeAppleCredential(): Promise<AuthCredential> {
+  const { payload, nonce } = await runNativeAppleSheet("login");
+  return appleFirebaseCredential(payload, nonce);
+}
+
+// Deletion-only Apple sheet: same nonce/idToken credential as login, plus
+// the unused authorizationCode required by DELETE /api/v1/me. Initializes
+// the plugin with useProperTokenExchange: true even if login already ran.
+export async function nativeAppleDeletionMaterial(): Promise<{
+  credential: AuthCredential;
+  authorizationCode: string;
+}> {
+  const { payload, nonce } = await runNativeAppleSheet("deletion");
+  return {
+    credential: appleFirebaseCredential(payload, nonce),
+    authorizationCode: appleAuthorizationCodeFromPayload(payload),
+  };
 }

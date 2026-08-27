@@ -152,8 +152,8 @@ Operational limitation: boot sweep is best-effort recovery, not a guaranteed sch
 | Sub-task 2 — migration 0004 | Done | Additive `deleted_at` + `account_deletion_jobs`; round-trip verified on `performance_coach_test` |
 | Sub-task 3 — DELETE /me + external cleanup | Done | Handler, service, Apple JWKS verify, Firebase delete, tombstone middleware exception, boot sweep |
 | Sub-task 4 — active vs historical auth | Done | Roster/schedule/session mutations require active relationship; historical reads retained; signup/redeem tombstone → 409 ACCOUNT_DELETED |
-| Sub-task 5 — frontend Settings flow | Not Started | |
-| Sub-task 6 — verification | Not Started | |
+| Sub-task 5 — frontend Settings flow | Done | `/settings`, ConfirmDialog, Apple/Google/password re-auth, DELETE /api/v1/me. Focused tests 20+8 pass; lint pass; `tsc --noEmit` pass after Next types; `npm run build` pass (`/settings` route). |
+| Sub-task 6 — verification | In Progress | Automated frontend checks done. Staging merge/deploy pending; manual iOS Coach/Athlete flows not yet exercised on device. |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`. Keep this table current — do not write it once and abandon it.
 
@@ -162,6 +162,8 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`. Keep this table 
 - Final status:
 - Deviations from plan:
 - Follow-ups:
+  - Sub-task 6 (end-to-end / staging) not started.
+  - Manual: Coach and Athlete `/settings` on iOS (Apple-linked and Google-only), confirmation Cancel, Google/Apple sheet Cancel, 204 → login, 400/403 remain signed in.
 
 ## J. Test plan (implementation)
 

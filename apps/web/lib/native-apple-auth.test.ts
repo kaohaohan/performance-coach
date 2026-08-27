@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appleAuthorizationCodeFromPayload,
+  appleInitializeConfig,
   isAppleCancellation,
   NativeAppleCancelledError,
   sha256Hex,
@@ -41,4 +43,22 @@ test("the cancellation sentinel carries the name the UI matches on", () => {
   const err = new NativeAppleCancelledError();
   assert.equal(err.name, "NativeAppleCancelledError");
   assert.ok(err instanceof Error);
+});
+
+test("ordinary Apple login initialize does not enable proper token exchange", () => {
+  const config = appleInitializeConfig("login");
+  assert.deepEqual(config, { apple: {} });
+  assert.equal("useProperTokenExchange" in config.apple, false);
+});
+
+test("Apple deletion initialize requests an unused authorization code", () => {
+  const config = appleInitializeConfig("deletion");
+  assert.equal(config.apple.useProperTokenExchange, true);
+  assert.equal("redirectUrl" in config.apple, false);
+});
+
+test("appleAuthorizationCodeFromPayload requires a non-empty code", () => {
+  assert.equal(appleAuthorizationCodeFromPayload({ authorizationCode: "c-123" }), "c-123");
+  assert.throws(() => appleAuthorizationCodeFromPayload({ authorizationCode: "  " }));
+  assert.throws(() => appleAuthorizationCodeFromPayload({ idToken: "id-only" }));
 });

@@ -130,7 +130,12 @@ export default function AthleteTodayPage() {
     <main className="min-h-screen bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
       <AppHeader
         padding="pb-9"
-        actions={<SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />}
+        actions={
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={() => router.push("/settings")} className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white">Account</button>
+            <SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />
+          </div>
+        }
       >
         <p className="mt-7 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{selectedDate === today ? "Today" : "Training"}</p>
         <div className="mt-3 flex items-center justify-between gap-2">
