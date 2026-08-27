@@ -11,7 +11,9 @@ There are two workflows. Do not mix them:
   shell's `server.url` currently loads the Vercel staging alias
   (`https://performance-coach-git-staging-kaohaohans-projects.vercel.app`),
   which proxies to the staging API and Neon staging branch. That is the
-  intended beta target. Last uploaded store build: **1.0 (3)**.
+  intended beta target. Last uploaded store build: **1.0 (4)** (2026-08-27,
+  the production RC — it targets production, not staging; see Public App
+  Store 1.0 below).
 - **Public App Store 1.0** — production web, API, and database must already
   be live and smoked. Only then retarget `server.url` at production, Archive
   a new build, TestFlight-RC that binary against production, then submit.
@@ -177,21 +179,47 @@ Required order — do not skip or reorder:
    - `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID` (iOS Google Sign-In reads this from
      the remote JS bundle; staging-only is not enough)
    - `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` must be unset
-5. Promote staging frontend to Vercel Production. Smoke
+5. **Add the production host to Firebase Auth's authorized domains.** This
+   lives in Firebase, not in Vercel or GCP, so nothing in steps 3–4 covers
+   it and no deploy surfaces it. Browser Google sign-in uses the popup flow,
+   which Firebase rejects with `auth/unauthorized-domain` from any host not
+   on this list — the frontend then shows the generic "Google sign-in isn't
+   available yet" copy, which reads like an outage rather than a missing
+   setting. Native iOS Apple/Google sign-in goes through
+   `signInWithCredential` and is **not** affected, so an iOS-only smoke will
+   pass while every browser coach is locked out.
+
+   Verify (not just assume) that the production host is present:
+
+   ```bash
+   TOKEN=$(gcloud auth print-access-token)
+   curl -s -H "Authorization: Bearer $TOKEN" \
+     -H "x-goog-user-project: dontworkout" \
+     "https://identitytoolkit.googleapis.com/admin/v2/projects/dontworkout/config" \
+     | python3 -c "import json,sys; [print(' -', d) for d in json.load(sys.stdin)['authorizedDomains']]"
+   ```
+
+   Or Firebase Console → Authentication → Settings → Authorized domains.
+   Add the host if missing; the change takes effect immediately with no
+   redeploy. (Observed 2026-08-27: `dontworkout.vercel.app` was missing
+   while the staging alias was present, so browser Google sign-in failed
+   for coaches after an otherwise-green promotion.)
+6. Promote staging frontend to Vercel Production. Smoke
    `https://dontworkout.vercel.app` (PumpLoop branding; `/backend` hits the
-   production API, not staging).
-6. Only after that smoke: change `apps/web/capacitor.config.ts` `server.url`
+   production API, not staging). Include **browser** Google sign-in in this
+   smoke, not only the iOS app — that is the path step 5 protects.
+7. Only after that smoke: change `apps/web/capacitor.config.ts` `server.url`
    to the production Vercel host, merge, `npx cap sync ios`, re-check native
    Release wiring. **Do not merge a production `server.url` onto staging
    until production is smoked** — every subsequent TestFlight/Debug build
    would flip to production.
-7. Bump `CURRENT_PROJECT_VERSION` above any build already in App Store
-   Connect (last upload is 1.0 (3)).
-8. Follow Before Archive + Archive / TestFlight on that SHA.
-9. TestFlight RC on a physical device: confirm the WKWebView origin is
-   production, not the staging alias. Repeat Apple / Google / email, core
-   loop, and App Review items.
-10. App Store submission (reviewer demo account, privacy / account-deletion
+8. Bump `CURRENT_PROJECT_VERSION` above any build already in App Store
+   Connect (last upload is 1.0 (4)).
+9. Follow Before Archive + Archive / TestFlight on that SHA.
+10. TestFlight RC on a physical device: confirm the WKWebView origin is
+    production, not the staging alias. Repeat Apple / Google / email, core
+    loop, and App Review items.
+11. App Store submission (reviewer demo account, privacy / account-deletion
     URL as Apple requires) only after that RC.
 
 ## App Store 1.0 gate
@@ -200,6 +228,6 @@ Distinguish two readiness levels:
 
 - **TestFlight-ready** — TestFlight-from-staging above passes; the build
   installs and the core loop works on device against **staging**.
-- **App-Review-ready** — Public App Store 1.0 steps 1–9 pass; the binary
+- **App-Review-ready** — Public App Store 1.0 steps 1–10 pass; the binary
   talks to **production**; all App Review blockers in active Task Docs are
   closed.
