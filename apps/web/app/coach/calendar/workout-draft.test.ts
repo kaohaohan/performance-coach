@@ -14,6 +14,8 @@ import {
   resolveStoredDraft,
   saveDraft,
   sanitizeExtraAthleteIds,
+  shouldClearStoredDraftOnDiscard,
+  shouldWriteStoredDraftOnSave,
   startNewWorkoutActionLabel,
   toggleExtraAthlete,
   toggleSelectedAthlete,
@@ -345,4 +347,36 @@ test("legacy drafts without sessionKind restore as resume and keep source locked
 test("same athlete and date still treats + Add Workout as New, never silent Continue", () => {
   assert.equal(resolveNewWorkoutClick(true), "confirm-replace");
   assert.equal(draftMatchesCalendar("athlete-a", "2026-08-27", "athlete-a", "2026-08-27"), true);
+});
+
+test("Save Draft on an empty New builder does not overwrite Athlete A's stored draft", () => {
+  memory.clear();
+  assert.ok(saveDraft(COACH, content({ sourceAthleteId: "athlete-a", name: "Share draft" })));
+  const emptyNew = { name: "", exercises: [] as DraftExercise[] };
+  assert.equal(shouldWriteStoredDraftOnSave(emptyNew), false);
+  if (shouldWriteStoredDraftOnSave(emptyNew)) {
+    saveDraft(COACH, content({ sourceAthleteId: "athlete-b", name: "", exercises: [], sessionKind: "new" }));
+  }
+  const loaded = loadDraft(COACH, CONNECTED);
+  assert.equal(loaded?.sourceAthleteId, "athlete-a");
+  assert.equal(loaded?.name, "Share draft");
+});
+
+test("Discard on an empty New builder does not delete Athlete A's stored draft", () => {
+  memory.clear();
+  assert.ok(saveDraft(COACH, content({ sourceAthleteId: "athlete-a", name: "Share draft" })));
+  const emptyNew = { name: "", exercises: [] as DraftExercise[] };
+  assert.equal(shouldClearStoredDraftOnDiscard(emptyNew), false);
+  if (shouldClearStoredDraftOnDiscard(emptyNew)) {
+    clearDraft(COACH);
+  }
+  const loaded = loadDraft(COACH, CONNECTED);
+  assert.equal(loaded?.sourceAthleteId, "athlete-a");
+  assert.equal(loaded?.name, "Share draft");
+});
+
+test("Save and Discard of persistable live Build content still replace or clear the stored slot", () => {
+  const live = { name: "Apple new", exercises: [EXERCISE] };
+  assert.equal(shouldWriteStoredDraftOnSave(live), true);
+  assert.equal(shouldClearStoredDraftOnDiscard(live), true);
 });
