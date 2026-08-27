@@ -73,9 +73,11 @@ export type WorkoutBuilderDraftContent = {
   exercises: DraftExercise[];
   // The athlete whose calendar this draft was started from.
   sourceAthleteId: string;
-  // Additional athletes the Coach explicitly checked, never including
-  // sourceAthleteId.
+  // Resume: extras beyond the locked source, never including sourceAthleteId.
+  // New: the exact Assign-to checkbox set (may omit the calendar athlete).
   extraAthleteIds: string[];
+  // Omitted on drafts saved before sessionKind existed; those restore as resume.
+  sessionKind: BuilderSessionKind;
   scheduledDate: string;
   editTarget: DraftEditTarget | null;
 };
@@ -125,6 +127,10 @@ export function toggleExtraAthlete(sourceAthleteId: string, extraAthleteIds: rea
 }
 
 export type BuilderSessionKind = "new" | "resume";
+
+export function parseSessionKind(value: unknown): BuilderSessionKind {
+  return value === "new" ? "new" : "resume";
+}
 
 // + Add Workout is always New. A stored draft — even one for the same
 // athlete and date — must never be continued by that button. Continue is a
@@ -178,10 +184,28 @@ export function assignmentIdsForSession(
   return ids;
 }
 
-// Persist extras the v2 way: never include sourceAthleteId. New-mode state
-// may store the calendar athlete inside the mutable selected set.
-export function extrasForPersistence(sourceAthleteId: string, selectedOrExtras: readonly string[]): string[] {
+// Persist Assign-to exactly as shown. Resume stores extras only (source is
+// implied and locked). New stores the checkbox set, including when the
+// calendar athlete is unchecked — Continue must not silently re-add them.
+export function extrasForPersistence(
+  kind: BuilderSessionKind,
+  sourceAthleteId: string,
+  selectedOrExtras: readonly string[],
+): string[] {
+  if (kind === "new") return assignmentIdsForSession("new", sourceAthleteId, selectedOrExtras);
   return selectedOrExtras.filter((id) => id !== "" && id !== sourceAthleteId);
+}
+
+export function sanitizeSelectedAthleteIds(
+  selectedAthleteIds: readonly string[],
+  connectedAthleteIds: ReadonlySet<string>,
+): string[] {
+  const ids: string[] = [];
+  for (const id of selectedAthleteIds) {
+    if (id === "" || !connectedAthleteIds.has(id) || ids.includes(id)) continue;
+    ids.push(id);
+  }
+  return ids;
 }
 
 export function sanitizeExtraAthleteIds(
@@ -197,7 +221,7 @@ export function sanitizeExtraAthleteIds(
   return extras;
 }
 
-function draftContentFromUnknown(draft: Record<string, unknown>): Omit<WorkoutBuilderDraftContent, "sourceAthleteId" | "extraAthleteIds"> | null {
+function draftContentFromUnknown(draft: Record<string, unknown>): Omit<WorkoutBuilderDraftContent, "sourceAthleteId" | "extraAthleteIds" | "sessionKind"> | null {
   if (typeof draft.name !== "string" || !Array.isArray(draft.exercises) || typeof draft.scheduledDate !== "string") {
     return null;
   }
@@ -244,12 +268,18 @@ export function resolveStoredDraft(value: unknown, connectedAthleteIds: readonly
 
   if (!connected.has(sourceAthleteId)) return null;
 
+  const sessionKind = parseSessionKind(draft.sessionKind);
+  const extras = sessionKind === "new"
+    ? sanitizeSelectedAthleteIds(extraAthleteIds, connected)
+    : sanitizeExtraAthleteIds(sourceAthleteId, extraAthleteIds, connected);
+
   return {
     version: DRAFT_VERSION,
     savedAt: typeof draft.savedAt === "string" ? draft.savedAt : new Date().toISOString(),
     ...content,
     sourceAthleteId,
-    extraAthleteIds: sanitizeExtraAthleteIds(sourceAthleteId, extraAthleteIds, connected),
+    extraAthleteIds: extras,
+    sessionKind,
   };
 }
 
