@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "ios:local": "scripts/ios-local.sh"
   },
   "dependencies": {
     "@capacitor/core": "8.5.0",

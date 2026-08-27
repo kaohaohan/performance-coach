@@ -2,7 +2,18 @@
 
 ## Local Backend Startup
 
-Start these in order:
+One command (Postgres, Auth Emulator, Go API, Next, Capacitor → local):
+
+```
+./scripts/local-up.sh
+./scripts/local-status.sh
+```
+
+`local-status.sh` prints **LOCAL** or **STAGING** from the generated iOS
+`capacitor.config.json`. If that file points at the Vercel staging alias,
+Xcode Run is staging even when `http://127.0.0.1:3000` is also up.
+
+Start these in order if you are not using the script:
 
 ### 1. PostgreSQL (Docker)
 
@@ -40,6 +51,50 @@ go run ./cmd/api
 ```
 
 The API listens on `localhost:8080` by default (override with `PORT`).
+
+## iOS Simulator Local Testing / Screenshots
+
+Use `apps/web/scripts/ios-local.sh` (via `npm run ios:local`, from `apps/web`)
+to run the native app in an iOS Simulator against your local stack. Do not
+hand-edit `apps/web/capacitor.config.ts` to point `server.url` at
+`127.0.0.1` — that file's committed default always points at the staging
+Vercel alias, and a local override left in place (or silently discarded by
+someone else's `git checkout`) is exactly what caused a multi-hour false
+"wrong password" debugging session on 2026-08-27: the app was quietly
+talking to real staging Firebase the whole time.
+
+Prerequisites: the "Local Backend Startup" stack above (Postgres, Firebase
+Auth Emulator, Go API) running with `.env.local` in `apps/web` pointed at the
+emulator (`NEXT_PUBLIC_FIREBASE_PROJECT_ID=performance-coach-local`,
+`NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099`,
+`NEXT_PUBLIC_FIREBASE_API_KEY=fake-api-key`), and a booted iOS Simulator.
+
+```sh
+cd apps/web
+npm run ios:local                    # uses the currently booted Simulator
+npm run ios:local -- <simulator-udid> # or target a specific one (xcrun simctl list devices)
+```
+
+Every run: starts `next dev` if it isn't already up, force-uninstalls any
+existing build from the target Simulator first (so a stale WKWebView cache
+from a previous local or staging run can't linger), then builds and installs
+with `APP_TARGET` exported for that one `cap run` invocation. Nothing is
+written back to `capacitor.config.ts`, so there is nothing to remember to
+revert.
+
+URLs are not hard-coded anywhere. `apps/web/config/app-targets.json` is the
+single source of truth, read by `capacitor.config.ts`,
+`apps/web/scripts/ios-local.sh`, and `scripts/local-status.sh` alike — add or
+change an environment there and every script follows. Select one by name:
+
+```sh
+npm run ios:local                     # APP_TARGET=local
+APP_TARGET=staging npm run ios:local  # same script, different target
+npx cap sync ios                      # no APP_TARGET -> staging (committed default)
+```
+
+An unknown `APP_TARGET` aborts with the list of valid names rather than
+silently falling back to staging.
 
 ## iPhone / Mobile LAN Local Testing
 

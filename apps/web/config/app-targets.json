@@ -1,0 +1,15 @@
+{
+  "_comment": "Single source of truth for the URL the iOS WKWebView loads. Selected by name via the APP_TARGET env var (see apps/web/capacitor.config.ts). Nothing else may hard-code these URLs: capacitor.config.ts, apps/web/scripts/ios-local.sh and scripts/local-status.sh all read this file. To point at a new environment, add a target here rather than editing any script.",
+  "default": "staging",
+  "targets": {
+    "local": {
+      "url": "http://127.0.0.1:3000",
+      "cleartext": true,
+      "note": "iOS Simulator only. On a real device 127.0.0.1 is the device itself, not your Mac."
+    },
+    "staging": {
+      "url": "https://performance-coach-git-staging-kaohaohans-projects.vercel.app",
+      "note": "Vercel alias for the staging git branch. This is the committed default, so a plain Xcode Run is always staging."
+    }
+  }
+}
