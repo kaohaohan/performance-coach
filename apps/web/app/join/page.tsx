@@ -7,6 +7,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AuthHero } from "@/components/auth-hero";
+import { useT } from "@/lib/i18n";
 
 // normalizeInput mirrors the server's canonical-form normalizer
 // (apps/api/internal/invitecode/code.go Normalize): uppercase, strip
@@ -26,6 +27,7 @@ function normalizeInput(raw: string): string {
 
 export default function JoinPage() {
   const router = useRouter();
+  const t = useT();
   const [code, setCode] = useState("");
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -38,14 +40,14 @@ export default function JoinPage() {
   return (
     <main className="min-h-screen bg-stone-100 text-slate-900">
       <AuthHero padding="pb-16">
-        <h1 className="mt-6 text-4xl font-semibold tracking-tight">Join your coach.</h1>
-        <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">Enter the code your coach sent you.</p>
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight">{t("auth.join.heroTitle")}</h1>
+        <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">{t("auth.join.heroSubtitle")}</p>
       </AuthHero>
 
       <div className="mx-auto -mt-8 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
         <form onSubmit={handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
           <label>
-            <span className="mb-1.5 block text-sm font-semibold text-slate-700">Join code</span>
+            <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.join.codeLabel")}</span>
             <input
               type="text"
               inputMode="text"
@@ -60,10 +62,10 @@ export default function JoinPage() {
               className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 font-mono text-[20px] tracking-widest outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15"
             />
           </label>
-          <button type="submit" disabled={normalizeInput(code) === ""} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">Continue</button>
+          <button type="submit" disabled={normalizeInput(code) === ""} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{t("auth.continue")}</button>
         </form>
         <p className="mt-5 text-center text-sm text-slate-600">
-          Already have an account? <Link href="/login" className="font-bold text-teal-700 hover:text-teal-800">Sign in</Link>
+          {t("auth.haveAccount")} <Link href="/login" className="font-bold text-teal-700 hover:text-teal-800">{t("auth.signIn")}</Link>
         </p>
       </div>
     </main>

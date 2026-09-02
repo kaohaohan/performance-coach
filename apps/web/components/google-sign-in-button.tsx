@@ -5,22 +5,13 @@
 // wording, size or error handling — the button itself is identical
 // everywhere; only the caller's onClick differs in which endpoint it then
 // calls with the fresh token.
-import { GOOGLE_AUTH_POLICY, untranslatedErrorMessage } from "@/lib/i18n/errors";
-
-// googleAuthErrorMessage is the pre-i18n bridge for the three call sites
-// still holding English literals (/login, /coach/signup, /join/[code]).
-// Sub-task 2c converts them to errorMessage(t, err, GOOGLE_AUTH_POLICY) and
-// deletes this wrapper; until then it resolves against the English catalog so
-// their behaviour is unchanged.
 //
-// The mapping itself — which codes are silent, which get provider-specific
-// copy, what "anything else" says — moved to GOOGLE_AUTH_POLICY in
-// lib/i18n/errors.ts, where node --test can reach it. Raw Firebase error
-// strings are still never shown, and null still means "the person
-// deliberately backed out", which is not a failure worth a red alert.
-export function googleAuthErrorMessage(err: unknown): string | null {
-  return untranslatedErrorMessage(err, GOOGLE_AUTH_POLICY);
-}
+// Error handling is not here: the three call sites resolve their own
+// failures through errorMessage(t, err, GOOGLE_AUTH_POLICY) from
+// lib/i18n/errors.ts, which is where the code -> copy mapping lives and where
+// node --test can reach it. The pre-i18n English-only bridge that used to sit
+// at this spot went with its last caller.
+import { useT } from "@/lib/i18n";
 
 // GoogleMark is Google's four-colour "G", inlined so the button renders
 // without a network round-trip and works offline in the PWA shell.
@@ -42,13 +33,17 @@ export function GoogleSignInButton({
   onClick,
   pending,
   disabled,
-  label = "Continue with Google",
+  label,
 }: {
   onClick: () => void;
   pending?: boolean;
   disabled?: boolean;
   label?: string;
 }) {
+  // The default is read from the catalog rather than defaulted in the
+  // signature: a default parameter is evaluated before any hook can run, so
+  // it would pin the button to English whatever the locale.
+  const t = useT();
   return (
     <button
       type="button"
@@ -57,7 +52,7 @@ export function GoogleSignInButton({
       className="flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-800 shadow-sm transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-400"
     >
       {pending ? null : <GoogleMark />}
-      {pending ? "Opening Google…" : label}
+      {pending ? t("auth.provider.googlePending") : label ?? t("auth.provider.google")}
     </button>
   );
 }
@@ -66,10 +61,11 @@ export function GoogleSignInButton({
 // email/password form. Decorative only — aria-hidden so it is not announced
 // between the two real controls.
 export function AuthDivider() {
+  const t = useT();
   return (
     <div aria-hidden="true" className="my-5 flex items-center gap-3">
       <span className="h-px flex-1 bg-slate-200" />
-      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">or</span>
+      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t("auth.divider.or")}</span>
       <span className="h-px flex-1 bg-slate-200" />
     </div>
   );

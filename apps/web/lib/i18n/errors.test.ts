@@ -9,7 +9,6 @@ import {
   SILENT,
   errorMessage,
   resolveError,
-  untranslatedErrorMessage,
   type ErrorPolicy,
 } from "./errors.ts";
 import { en, type MessageKey } from "./messages/en/index.ts";
@@ -180,15 +179,6 @@ test("errorMessage translates keys, passes server text through and stays silent"
   assert.equal(errorMessage(t, new Error("boom")), "zh:errors.unexpected");
   assert.equal(errorMessage(t, new ApiError(400, "no room"), { serverMessage: true }), "no room");
   assert.equal(errorMessage(t, firebaseError("auth/popup-closed-by-user"), GOOGLE_AUTH_POLICY), null);
-});
-
-test("untranslatedErrorMessage is the English catalog, verbatim", () => {
-  assert.equal(untranslatedErrorMessage(new Error("boom")), en["errors.unexpected"]);
-  assert.equal(
-    untranslatedErrorMessage(firebaseError("auth/popup-blocked"), GOOGLE_AUTH_POLICY),
-    en["errors.google.popupBlocked"],
-  );
-  assert.equal(untranslatedErrorMessage(firebaseError("auth/user-cancelled"), GOOGLE_AUTH_POLICY), null);
 });
 
 // --- structural ------------------------------------------------------

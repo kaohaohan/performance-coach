@@ -12,44 +12,78 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { getFirebaseAuth } from "@/lib/firebase";
-import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
+import { AuthDivider, GoogleSignInButton } from "@/components/google-sign-in-button";
 import { AuthHero } from "@/components/auth-hero";
-import { AppleSignInButton, appleAuthErrorMessage } from "@/components/apple-sign-in-button";
+import { AppleSignInButton } from "@/components/apple-sign-in-button";
+import { useT, type MessageKey } from "@/lib/i18n";
+import {
+  APPLE_AUTH_POLICY,
+  GOOGLE_AUTH_POLICY,
+  PASSWORD_AUTH_CODES,
+  errorMessage,
+  resolveError,
+  type ErrorPolicy,
+  type TranslateFn,
+} from "@/lib/i18n/errors";
 
 type Me = { id: string; name: string; role: "COACH" | "ATHLETE" };
 
-// Same code -> copy mapping as app/login/page.tsx's loginErrorMessage,
-// extended with the signup-specific codes this flow can also hit (mirrors
-// app/join/[code]/page.tsx's firebaseAuthErrorMessage).
-function firebaseAuthErrorMessage(err: unknown): string {
-  const code = (err as { code?: string })?.code;
-  switch (code) {
-    case "auth/email-already-in-use": return "An account with that email already exists. Try signing in instead.";
-    case "auth/invalid-email": return "Enter a valid email address.";
-    case "auth/weak-password": return "Password must be at least 8 characters.";
-    case "auth/too-many-requests": return "Too many attempts. Try again later.";
-    default: return "Something went wrong. Please try again.";
-  }
-}
+// The email/password half of this page creates an account, so it opts into
+// the full PASSWORD_AUTH_CODES table — email-already-in-use and
+// weak-password are only reachable here and on /join/[code]'s create tab.
+// It is opt-in rather than global for the reason lib/i18n/errors.ts spells
+// out: auth/invalid-credential means "incorrect email or password" on a
+// password form and something else entirely on a provider popup.
+const SIGNUP_AUTH_POLICY: ErrorPolicy = {
+  codes: { ...PASSWORD_AUTH_CODES },
+};
 
-// provisioningErrorMessage covers the /coach-signup responses worth naming.
-// 409 is the one an athlete can actually trigger by trying to sign up as a
-// coach with an identity that already redeemed an invite — the backend
-// never promotes ATHLETE to COACH, and this explains that rather than
-// showing a bare conflict.
-function provisioningErrorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.status === 409) {
-    return "That account is already registered as an athlete. Sign in instead, or use a different account.";
+// Provisioning is the POST /coach-signup half. 409 is the one an athlete can
+// actually trigger — signing up as a coach with an identity that already
+// redeemed an invite — and the backend never promotes ATHLETE to COACH, so
+// it gets its own sentence rather than a bare conflict. Anything else the
+// API explains itself, hence serverMessage.
+const PROVISIONING_POLICY: ErrorPolicy = {
+  statuses: { 409: "auth.coachSignup.error.athleteAccount" },
+  serverMessage: true,
+  fallback: "auth.coachSignup.error.provisioningFailed",
+};
+
+const RETRY_PROVISIONING_POLICY: ErrorPolicy = {
+  serverMessage: true,
+  fallback: "auth.coachSignup.error.retryFailed",
+};
+
+// provisioningMessage wraps the API's own sentence in this page's framing
+// instead of showing it bare: the Firebase account already exists by the
+// time either policy is reached, and "we couldn't finish setting it up" is
+// the part the coach needs in order to know that Retry is worth pressing.
+// resolveError rather than errorMessage because only the resolution says
+// whether the text came from the server, and that is what decides which of
+// the two keys is used.
+function provisioningMessage(
+  t: TranslateFn,
+  err: unknown,
+  policy: ErrorPolicy,
+  detailKey: MessageKey,
+): string {
+  const resolved = resolveError(err, policy);
+  switch (resolved.kind) {
+    case "text":
+      return t(detailKey, { detail: resolved.text });
+    case "key":
+      return t(resolved.key);
+    // Unreachable: neither provisioning policy silences anything.
+    case "silent":
+      return t("errors.unexpected");
   }
-  return err instanceof ApiError
-    ? `Your account was created, but we couldn't finish setting it up: ${err.message}`
-    : "Your account was created, but we couldn't finish setting it up. Please try again.";
 }
 
 export default function CoachSignupPage() {
   const router = useRouter();
+  const t = useT();
   const { signUp, signInWithGoogle, signInWithApple, signOut } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -105,10 +139,17 @@ export default function CoachSignupPage() {
         // signup succeeded. Surface an actionable error and let the coach
         // retry provisioning without re-entering credentials.
         setProvisioningFailed(true);
-        setError(provisioningErrorMessage(err));
+        setError(
+          provisioningMessage(
+            t,
+            err,
+            PROVISIONING_POLICY,
+            "auth.coachSignup.error.provisioningFailedDetail",
+          ),
+        );
       }
     } catch (err) {
-      setError(firebaseAuthErrorMessage(err));
+      setError(errorMessage(t, err, SIGNUP_AUTH_POLICY));
     } finally {
       setSubmitting(false);
     }
@@ -124,7 +165,7 @@ export default function CoachSignupPage() {
       if (!name.trim() && user.displayName) setName(user.displayName);
       setSocialProvider("google");
     } catch (err) {
-      const message = googleAuthErrorMessage(err);
+      const message = errorMessage(t, err, GOOGLE_AUTH_POLICY);
       if (message) setError(message);
     } finally {
       setGooglePending(false);
@@ -144,7 +185,7 @@ export default function CoachSignupPage() {
       if (!name.trim() && user.displayName) setName(user.displayName);
       setSocialProvider("apple");
     } catch (err) {
-      const message = appleAuthErrorMessage(err);
+      const message = errorMessage(t, err, APPLE_AUTH_POLICY);
       if (message) setError(message);
     } finally {
       setApplePending(false);
@@ -159,7 +200,7 @@ export default function CoachSignupPage() {
     event.preventDefault();
     const coachName = name.trim();
     if (!coachName) {
-      setError("Enter the name your athletes will see.");
+      setError(t("auth.coachSignup.error.nameRequired"));
       return;
     }
     setError(null);
@@ -168,12 +209,19 @@ export default function CoachSignupPage() {
       const currentUser = getFirebaseAuth().currentUser;
       if (!currentUser) {
         setSocialProvider(null);
-        setError("Your session expired. Please sign in again.");
+        setError(t("auth.coachSignup.error.sessionExpiredSignInAgain"));
         return;
       }
       await provisionCoach(await currentUser.getIdToken(), coachName);
     } catch (err) {
-      setError(provisioningErrorMessage(err));
+      setError(
+        provisioningMessage(
+          t,
+          err,
+          PROVISIONING_POLICY,
+          "auth.coachSignup.error.provisioningFailedDetail",
+        ),
+      );
     } finally {
       setSubmitting(false);
     }
@@ -203,7 +251,7 @@ export default function CoachSignupPage() {
       if (!currentUser) {
         // Session didn't persist (e.g. page reload) — nothing to retry
         // with; the coach has to sign in normally instead.
-        setError("Your session expired. Please sign in instead.");
+        setError(t("auth.coachSignup.error.sessionExpiredSignInInstead"));
         setProvisioningFailed(false);
         return;
       }
@@ -211,9 +259,12 @@ export default function CoachSignupPage() {
       await provisionCoach(token, name.trim());
     } catch (err) {
       setError(
-        err instanceof ApiError
-          ? `We still couldn't finish setting up your account: ${err.message}`
-          : "We still couldn't finish setting up your account. Please try again.",
+        provisioningMessage(
+          t,
+          err,
+          RETRY_PROVISIONING_POLICY,
+          "auth.coachSignup.error.retryFailedDetail",
+        ),
       );
     } finally {
       setSubmitting(false);
@@ -223,16 +274,19 @@ export default function CoachSignupPage() {
   return (
     <main className="min-h-screen bg-stone-100 text-slate-900">
       <AuthHero>
-        <h1 className="mt-6 text-4xl font-semibold tracking-tight">Build your<br />coaching practice.</h1>
-        <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">Create your Coach account to start programming and inviting athletes.</p>
+        <h1 className="mt-6 text-4xl font-semibold tracking-tight">{t("auth.coachSignup.heroTitleLine1")}<br />{t("auth.coachSignup.heroTitleLine2")}</h1>
+        <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">{t("auth.coachSignup.heroSubtitle")}</p>
       </AuthHero>
       <div className="mx-auto -mt-8 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
         <form onSubmit={socialConfirm ? handleSocialConfirm : handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Coach &amp; Athlete Training</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight">{socialConfirm ? "Confirm your name" : "Create Coach Account"}</h2>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("auth.eyebrow")}</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight">{socialConfirm ? t("auth.coachSignup.confirmHeading") : t("auth.createCoachAccount")}</h2>
 
           {socialConfirm ? (
-            <p className="mt-2 text-sm leading-6 text-slate-600">You&apos;re signed in with {socialProvider === "apple" ? "Apple" : "Google"}. This is the name your athletes will see.</p>
+            /* "Google"/"Apple" are product names and stay in Latin script in
+               every locale, so the provider is interpolated rather than
+               branched into two translated sentences. */
+            <p className="mt-2 text-sm leading-6 text-slate-600">{t("auth.coachSignup.confirmIntro", { provider: socialProvider === "apple" ? "Apple" : "Google" })}</p>
           ) : (
             <>
               <div className="mt-6 grid gap-3">
@@ -247,7 +301,7 @@ export default function CoachSignupPage() {
 
           <div className={socialConfirm ? "mt-6 grid gap-4" : "grid gap-4"}>
             <label>
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Name{socialConfirm && <span className="text-red-600"> *</span>}</span>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.name")}{socialConfirm && <span className="text-red-600"> *</span>}</span>
               <input type="text" required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
             </label>
             {/* Apple (and occasionally Google) does not share a displayName,
@@ -256,17 +310,17 @@ export default function CoachSignupPage() {
                 and that typing a name is the way forward. */}
             {socialConfirm && !name.trim() && (
               <p role="alert" className="-mt-2 text-sm font-medium text-red-600">
-                {socialProvider === "apple" ? "Apple didn't share your name" : "Your sign-in didn't include a name"} — enter it above to continue.
+                {socialProvider === "apple" ? t("auth.coachSignup.nameMissingApple") : t("auth.coachSignup.nameMissingProvider")}
               </p>
             )}
             {!socialConfirm && (
               <>
                 <label>
-                  <span className="mb-1.5 block text-sm font-semibold text-slate-700">Email</span>
+                  <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.email")}</span>
                   <input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-sm font-semibold text-slate-700">Password</span>
+                  <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.password")}</span>
                   <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
                 </label>
               </>
@@ -276,17 +330,17 @@ export default function CoachSignupPage() {
           {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{error}</p>}
 
           {provisioningFailed ? (
-            <button type="button" onClick={handleRetryProvisioning} disabled={submitting} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Retrying…" : "Retry account setup"}</button>
+            <button type="button" onClick={handleRetryProvisioning} disabled={submitting} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? t("auth.coachSignup.retrying") : t("auth.coachSignup.retry")}</button>
           ) : (
-            <button type="submit" disabled={submitting || googlePending || applePending || (socialConfirm && !name.trim())} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Creating account…" : "Create Coach Account"}</button>
+            <button type="submit" disabled={submitting || googlePending || applePending || (socialConfirm && !name.trim())} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? t("auth.coachSignup.submitting") : t("auth.createCoachAccount")}</button>
           )}
 
           {socialConfirm && (
-            <button type="button" onClick={handleUseDifferentAccount} disabled={submitting} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300">Use a different account</button>
+            <button type="button" onClick={handleUseDifferentAccount} disabled={submitting} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300">{t("auth.coachSignup.useDifferentAccount")}</button>
           )}
         </form>
         <p className="mt-5 text-center text-sm text-slate-600">
-          Already have an account? <Link href="/login" className="font-bold text-teal-700 hover:text-teal-800">Sign in</Link>
+          {t("auth.haveAccount")} <Link href="/login" className="font-bold text-teal-700 hover:text-teal-800">{t("auth.signIn")}</Link>
         </p>
       </div>
     </main>

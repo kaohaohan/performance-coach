@@ -12,21 +12,13 @@
 // The button matches GoogleSignInButton's dimensions exactly (equivalent
 // prominence) and uses Apple's HIG-conformant black style.
 import { Capacitor } from "@capacitor/core";
-import { APPLE_AUTH_POLICY, untranslatedErrorMessage } from "@/lib/i18n/errors";
-
-// appleAuthErrorMessage is the pre-i18n bridge for the three call sites still
-// holding English literals (/login, /coach/signup, /join/[code]). Sub-task 2c
-// converts them to errorMessage(t, err, APPLE_AUTH_POLICY) and deletes this
-// wrapper; until then it resolves against the English catalog so their
-// behaviour is unchanged.
-//
-// The mapping itself lives in APPLE_AUTH_POLICY in lib/i18n/errors.ts, where
-// node --test can reach it — including the account-collision wording this
-// flow must never share with Google's. Raw Firebase error strings are still
-// never shown, and null still means the person dismissed the Apple sheet.
-export function appleAuthErrorMessage(err: unknown): string | null {
-  return untranslatedErrorMessage(err, APPLE_AUTH_POLICY);
-}
+// As with the Google button, error handling is not here: the three call
+// sites resolve their own failures through errorMessage(t, err,
+// APPLE_AUTH_POLICY) from lib/i18n/errors.ts — including the
+// account-collision wording this flow must never share with Google's. The
+// pre-i18n English-only bridge that used to sit here went with its last
+// caller.
+import { useT } from "@/lib/i18n";
 
 // AppleMark is Apple's logo, inlined so the button renders without a
 // network round-trip and works offline in the PWA shell.
@@ -44,13 +36,16 @@ export function AppleSignInButton({
   onClick,
   pending,
   disabled,
-  label = "Sign in with Apple",
+  label,
 }: {
   onClick: () => void;
   pending?: boolean;
   disabled?: boolean;
   label?: string;
 }) {
+  // Called before the platform check so the hook order is the same on every
+  // render, web included, where this component returns null.
+  const t = useT();
   if (Capacitor.getPlatform() !== "ios") {
     return null;
   }
@@ -62,7 +57,7 @@ export function AppleSignInButton({
       className="flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-black px-5 text-base font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-400"
     >
       {pending ? null : <AppleMark />}
-      {pending ? "Opening Apple…" : label}
+      {pending ? t("auth.provider.applePending") : label ?? t("auth.provider.apple")}
     </button>
   );
 }

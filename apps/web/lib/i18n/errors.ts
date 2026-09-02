@@ -1,6 +1,6 @@
 // One shared way to turn a thrown value into something a person can read.
 //
-// Replaces the fourteen per-page errorMessage() / *AuthErrorMessage() helpers
+// Replaces the fourteen per-page error-to-copy helpers
 // (decision D2 in docs/tasks/2026-08-27-i18n-zh-tw.md). Those helpers are the
 // reason the same failure already reads differently on different screens;
 // translating them in place would have produced fourteen drifting copies in
@@ -18,7 +18,7 @@
 // server itself wrote. That distinction is the whole point of the union below.
 import { ApiError } from "../api.ts";
 import type { MessageVars } from "./locale.ts";
-import { en, type MessageKey } from "./messages/en/index.ts";
+import type { MessageKey } from "./messages/en/index.ts";
 
 // SILENT marks a code that must produce no message at all. Dismissing the
 // Google account chooser or the Apple sheet is a decision, not a failure, and
@@ -201,12 +201,4 @@ export function errorMessage(t: TranslateFn, err: unknown, policy?: ErrorPolicy)
     case "key":
       return t(resolved.key);
   }
-}
-
-// untranslatedErrorMessage is a migration bridge, not an API: it resolves
-// against the English catalog directly, for call sites that have not been
-// converted to useT() yet. Sub-tasks 2c–5 delete their uses as they convert
-// each page. Do not add a new caller — a component that can read `t` should.
-export function untranslatedErrorMessage(err: unknown, policy?: ErrorPolicy): string | null {
-  return errorMessage((key) => en[key], err, policy);
 }
