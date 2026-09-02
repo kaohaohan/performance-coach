@@ -15,6 +15,7 @@
 "use client";
 
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
+import { useT } from "@/lib/i18n";
 
 // useFocusTrap keeps keyboard focus inside a modal dialog while it's open:
 // Tab/Shift+Tab wrap within the container's focusable elements, Escape
@@ -57,7 +58,7 @@ export function ConfirmDialog({
   title,
   body,
   confirmLabel,
-  cancelLabel = "Cancel",
+  cancelLabel,
   danger,
   onConfirm,
   onCancel,
@@ -66,6 +67,9 @@ export function ConfirmDialog({
   title: string;
   body: ReactNode;
   confirmLabel: string;
+  // Defaults to common.cancel. Not a default parameter value any more: the
+  // fallback is locale-dependent, so it is resolved in the body where useT()
+  // is available.
   cancelLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
@@ -77,6 +81,7 @@ export function ConfirmDialog({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  const t = useT();
   const dismiss = onDismiss ?? onCancel;
   useFocusTrap(containerRef, dismiss);
 
@@ -86,7 +91,7 @@ export function ConfirmDialog({
         <h2 id={titleId} className="text-lg font-semibold tracking-tight">{title}</h2>
         <div className="mt-2 text-sm leading-6 text-slate-600">{body}</div>
         <div className="mt-6 flex gap-3">
-          <button type="button" onClick={onCancel} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{cancelLabel}</button>
+          <button type="button" onClick={onCancel} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{cancelLabel ?? t("common.cancel")}</button>
           <button type="button" onClick={onConfirm} className={`min-h-14 flex-1 rounded-2xl text-base font-bold text-white shadow-sm transition ${danger ? "bg-red-600 hover:bg-red-700" : "bg-teal-600 hover:bg-teal-700"}`}>{confirmLabel}</button>
         </div>
       </div>

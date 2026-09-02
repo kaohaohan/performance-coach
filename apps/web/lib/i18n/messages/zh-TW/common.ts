@@ -13,4 +13,6 @@ export const common: CommonMessages = {
   "common.remove": "移除",
   "common.delete": "刪除",
   "common.retry": "重試",
+  "common.signOut": "登出",
+  "common.signingOut": "登出中…",
 };
