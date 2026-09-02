@@ -17,8 +17,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { en } from "./messages/en";
-import { zhTW } from "./messages/zh-TW";
+import { en } from "./messages/en/index";
+import { zhTW } from "./messages/zh-TW/index";
 import {
   DEFAULT_LOCALE,
   detectLocale,
@@ -28,7 +28,7 @@ import {
   type Locale,
   type MessageVars,
 } from "./locale";
-import type { Catalog, MessageKey } from "./messages/en";
+import type { Catalog, MessageKey } from "./messages/en/index";
 
 const catalogs: Record<Locale, Catalog> = { en, "zh-TW": zhTW };
 
@@ -118,4 +118,4 @@ export function useLocale(): { locale: Locale; setLocale: (locale: Locale) => vo
 
 export { LOCALE_LABELS, SUPPORTED_LOCALES } from "./locale";
 export type { Locale } from "./locale";
-export type { MessageKey } from "./messages/en";
+export type { MessageKey } from "./messages/en/index";

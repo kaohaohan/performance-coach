@@ -13,8 +13,8 @@ import {
   LOCALE_STORAGE_KEY,
   type Locale,
 } from "./locale.ts";
-import { en, type Catalog } from "./messages/en.ts";
-import { zhTW } from "./messages/zh-TW.ts";
+import { en, type Catalog } from "./messages/en/index.ts";
+import { zhTW } from "./messages/zh-TW/index.ts";
 
 const catalogs: Record<Locale, Catalog> = { en, "zh-TW": zhTW };
 

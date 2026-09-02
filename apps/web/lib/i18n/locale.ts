@@ -4,7 +4,7 @@
 // in index.tsx.
 //
 // See docs/tasks/2026-08-27-i18n-zh-tw.md §2.
-import type { Catalog, MessageKey } from "./messages/en.ts";
+import type { Catalog, MessageKey } from "./messages/en/index.ts";
 
 export type Locale = "en" | "zh-TW";
 
