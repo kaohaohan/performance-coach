@@ -12,11 +12,13 @@
 // doc §3 sub-task 7 — do not machine-translate domain terms into these files
 // without that review.
 import type { Catalog } from "../en/index.ts";
+import { coach } from "./coach.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
 
 export const zhTW: Catalog = {
+  ...coach,
   ...common,
   ...errors,
   ...settings,

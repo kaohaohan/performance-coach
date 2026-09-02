@@ -16,11 +16,13 @@
 // is obvious: login.*, coachSignup.*, calendar.*, today.*, session.*,
 // settings.*, clients.*, workouts.*, exercises.*, join.*, errors.* (shared),
 // common.* (Save/Cancel/Delete/Back…).
+import { coach } from "./coach.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
 
 export const en = {
+  ...coach,
   ...common,
   ...errors,
   ...settings,
