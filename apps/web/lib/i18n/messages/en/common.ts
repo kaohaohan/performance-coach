@@ -12,6 +12,8 @@ export const common = {
   "common.remove": "Remove",
   "common.delete": "Delete",
   "common.retry": "Retry",
+  "common.signOut": "Sign Out",
+  "common.signingOut": "Signing out…",
 } as const;
 
 export type CommonMessages = Record<keyof typeof common, string>;
