@@ -12,45 +12,20 @@
 // The button matches GoogleSignInButton's dimensions exactly (equivalent
 // prominence) and uses Apple's HIG-conformant black style.
 import { Capacitor } from "@capacitor/core";
+import { APPLE_AUTH_POLICY, untranslatedErrorMessage } from "@/lib/i18n/errors";
 
-// appleAuthErrorMessage maps error codes to copy, following
-// googleAuthErrorMessage. Raw Firebase error strings are never shown.
+// appleAuthErrorMessage is the pre-i18n bridge for the three call sites still
+// holding English literals (/login, /coach/signup, /join/[code]). Sub-task 2c
+// converts them to errorMessage(t, err, APPLE_AUTH_POLICY) and deletes this
+// wrapper; until then it resolves against the English catalog so their
+// behaviour is unchanged.
 //
-// Returns null for "the person deliberately backed out" — dismissing the
-// Apple sheet (USER_CANCELLED, surfaced as the NativeAppleCancelledError
-// sentinel from lib/native-apple-auth.ts) is not a failure.
+// The mapping itself lives in APPLE_AUTH_POLICY in lib/i18n/errors.ts, where
+// node --test can reach it — including the account-collision wording this
+// flow must never share with Google's. Raw Firebase error strings are still
+// never shown, and null still means the person dismissed the Apple sheet.
 export function appleAuthErrorMessage(err: unknown): string | null {
-  if ((err as { name?: string })?.name === "NativeAppleCancelledError") {
-    return null;
-  }
-
-  const code = (err as { code?: string })?.code;
-  switch (code) {
-    // The one collision this app must never resolve silently: the email on
-    // the Apple credential belongs to an account created with another
-    // method. Identities are never linked or merged automatically
-    // (docs/tasks/2026-08-25-ios-apple-signin.md, founder correction #2) —
-    // direct the person to the method that owns their existing account
-    // and data.
-    case "auth/account-exists-with-different-credential":
-      return "An account with this email already exists using a different sign-in method. Sign in with the method you originally used.";
-    case "auth/network-request-failed":
-      return "Network problem. Check your connection and try again.";
-    case "auth/too-many-requests":
-      return "Too many attempts. Try again later.";
-    case "auth/user-disabled":
-      return "This account has been disabled.";
-    // Configuration faults, not user faults: the Apple provider is not
-    // enabled in Firebase, or the Sign in with Apple capability is missing
-    // from the build. Generic copy for the user; the real cause is in the
-    // console for whoever is testing.
-    case "auth/operation-not-allowed":
-    case "auth/configuration-not-found":
-    case "auth/invalid-credential":
-      return "Sign in with Apple isn't available yet. Please use another sign-in method, or contact your coach.";
-    default:
-      return "Sign in with Apple failed. Please try again.";
-  }
+  return untranslatedErrorMessage(err, APPLE_AUTH_POLICY);
 }
 
 // AppleMark is Apple's logo, inlined so the button renders without a

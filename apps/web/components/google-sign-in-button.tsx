@@ -5,60 +5,21 @@
 // wording, size or error handling — the button itself is identical
 // everywhere; only the caller's onClick differs in which endpoint it then
 // calls with the fresh token.
+import { GOOGLE_AUTH_POLICY, untranslatedErrorMessage } from "@/lib/i18n/errors";
 
-// googleAuthErrorMessage maps Firebase Auth error codes to copy, following
-// the same pattern as loginErrorMessage / firebaseAuthErrorMessage on the
-// password forms. Raw Firebase error strings are never shown.
+// googleAuthErrorMessage is the pre-i18n bridge for the three call sites
+// still holding English literals (/login, /coach/signup, /join/[code]).
+// Sub-task 2c converts them to errorMessage(t, err, GOOGLE_AUTH_POLICY) and
+// deletes this wrapper; until then it resolves against the English catalog so
+// their behaviour is unchanged.
 //
-// Returns null for the codes that mean "the person deliberately backed
-// out" — dismissing the account chooser is not a failure, and showing a red
-// alert for it just makes the app look broken.
+// The mapping itself — which codes are silent, which get provider-specific
+// copy, what "anything else" says — moved to GOOGLE_AUTH_POLICY in
+// lib/i18n/errors.ts, where node --test can reach it. Raw Firebase error
+// strings are still never shown, and null still means "the person
+// deliberately backed out", which is not a failure worth a red alert.
 export function googleAuthErrorMessage(err: unknown): string | null {
-  // The iOS shell signs in through Google's native sheet rather than a
-  // popup (see lib/native-google-auth.ts), so dismissing it arrives as this
-  // sentinel instead of auth/popup-closed-by-user. Same meaning, same
-  // silence — backing out is not a failure.
-  if ((err as { name?: string })?.name === "NativeGoogleCancelledError") {
-    return null;
-  }
-
-  const code = (err as { code?: string })?.code;
-  switch (code) {
-    case "auth/popup-closed-by-user":
-    case "auth/user-cancelled":
-    // Fires when a second popup supersedes the first (double tap). The
-    // surviving popup is still running, so this is noise, not an error.
-    case "auth/cancelled-popup-request":
-      return null;
-    case "auth/popup-blocked":
-      return "Your browser blocked the sign-in window. Allow pop-ups for this site, then try again.";
-    // Safari in Lockdown/Private modes can refuse the storage the popup
-    // handshake needs.
-    case "auth/web-storage-unsupported":
-      return "Your browser is blocking the storage Google sign-in needs. Try again in a normal (non-private) window, or use your email and password.";
-    // Google is authoritative for addresses it hosts, so this is reachable
-    // only for a non-Google-hosted address already registered under another
-    // provider. Direct the person to the method they already have —
-    // identities are never merged automatically.
-    case "auth/account-exists-with-different-credential":
-      return "That email is already registered with a different sign-in method. Sign in with your email and password instead.";
-    // Configuration faults, not user faults: the Google provider is not
-    // enabled, or this hostname is not an authorized domain / no authDomain
-    // is configured. Generic copy for the user; the real cause is in the
-    // console for whoever is testing.
-    case "auth/operation-not-allowed":
-    case "auth/unauthorized-domain":
-    case "auth/auth-domain-config-required":
-      return "Google sign-in isn't available yet. Please use your email and password, or contact your coach.";
-    case "auth/network-request-failed":
-      return "Network problem. Check your connection and try again.";
-    case "auth/too-many-requests":
-      return "Too many attempts. Try again later.";
-    case "auth/user-disabled":
-      return "This account has been disabled.";
-    default:
-      return "Google sign-in failed. Please try again.";
-  }
+  return untranslatedErrorMessage(err, GOOGLE_AUTH_POLICY);
 }
 
 // GoogleMark is Google's four-colour "G", inlined so the button renders
