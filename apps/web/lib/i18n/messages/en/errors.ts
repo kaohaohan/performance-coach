@@ -5,9 +5,15 @@
 // Scope of this file: error copy that is *cross-cutting* — the same sentence
 // belongs on more than one screen, or it describes an auth/transport failure
 // rather than one page's workflow. Error copy that only one page can ever
-// show (a coach-signup provisioning conflict, an account-deletion failure)
-// belongs in that page's area file, not here. Keeping the line there is what
-// stops errors.ts growing back into the fourteen-way duplication it replaced.
+// show (a coach-signup provisioning conflict) belongs in that page's area
+// file, not here. Keeping the line there is what stops errors.ts growing back
+// into the fourteen-way duplication it replaced.
+//
+// errors.deletion.* is the one block that looks like page copy and is not:
+// the sentences are thrown by lib/account-deletion.ts, a React-free module
+// that cannot import a locale context and must not depend on the one page
+// that happens to render it today. Its keys therefore live with the other
+// shared error copy rather than in settings.*.
 export const errors = {
   "errors.network": "Couldn't reach the server. Check your connection and try again.",
   "errors.unexpected": "Something went wrong. Please try again.",
@@ -43,6 +49,27 @@ export const errors = {
   "errors.apple.unavailable":
     "Sign in with Apple isn't available yet. Please use another sign-in method, or contact your coach.",
   "errors.apple.failed": "Sign in with Apple failed. Please try again.",
+
+  // Account deletion (Guideline 5.1.1(v)). Thrown by lib/account-deletion.ts
+  // as AccountDeletionError.messageKey and translated at the /settings call
+  // site. This wording is constrained copy, not free product copy — see
+  // docs/tasks/2026-08-26-account-deletion.md. Two rules hold in every
+  // language: a failure must never read as if the account was deleted
+  // anyway, and it must always say what the person can do next, because
+  // deletion is the one flow Apple review re-walks.
+  "errors.deletion.reauthFailed":
+    "Couldn't confirm it's you. Sign in again and try deleting your account.",
+  "errors.deletion.signedOut": "Please sign in again, then try deleting your account.",
+  "errors.deletion.recentAuthRequired": "Please confirm it's you, then try again.",
+  "errors.deletion.invalidRequest": "Couldn't confirm your sign-in. Try again.",
+  // Reached only on the Apple path: the sheet came back without the
+  // authorization code the backend needs to revoke the Apple token.
+  "errors.deletion.appleCodeMissing": "Couldn't confirm your Apple sign-in. Try again.",
+  // {app} is BRAND_NAME, passed in as a var rather than written into either
+  // catalog: it is a product name, so it must read identically in both.
+  "errors.deletion.appleRequiresIos":
+    "To delete an account that uses Sign in with Apple, open the {app} iOS app and try again.",
+  "errors.deletion.failed": "Couldn't delete your account. Check your connection and try again.",
 } as const;
 
 export type ErrorMessages = Record<keyof typeof errors, string>;

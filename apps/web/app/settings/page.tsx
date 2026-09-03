@@ -124,13 +124,13 @@ export default function SettingsPage() {
       }
       router.replace("/login");
     } catch (err) {
-      // AccountDeletionError carries copy written by lib/account-deletion.ts,
-      // which is still English-only: its messages are plain strings, not
-      // catalog keys, and giving them keys means changing that module and its
-      // tests — outside this sub-task's files. Tracked as a follow-up in the
-      // task doc. The fallback below, which this page owns, is translated.
+      // AccountDeletionError carries a catalog key (errors.deletion.*) plus
+      // any vars, never a sentence: lib/account-deletion.ts is React-free and
+      // cannot reach the locale context, so this is where the key becomes
+      // words. Anything else that got here is not from that module, and falls
+      // back to the copy this page owns.
       const message = err instanceof AccountDeletionError
-        ? err.message
+        ? t(err.messageKey, err.messageVars)
         : t("settings.delete.failed");
       setDeleteError(message);
       setDeleting(false);
