@@ -27,4 +27,15 @@ export const errors: ErrorMessages = {
   "errors.apple.accountExists": "這個電子郵件已經有帳號，而且是用其他方式註冊的。請改用你當初註冊的方式登入。",
   "errors.apple.unavailable": "目前無法使用「以 Apple 登入」，請改用其他登入方式，或聯絡你的教練。",
   "errors.apple.failed": "「以 Apple 登入」失敗，請再試一次。",
+
+  // 刪除帳號。每一句都必須維持與英文相同的兩項約束：不能讓人以為帳號其實已經
+  // 被刪除，也不能讓人以為資料被保留；而且一定要說明下一步能做什麼。
+  "errors.deletion.reauthFailed": "無法確認你的身分，請重新登入後再試著刪除帳號。",
+  "errors.deletion.signedOut": "請重新登入後，再試著刪除帳號。",
+  "errors.deletion.recentAuthRequired": "請重新確認身分後再試一次。",
+  "errors.deletion.invalidRequest": "無法確認你的登入資訊，請再試一次。",
+  "errors.deletion.appleCodeMissing": "無法確認你的 Apple 登入，請再試一次。",
+  "errors.deletion.appleRequiresIos":
+    "若要刪除使用「以 Apple 登入」的帳號，請開啟 {app} iOS App 後再試一次。",
+  "errors.deletion.failed": "無法刪除你的帳號，請檢查網路連線後再試一次。",
 };
