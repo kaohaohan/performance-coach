@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useT, type Translate } from "@/lib/i18n";
-import { displayDate, isValidISODate, monthDays, monthLabel, shiftMonth, todayLocalISODate } from "./calendar-date";
+import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { WEEKDAY_SHORT_KEYS, displayDate, isValidISODate, monthDays, monthLabel, shiftMonth, todayLocalISODate } from "./calendar-date";
 import type { Athlete, ScheduledWorkoutSummary, Workout } from "./types";
 
 function addDays(date: string, amount: number): string {
@@ -13,6 +13,7 @@ function addDays(date: string, amount: number): string {
 
 function DatePickerField({ label, value, disabled, onChange }: { label: string; value: string; disabled: boolean; onChange: (date: string) => void }) {
   const t = useT();
+  const { locale } = useLocale();
   const [open, setOpen] = useState(false);
   const [monthAnchor, setMonthAnchor] = useState(value);
 
@@ -34,12 +35,12 @@ function DatePickerField({ label, value, disabled, onChange }: { label: string; 
       {open && <div className="mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="flex items-center justify-between gap-2">
           <button type="button" aria-label={t("calendar.previousMonth")} onClick={() => setMonthAnchor(shiftMonth(monthAnchor, -1))} className="grid h-9 w-9 place-items-center rounded-lg text-lg font-bold text-slate-600 hover:bg-slate-100">‹</button>
-          <span className="text-sm font-bold">{monthLabel(monthAnchor)}</span>
+          <span className="text-sm font-bold">{monthLabel(locale, monthAnchor)}</span>
           <button type="button" aria-label={t("calendar.nextMonth")} onClick={() => setMonthAnchor(shiftMonth(monthAnchor, 1))} className="grid h-9 w-9 place-items-center rounded-lg text-lg font-bold text-slate-600 hover:bg-slate-100">›</button>
         </div>
-        <div className="mt-2 grid grid-cols-7 text-center text-[11px] font-bold uppercase text-slate-400" aria-hidden="true">{["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((weekday) => <span key={weekday}>{weekday}</span>)}</div>
+        <div className="mt-2 grid grid-cols-7 text-center text-[11px] font-bold uppercase text-slate-400" aria-hidden="true">{WEEKDAY_SHORT_KEYS.map((key) => <span key={key}>{t(key)}</span>)}</div>
         <div className="mt-1 grid grid-cols-7 gap-y-1">
-          {monthDays(monthAnchor).map((day, index) => day === null ? <span key={`blank-${index}`} className="aspect-square" /> : <button key={day} type="button" onClick={() => choose(day)} aria-label={displayDate(day)} className={`mx-auto grid aspect-square w-full max-w-10 place-items-center rounded-lg text-sm font-semibold transition ${day === value ? "bg-amber-500 text-white" : day === todayLocalISODate() ? "text-slate-900 ring-1 ring-inset ring-slate-300" : "text-slate-700 hover:bg-slate-100"}`}>{Number(day.slice(-2))}</button>)}
+          {monthDays(monthAnchor).map((day, index) => day === null ? <span key={`blank-${index}`} className="aspect-square" /> : <button key={day} type="button" onClick={() => choose(day)} aria-label={displayDate(locale, day, t("calendar.chooseDate"))} className={`mx-auto grid aspect-square w-full max-w-10 place-items-center rounded-lg text-sm font-semibold transition ${day === value ? "bg-amber-500 text-white" : day === todayLocalISODate() ? "text-slate-900 ring-1 ring-inset ring-slate-300" : "text-slate-700 hover:bg-slate-100"}`}>{Number(day.slice(-2))}</button>)}
         </div>
       </div>}
     </div>
@@ -129,6 +130,7 @@ export default function DuplicateDayPanel({
   onDuplicate: (workoutIds: string[], athleteIds: string[], targetDate: string) => Promise<string[] | undefined>;
 }) {
   const t = useT();
+  const { locale } = useLocale();
   const [selectedAthleteIds, setSelectedAthleteIds] = useState<string[]>(() => initialAthleteId === "" ? [] : [initialAthleteId]);
   const [selectedWorkoutIds, setSelectedWorkoutIds] = useState<string[]>(() => sourceAssignments === null ? [] : sourceWorkoutIds(sourceAssignments));
   const [query, setQuery] = useState("");
@@ -173,7 +175,7 @@ export default function DuplicateDayPanel({
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-label={t("calendar.duplicate.title")}>
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl sm:p-6">
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
-          <div><h2 className="text-lg font-bold tracking-tight">{t("calendar.duplicate.title")}</h2><p className="mt-1 text-sm text-slate-500">{t("calendar.duplicate.from", { date: displayDate(sourceDate) })}</p></div>
+          <div><h2 className="text-lg font-bold tracking-tight">{t("calendar.duplicate.title")}</h2><p className="mt-1 text-sm text-slate-500">{t("calendar.duplicate.from", { date: displayDate(locale, sourceDate, t("calendar.chooseDate")) })}</p></div>
           <button type="button" onClick={onClose} disabled={submitting} className="min-h-10 rounded-lg px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{t("common.cancel")}</button>
         </div>
 
@@ -190,7 +192,7 @@ export default function DuplicateDayPanel({
           </section>
 
           <DatePickerField label={t("calendar.duplicate.targetDate")} value={targetDate} disabled={submitting} onChange={setTargetDate} />
-          <p className="text-sm text-slate-500">{duplicateSummary(t, selectedWorkoutIds.length, selectedAthleteIds.length, displayDate(targetDate))}</p>
+          <p className="text-sm text-slate-500">{duplicateSummary(t, selectedWorkoutIds.length, selectedAthleteIds.length, displayDate(locale, targetDate, t("calendar.chooseDate")))}</p>
           {submitError !== null && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 ring-1 ring-red-600/10">{submitError}</p>}
         </div>
 

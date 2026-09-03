@@ -7,7 +7,8 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import SignOutButton from "@/components/sign-out-button";
 import { BRAND_NAME } from "@/lib/brand";
-import { useT, type Translate } from "@/lib/i18n";
+import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { timeOfDay as formatTimeOfDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import {
   assignmentIdsForSession,
@@ -44,7 +45,10 @@ import {
   type PendingAssignment,
 } from "./build-transaction";
 import {
+  WEEKDAY_NARROW_KEYS,
+  displayDate as formatDisplayDate,
   monthGridDays,
+  monthLabel as formatMonthLabel,
   rangeLabel as viewRangeLabel,
   shiftView,
   visibleRange,
@@ -293,6 +297,13 @@ function resolveEffectivePrescription(item: DraftExercise, position: number): { 
   };
 }
 
+// Deliberately still en-US, and the one exception to decision D3: this is the
+// only date on this page that is not display copy. The name it returns is
+// PERSISTED (see the POST bodies below) and then read back by the athlete, who
+// may be on a different device in a different language, so it would freeze one
+// coach's locale into another person's data and never re-render. Decision D4
+// in docs/tasks/2026-08-27-i18n-zh-tw.md is the open founder call on what to
+// do instead; until it is made, leave this on en-US.
 function fallbackWorkoutName(date: string): string {
   return `${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00`))} Workout`;
 }
@@ -383,29 +394,11 @@ function todayLocalISODate(): string {
   return `${year}-${month}-${day}`;
 }
 
-function displayDate(date: string): string {
-  if (!isValidISODate(date)) return "Choose a date";
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  }).format(new Date(`${date}T00:00:00`));
-}
-
-function timeOfDay(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
-}
-
-
 function shiftMonth(date: string, amount: -1 | 1): string {
   const [year, month, day] = date.split("-").map(Number);
   const nextMonth = new Date(year, month - 1 + amount, 1);
   const nextDay = Math.min(day, new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0).getDate());
   return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}-${String(nextDay).padStart(2, "0")}`;
-}
-
-function monthLabel(date: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date(`${date.slice(0, 7)}-01T00:00:00`));
 }
 
 function monthDays(date: string): Array<string | null> {
@@ -432,10 +425,13 @@ function initials(name: string): string {
 // success: without this the only evidence anything happened is a new card
 // that is often below the fold on a phone, which reads as "nothing
 // happened" and invites the Coach to try again or to reach for Discard.
-function assignedSummary(t: Translate, workoutName: string, date: string, athleteCount: number): string {
+// Takes the date already formatted rather than the ISO string: formatting now
+// needs the active locale, and this is a module-level helper with no access to
+// a hook. Same reason it already takes `t`.
+function assignedSummary(t: Translate, workoutName: string, dateLabel: string, athleteCount: number): string {
   return athleteCount === 1
-    ? t("calendar.assignedSummaryOne", { name: workoutName, date: displayDate(date) })
-    : t("calendar.assignedSummaryOther", { name: workoutName, count: athleteCount, date: displayDate(date) });
+    ? t("calendar.assignedSummaryOne", { name: workoutName, date: dateLabel })
+    : t("calendar.assignedSummaryOther", { name: workoutName, count: athleteCount, date: dateLabel });
 }
 
 // The badge keeps the API's own uppercase vocabulary in English. day-card.tsx
@@ -508,6 +504,17 @@ function isValidISODate(value: string): boolean {
 export default function CoachCalendarPage() {
   const router = useRouter();
   const t = useT();
+  // Decision D3: every date this page renders goes through lib/i18n/dates.ts
+  // in the active locale. These three wrappers exist so the ~20 call sites
+  // below stay unchanged — the locale and the "Choose a date" fallback are
+  // bound once here rather than threaded through each one. The formatting
+  // itself lives in calendar-date.ts / lib/i18n/dates.ts, which are React-free
+  // and therefore covered by `node --test`.
+  const { locale } = useLocale();
+  const chooseDateLabel = t("calendar.chooseDate");
+  const displayDate = (value: string) => formatDisplayDate(locale, value, chooseDateLabel);
+  const monthLabel = (value: string) => formatMonthLabel(locale, value);
+  const timeOfDay = (iso: string) => formatTimeOfDay(locale, iso);
   const { user, idToken, loading: authLoading } = useAuth();
   // `date` is the *browsing* selection — which day the calendar is showing.
   // It is deliberately NOT the date a draft is being authored for; see
@@ -1301,7 +1308,7 @@ export default function CoachCalendarPage() {
     setExtraAthleteIds([]);
     setProgrammingMode("EXISTING");
     setEditorOpen(false);
-    setAssignSuccess(assignedSummary(t, assignedName, assigned.scheduledDate, assigned.athleteIds.length));
+    setAssignSuccess(assignedSummary(t, assignedName, displayDate(assigned.scheduledDate), assigned.athleteIds.length));
     await Promise.all([refetchAssignments(), refetchWorkouts()]);
     setBuildStatus("idle");
   }
@@ -1402,7 +1409,7 @@ export default function CoachCalendarPage() {
       const assignedName = workouts?.find((candidate) => candidate.id === selectedWorkoutId)?.name ?? "Workout";
       const assignedCount = athleteIds.length;
       setExtraAthleteIds([]);
-      setAssignSuccess(assignedSummary(t, assignedName, date, assignedCount));
+      setAssignSuccess(assignedSummary(t, assignedName, displayDate(date), assignedCount));
       setEditorOpen(false);
       await refetchAssignments();
     } catch (err) {
@@ -1901,7 +1908,7 @@ export default function CoachCalendarPage() {
             own Today button for all three views rather than duplicating it. */}
         <ViewToolbar
           view={view}
-          rangeLabel={view === "week" ? viewRangeLabel(weekAnchor, "week") : view === "month" ? viewRangeLabel(`${viewMonth}-01`, "month") : viewRangeLabel(date, "day")}
+          rangeLabel={view === "week" ? viewRangeLabel(locale, weekAnchor, "week", chooseDateLabel) : view === "month" ? viewRangeLabel(locale, `${viewMonth}-01`, "month", chooseDateLabel) : viewRangeLabel(locale, date, "day", chooseDateLabel)}
           disabled={programmingControlsDisabled}
           onPrevious={() => {
             if (view === "day") selectCalendarDate(shiftView(date, "day", -1));
@@ -1928,7 +1935,7 @@ export default function CoachCalendarPage() {
               <button type="button" aria-label={t("calendar.nextMonth")} onClick={() => shiftViewMonth(1)} disabled={programmingControlsDisabled} className="grid h-11 w-11 place-items-center rounded-xl border border-slate-200 text-xl font-bold hover:bg-slate-50 disabled:opacity-50">›</button>
             </div>
             <div className="mt-4 grid grid-cols-7 text-center text-[11px] font-bold uppercase tracking-wide text-slate-400" aria-hidden="true">
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((weekday) => <span key={weekday}>{weekday.slice(0, 1)}</span>)}
+              {WEEKDAY_NARROW_KEYS.map((key) => <span key={key}>{t(key)}</span>)}
             </div>
             <div className="mt-1 grid grid-cols-7 gap-y-1" role="grid" aria-label={monthLabel(`${viewMonth}-01`)}>
               {days.map((day, index) => day === null ? <span key={`blank-${index}`} className="aspect-square" /> : (() => {

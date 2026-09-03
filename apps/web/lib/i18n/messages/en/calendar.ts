@@ -53,6 +53,22 @@ export const calendar = {
   // ── Day view: mini month picker ──────────────────────────────────────────
   "calendar.previousMonth": "Previous month",
   "calendar.nextMonth": "Next month",
+  // Shown in place of a formatted date when the selection is not a valid
+  // date — the only string in the calendar's date helpers, which is why it
+  // waited for sub-task 6a (decision D3) rather than shipping with the rest
+  // of this file.
+  "calendar.chooseDate": "Choose a date",
+  // The mini picker's column headers. Latin initials have no Chinese
+  // equivalent, so these are catalog keys rather than something derived from
+  // the date: 繁中 uses the weekday's number (日 一 二 …), which is a word, not
+  // a first letter. Sunday-first, matching monthDays().
+  "calendar.weekdayNarrow.sun": "S",
+  "calendar.weekdayNarrow.mon": "M",
+  "calendar.weekdayNarrow.tue": "T",
+  "calendar.weekdayNarrow.wed": "W",
+  "calendar.weekdayNarrow.thu": "T",
+  "calendar.weekdayNarrow.fri": "F",
+  "calendar.weekdayNarrow.sat": "S",
   // The three states a day cell can announce. Kept whole rather than appending
   // ", scheduled training" to a formatted date, which is exactly the kind of
   // fragment assembly that reads as broken Chinese.
@@ -226,6 +242,16 @@ export const calendar = {
   "calendar.dayCard.prescriptionUnavailable": "Prescription unavailable",
 
   // ── Duplicate day panel ──────────────────────────────────────────────────
+  // The duplicate panel's own picker headers. Two letters rather than the day
+  // view's one — the two grids have never matched, and unifying them is a
+  // copy decision rather than a translation one, so both wordings are kept.
+  "calendar.weekdayShort.sun": "Su",
+  "calendar.weekdayShort.mon": "Mo",
+  "calendar.weekdayShort.tue": "Tu",
+  "calendar.weekdayShort.wed": "We",
+  "calendar.weekdayShort.thu": "Th",
+  "calendar.weekdayShort.fri": "Fr",
+  "calendar.weekdayShort.sat": "Sa",
   "calendar.duplicate.title": "Duplicate workouts",
   "calendar.duplicate.from": "From {date}",
   "calendar.duplicate.sourceWorkouts": "Source workouts",
