@@ -6,7 +6,8 @@ import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
-import { useT, type Translate } from "@/lib/i18n";
+import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { fullDate } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 
 type PlannedSet = {
@@ -33,14 +34,6 @@ const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 function todayLocalISODate(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
-
-// Still en-US: locale-aware dates are decision D3, implemented in sub-task 6
-// together with the calendar's identical helpers. Leaving it here rather than
-// converting it half-way is deliberate — D3 rewrites this line and the
-// calendar's in one place.
-function displayDate(date: string): string {
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${date}T00:00:00`));
 }
 
 function shiftLocalDate(date: string, days: number): string {
@@ -98,6 +91,11 @@ export default function AthleteTodayPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
   const t = useT();
+  // The page title is the one date this screen renders. fullDate gives
+  // "Thursday, September 3" in English and "9月3日星期四" in Chinese — decision
+  // D3; the helper lives in lib/i18n/dates.ts so the calendar formats the
+  // same date the same way.
+  const { locale } = useLocale();
   const today = todayLocalISODate();
   const [selectedDate, setSelectedDate] = useState(today);
   const [workouts, setWorkouts] = useState<TodayScheduledWorkout[] | null>(null);
@@ -155,7 +153,7 @@ export default function AthleteTodayPage() {
         <p className="mt-7 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{selectedDate === today ? t("athlete.today.eyebrowToday") : t("athlete.today.eyebrowTraining")}</p>
         <div className="mt-3 flex items-center justify-between gap-2">
           <button type="button" aria-label={t("athlete.today.previousDay")} onClick={() => setSelectedDate((current) => shiftLocalDate(current, -1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">‹</button>
-          <h1 className="min-w-0 text-center text-xl font-semibold tracking-tight sm:text-2xl">{displayDate(selectedDate)}</h1>
+          <h1 className="min-w-0 text-center text-xl font-semibold tracking-tight sm:text-2xl">{fullDate(locale, selectedDate)}</h1>
           <button type="button" aria-label={t("athlete.today.nextDay")} onClick={() => setSelectedDate((current) => shiftLocalDate(current, 1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">›</button>
         </div>
         {selectedDate !== today && <button type="button" onClick={() => setSelectedDate(today)} className="mx-auto mt-3 block rounded-full bg-teal-400/15 px-3 py-1 text-xs font-bold text-teal-300 transition hover:bg-teal-400/25">{t("athlete.today.jumpToToday")}</button>}

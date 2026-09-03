@@ -59,6 +59,17 @@ export const calendar: CalendarMessages = {
   // ── Day view: mini month picker ──────────────────────────────────────────
   "calendar.previousMonth": "前一個月",
   "calendar.nextMonth": "後一個月",
+  "calendar.chooseDate": "選擇日期",
+  // 一 = Monday, so the row reads 日 一 二 三 四 五 六 from Sunday. These are the
+  // weekday *numbers*, not initials — 繁中 has no single-letter weekday form,
+  // and 週日/週一 would be too wide for the picker's columns.
+  "calendar.weekdayNarrow.sun": "日",
+  "calendar.weekdayNarrow.mon": "一",
+  "calendar.weekdayNarrow.tue": "二",
+  "calendar.weekdayNarrow.wed": "三",
+  "calendar.weekdayNarrow.thu": "四",
+  "calendar.weekdayNarrow.fri": "五",
+  "calendar.weekdayNarrow.sat": "六",
   "calendar.day.ariaScheduled": "{date}，已排定訓練",
   "calendar.day.ariaDraft": "{date}，有草稿進行中",
   "calendar.day.ariaScheduledAndDraft": "{date}，已排定訓練，有草稿進行中",
@@ -211,6 +222,15 @@ export const calendar: CalendarMessages = {
   "calendar.dayCard.prescriptionUnavailable": "無法取得訓練內容",
 
   // ── Duplicate day panel ──────────────────────────────────────────────────
+  // The duplicate panel's columns are wider than the day view's, so these take
+  // the full 週N form rather than the bare number.
+  "calendar.weekdayShort.sun": "週日",
+  "calendar.weekdayShort.mon": "週一",
+  "calendar.weekdayShort.tue": "週二",
+  "calendar.weekdayShort.wed": "週三",
+  "calendar.weekdayShort.thu": "週四",
+  "calendar.weekdayShort.fri": "週五",
+  "calendar.weekdayShort.sat": "週六",
   "calendar.duplicate.title": "複製課表",
   "calendar.duplicate.from": "來自 {date}",
   "calendar.duplicate.sourceWorkouts": "來源課表",

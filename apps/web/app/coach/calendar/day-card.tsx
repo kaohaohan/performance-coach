@@ -1,6 +1,7 @@
 "use client";
 
-import { useT, type Translate } from "@/lib/i18n";
+import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { dayHeading } from "@/lib/i18n/dates";
 import { isSameMonth, todayLocalISODate } from "./calendar-date";
 import type { ScheduledWorkoutSummary, Session, Workout, WorkoutExercise } from "./types";
 
@@ -67,14 +68,19 @@ export default function DayCard({
   onDuplicate?: (date: string) => void;
 }) {
   const t = useT();
+  const { locale } = useLocale();
   const isToday = date === todayLocalISODate();
   const isSelected = date === selectedDate;
   const outsideMonth = density === "month" && !isSameMonth(date, monthAnchor);
 
-  const dayNumber = Number(date.slice(-2));
-  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${date}T00:00:00`));
-  const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(new Date(`${date}T00:00:00`));
-  const heading = density === "week" ? `${weekday.toUpperCase()} ${dayNumber}` : `${weekday.toUpperCase()}, ${monthShort.toUpperCase()} ${dayNumber}`;
+  // "THU 3" / "THU, SEP 3" in English, "3日 週四" / "9月3日週四" in Chinese —
+  // the word order differs, so the whole heading is built in one place
+  // (lib/i18n/dates.ts) rather than concatenated here.
+  const heading = dayHeading(locale, date, density);
+  // Uppercasing and letter-spacing are Latin typography: `uppercase` does
+  // nothing to CJK, and tracking pushes its glyphs apart into something that
+  // reads as broken rather than emphatic.
+  const headingCase = locale === "zh-TW" ? "" : "uppercase tracking-wide";
 
   const hasTraining = assignments.length > 0;
 
@@ -90,7 +96,7 @@ export default function DayCard({
           onClick={() => onSelect(date)}
           disabled={disabled}
           aria-current={isToday ? "date" : undefined}
-          className={`min-w-0 truncate rounded-lg px-1.5 py-1 text-[11px] font-bold uppercase tracking-wide transition disabled:opacity-50 ${
+          className={`min-w-0 truncate rounded-lg px-1.5 py-1 text-[11px] font-bold transition disabled:opacity-50 ${headingCase} ${
             isToday ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
           }`}
         >
