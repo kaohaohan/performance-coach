@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useT } from "@/lib/i18n";
+import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
 
@@ -14,13 +16,15 @@ type Exercise = {
   scope: "SYSTEM" | "PRIVATE";
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
-}
+// The Go API is the authority on why it rejected a call — a duplicate
+// exercise name comes back with its own explanation — so serverMessage
+// passes that copy through; anything else falls back to errors.unexpected.
+const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
 export default function CoachExercisesPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
+  const t = useT();
   const [role, setRole] = useState<Role | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -57,14 +61,14 @@ export default function CoachExercisesPage() {
         setRole(me.role);
         setRoleError(null);
       } catch (error) {
-        if (!cancelled && requestId === roleRequestId.current) setRoleError(errorMessage(error));
+        if (!cancelled && requestId === roleRequestId.current) setRoleError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [idToken, router]);
+  }, [idToken, router, t]);
 
   useEffect(() => {
     if (!idToken || role !== "COACH") return;
@@ -90,7 +94,7 @@ export default function CoachExercisesPage() {
             setLoadError(null);
           }
         } catch (error) {
-          if (!cancelled && requestId === exerciseRequestId.current) setLoadError(errorMessage(error));
+          if (!cancelled && requestId === exerciseRequestId.current) setLoadError(errorMessage(t, error, API_ERROR_POLICY));
         } finally {
           if (!cancelled && requestId === exerciseRequestId.current) setLoadingExercises(false);
         }
@@ -101,7 +105,7 @@ export default function CoachExercisesPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [idToken, query, reloadKey, role]);
+  }, [idToken, query, reloadKey, role, t]);
 
   function openCreate() {
     setCreateOpen(true);
@@ -119,7 +123,7 @@ export default function CoachExercisesPage() {
     event.preventDefault();
     if (creating || createInFlight.current || !idToken) return;
     if (exerciseName.trim() === "") {
-      setCreateError("Exercise name is required.");
+      setCreateError(t("coach.exercises.nameRequired"));
       return;
     }
 
@@ -136,7 +140,7 @@ export default function CoachExercisesPage() {
       setCreateError(null);
       setReloadKey((value) => value + 1);
     } catch (error) {
-      setCreateError(errorMessage(error));
+      setCreateError(errorMessage(t, error, API_ERROR_POLICY));
     } finally {
       createInFlight.current = false;
       setCreating(false);
@@ -144,7 +148,7 @@ export default function CoachExercisesPage() {
   }
 
   if (authLoading || (user && !idToken) || (user && !role && !roleError)) {
-    return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading…</main>;
+    return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("common.loading")}</main>;
   }
   if (!user) return null;
 
@@ -157,10 +161,10 @@ export default function CoachExercisesPage() {
       <AppHeader
         actions={<SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />}
       >
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Exercise Library</h1>
-        <p className="mt-2 max-w-sm text-sm leading-6 text-slate-300">Manage the movements you use in programming.</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">{t("coach.exercises.title")}</h1>
+        <p className="mt-2 max-w-sm text-sm leading-6 text-slate-300">{t("coach.exercises.subtitle")}</p>
         <button type="button" onClick={() => router.push("/coach/calendar")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">
-          ← Coach Calendar
+          {t("coach.nav.calendar")}
         </button>
       </AppHeader>
 
@@ -170,36 +174,36 @@ export default function CoachExercisesPage() {
         {role === "COACH" && <>
           <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
             <label className="block">
-              <span className="sr-only">Search exercises</span>
-              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exercises…" className="min-h-14 w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
+              <span className="sr-only">{t("coach.exercises.searchLabel")}</span>
+              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("coach.exercises.searchPlaceholder")} className="min-h-14 w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
             </label>
-            {!createOpen && <button type="button" onClick={openCreate} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">+ Create Exercise</button>}
+            {!createOpen && <button type="button" onClick={openCreate} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{t("coach.exercises.createCta")}</button>}
 
             {createOpen && <form onSubmit={handleCreate} className="mt-5 border-t border-slate-100 pt-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Create Exercise</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("coach.exercises.create")}</p>
               <label className="mt-3 block">
-                <span className="mb-1.5 block text-sm font-semibold text-slate-700">Exercise name</span>
+                <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("coach.exercises.nameLabel")}</span>
                 <input type="text" value={exerciseName} onChange={(event) => setExerciseName(event.target.value)} disabled={creating} autoFocus className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:cursor-not-allowed disabled:bg-slate-100" />
               </label>
               {createError && <div className="mt-3"><Notice>{createError}</Notice></div>}
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <button type="submit" disabled={creating} className="min-h-14 rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{creating ? "Creating exercise…" : "Create Exercise"}</button>
-                <button type="button" onClick={cancelCreate} disabled={creating} className="min-h-14 rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-900 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+                <button type="submit" disabled={creating} className="min-h-14 rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{creating ? t("coach.exercises.creating") : t("coach.exercises.create")}</button>
+                <button type="button" onClick={cancelCreate} disabled={creating} className="min-h-14 rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-900 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{t("common.cancel")}</button>
               </div>
             </form>}
           </section>
 
           {loadError && <Notice>{loadError}</Notice>}
 
-          {exercises === null ? <LoadingCard label={loadingExercises ? "Loading exercises…" : "Exercises could not be loaded."} /> : hasNoResults ? (
+          {exercises === null ? <LoadingCard label={loadingExercises ? t("coach.exercises.loading") : t("coach.exercises.loadFailed")} /> : hasNoResults ? (
             <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
-              <h2 className="text-xl font-semibold tracking-tight">No exercises found.</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-500">Try another search or create a new exercise.</p>
-              {!createOpen && <button type="button" onClick={openCreate} className="mt-4 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700">Create Exercise</button>}
+              <h2 className="text-xl font-semibold tracking-tight">{t("coach.exercises.noneFound")}</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">{t("coach.exercises.noneFoundHint")}</p>
+              {!createOpen && <button type="button" onClick={openCreate} className="mt-4 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700">{t("coach.exercises.create")}</button>}
             </section>
           ) : <>
-            <ExerciseSection title="System exercises" badge="SYSTEM" exercises={systemExercises} empty="No system exercises available yet." />
-            <ExerciseSection title="My exercises" badge="PRIVATE" exercises={privateExercises} empty="You haven't created any exercises yet." onCreate={!createOpen ? openCreate : undefined} />
+            <ExerciseSection title={t("coach.exercises.systemTitle")} badge="SYSTEM" badgeLabel={t("coach.scope.system")} exercises={systemExercises} empty={t("coach.exercises.systemEmpty")} />
+            <ExerciseSection title={t("coach.exercises.privateTitle")} badge="PRIVATE" badgeLabel={t("coach.scope.private")} exercises={privateExercises} empty={t("coach.exercises.privateEmpty")} onCreate={!createOpen ? openCreate : undefined} createLabel={t("coach.exercises.create")} />
           </>}
         </>}
       </div>
@@ -215,7 +219,7 @@ function LoadingCard({ label }: { label: string }) {
   return <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5"><p className="text-sm font-medium text-slate-500">{label}</p></section>;
 }
 
-function ExerciseSection({ title, badge, exercises, empty, onCreate }: { title: string; badge: Exercise["scope"]; exercises: Exercise[]; empty: string; onCreate?: () => void }) {
+function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate, createLabel }: { title: string; badge: Exercise["scope"]; badgeLabel: string; exercises: Exercise[]; empty: string; onCreate?: () => void; createLabel?: string }) {
   return (
     <section>
       <div className="mb-3 px-1">
@@ -224,13 +228,13 @@ function ExerciseSection({ title, badge, exercises, empty, onCreate }: { title: 
       {exercises.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-slate-200 bg-stone-50 px-5 py-5">
           <p className="text-sm leading-6 text-slate-500">{empty}</p>
-          {onCreate && <button type="button" onClick={onCreate} className="mt-4 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700">Create Exercise</button>}
+          {onCreate && <button type="button" onClick={onCreate} className="mt-4 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700">{createLabel}</button>}
         </div>
       ) : (
         <ul className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
           {exercises.map((exercise, index) => <li key={exercise.id} className={`flex min-h-14 items-center justify-between gap-3 px-5 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}>
             <p className="min-w-0 break-words font-semibold">{exercise.name}</p>
-            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${badge === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{badge}</span>
+            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${badge === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{badgeLabel}</span>
           </li>)}
         </ul>
       )}

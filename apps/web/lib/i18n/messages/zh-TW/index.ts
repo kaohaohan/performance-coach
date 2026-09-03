@@ -13,12 +13,14 @@
 // without that review.
 import type { Catalog } from "../en/index.ts";
 import { auth } from "./auth.ts";
+import { coach } from "./coach.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
 
 export const zhTW: Catalog = {
   ...auth,
+  ...coach,
   ...common,
   ...errors,
   ...settings,

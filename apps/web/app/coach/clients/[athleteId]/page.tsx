@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useT, type MessageKey } from "@/lib/i18n";
+import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { AppHeader } from "@/components/app-header";
 
 type Role = "COACH" | "ATHLETE";
@@ -36,8 +38,14 @@ function displayDate(date: string): string {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00`));
 }
 
-function statusLabel(session: Session | null): string {
-  return session?.status ?? "NOT STARTED";
+// The chip shows the raw API status, so its three keys carry the API's own
+// casing in English. The workout-history list words the same three states
+// differently (Calendar's sentence case) — an existing English divergence
+// this task translates rather than unifies.
+function statusKey(session: Session | null): MessageKey {
+  if (session?.status === "ACTIVE") return "coach.sessionStatus.active";
+  if (session?.status === "COMPLETED") return "coach.sessionStatus.completed";
+  return "coach.sessionStatus.notStarted";
 }
 
 function statusClass(session: Session | null): string {
@@ -46,15 +54,16 @@ function statusClass(session: Session | null): string {
   return "bg-slate-100 text-slate-600 ring-slate-500/10";
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
-}
+// The Go API is the authority on why it rejected a call, so its own copy is
+// passed through; anything else falls back to errors.unexpected.
+const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
 export default function CoachClientDetailPage() {
   const params = useParams<{ athleteId: string }>();
   const athleteId = params.athleteId;
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
+  const t = useT();
   const [role, setRole] = useState<Role | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [athletes, setAthletes] = useState<Athlete[] | null>(null);
@@ -88,11 +97,11 @@ export default function CoachClientDetailPage() {
         }
         setRole(me.role);
       } catch (error) {
-        if (!cancelled && requestId === roleRequestId.current) setRoleError(errorMessage(error));
+        if (!cancelled && requestId === roleRequestId.current) setRoleError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, router]);
+  }, [idToken, router, t]);
 
   useEffect(() => {
     if (!idToken || role !== "COACH") return;
@@ -107,11 +116,11 @@ export default function CoachClientDetailPage() {
           setAthleteError(null);
         }
       } catch (error) {
-        if (!cancelled && requestId === athleteRequestId.current) setAthleteError(errorMessage(error));
+        if (!cancelled && requestId === athleteRequestId.current) setAthleteError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, role]);
+  }, [idToken, role, t]);
 
   const selectedAthlete = athletes?.find((athlete) => athlete.id === athleteId) ?? null;
 
@@ -135,11 +144,11 @@ export default function CoachClientDetailPage() {
           setTimelineError(null);
         }
       } catch (error) {
-        if (!cancelled && requestId === timelineRequestId.current) setTimelineError(errorMessage(error));
+        if (!cancelled && requestId === timelineRequestId.current) setTimelineError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, selectedAthlete]);
+  }, [idToken, selectedAthlete, t]);
 
   async function handleStart(scheduledWorkoutId: string) {
     if (!idToken || startingRef.current !== null) return;
@@ -154,23 +163,23 @@ export default function CoachClientDetailPage() {
       );
       router.push(`/session/${session.id}`);
     } catch (error) {
-      setStartError(errorMessage(error));
+      setStartError(errorMessage(t, error, API_ERROR_POLICY));
       startingRef.current = null;
       setStartingId(null);
     }
   }
 
   if (authLoading || (user && !idToken) || (user && !role && !roleError)) {
-    return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading…</main>;
+    return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("common.loading")}</main>;
   }
   if (!user) return null;
 
   if (roleError) return <ErrorPage message={roleError} />;
   if (athleteError) return <ErrorPage message={athleteError} />;
-  if (role === "COACH" && athletes === null) return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading connected athlete…</main>;
-  if (role === "COACH" && !selectedAthlete) return <ErrorPage message="This athlete is not connected to your account." />;
+  if (role === "COACH" && athletes === null) return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("coach.clientDetail.loading")}</main>;
+  if (role === "COACH" && !selectedAthlete) return <ErrorPage message={t("coach.clientDetail.notConnected")} />;
 
-  const athleteName = timeline?.[0]?.athlete.name ?? selectedAthlete?.name ?? "Athlete";
+  const athleteName = timeline?.[0]?.athlete.name ?? selectedAthlete?.name ?? t("coach.clientDetail.unknownName");
   const visibleTimeline = timelineAthleteId === selectedAthlete?.id ? timeline : null;
   const orderedTimeline = visibleTimeline ? [...visibleTimeline].sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate)) : null;
 
@@ -178,16 +187,16 @@ export default function CoachClientDetailPage() {
     <main className="min-h-screen overflow-x-hidden bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
       <AppHeader>
         <h1 className="mt-3 break-words text-3xl font-semibold tracking-tight">{athleteName}</h1>
-        <p className="mt-2 text-sm text-slate-300">Athlete Training</p>
-        <button type="button" onClick={() => router.push("/coach/clients")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">← Clients</button>
+        <p className="mt-2 text-sm text-slate-300">{t("coach.clientDetail.subtitle")}</p>
+        <button type="button" onClick={() => router.push("/coach/clients")} className="mt-4 min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">{t("coach.clientDetail.back")}</button>
       </AppHeader>
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-4 px-4">
         <section>
-          <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Training</p></div>
+          <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("coach.clientDetail.trainingHeading")}</p></div>
           {startError && <Notice>{startError}</Notice>}
           {timelineError && <Notice>{timelineError}</Notice>}
-          {orderedTimeline === null ? <LoadingCard label="Loading training…" /> : orderedTimeline.length === 0 ? <EmptyCard title="No training scheduled in this period." /> : (
+          {orderedTimeline === null ? <LoadingCard label={t("coach.clientDetail.loadingTraining")} /> : orderedTimeline.length === 0 ? <EmptyCard title={t("coach.clientDetail.noTraining")} /> : (
             <ul className="grid gap-3">
               {orderedTimeline.map((scheduledWorkout) => (
                 <li key={scheduledWorkout.id} className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
@@ -196,13 +205,13 @@ export default function CoachClientDetailPage() {
                       <p className="text-sm font-semibold text-slate-500">{displayDate(scheduledWorkout.scheduledDate)}</p>
                       <h2 className="mt-1 break-words text-xl font-semibold tracking-tight">{scheduledWorkout.workout.name}</h2>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusClass(scheduledWorkout.session)}`}>{statusLabel(scheduledWorkout.session)}</span>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusClass(scheduledWorkout.session)}`}>{t(statusKey(scheduledWorkout.session))}</span>
                   </div>
                   <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-4">
                     {scheduledWorkout.session === null ? (
-                      <button type="button" onClick={() => handleStart(scheduledWorkout.id)} disabled={startingId === scheduledWorkout.id} className="min-h-11 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{startingId === scheduledWorkout.id ? "Starting…" : "Start Session"}</button>
+                      <button type="button" onClick={() => handleStart(scheduledWorkout.id)} disabled={startingId === scheduledWorkout.id} className="min-h-11 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{startingId === scheduledWorkout.id ? t("coach.session.starting") : t("coach.session.start")}</button>
                     ) : (
-                      <button type="button" onClick={() => router.push(`/session/${scheduledWorkout.session!.id}`)} className="min-h-11 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white">{scheduledWorkout.session.status === "ACTIVE" ? "Resume" : "Review"}</button>
+                      <button type="button" onClick={() => router.push(`/session/${scheduledWorkout.session!.id}`)} className="min-h-11 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white">{scheduledWorkout.session.status === "ACTIVE" ? t("coach.session.resume") : t("coach.session.review")}</button>
                     )}
                   </div>
                 </li>

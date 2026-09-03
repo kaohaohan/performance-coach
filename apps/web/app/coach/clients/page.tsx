@@ -3,8 +3,10 @@
 import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useT } from "@/lib/i18n";
+import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
 import InviteCodesPanel from "./invite-codes-panel";
@@ -30,9 +32,11 @@ function initials(name: string): string {
     .toUpperCase();
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
-}
+// This screen only ever fails against the Go API, and the API is the
+// authority on why it rejected a call. serverMessage therefore passes its
+// own copy through; anything that is not an ApiError falls back to
+// errors.unexpected — exactly what the per-page helper this replaces did.
+const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
 function formatCode(code: string): string {
   return `${code.slice(0, 5)}-${code.slice(5)}`;
@@ -80,8 +84,9 @@ function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, onClose
 }
 
 export default function CoachClientsPage() {
+  const t = useT();
   return (
-    <Suspense fallback={<main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading…</main>}>
+    <Suspense fallback={<main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("common.loading")}</main>}>
       <CoachClientsPageInner />
     </Suspense>
   );
@@ -92,6 +97,7 @@ function CoachClientsPageInner() {
   const searchParams = useSearchParams();
   const tab = searchParams.get("tab") === "codes" ? "codes" : "athletes";
   const { user, idToken, loading: authLoading } = useAuth();
+  const t = useT();
   const [role, setRole] = useState<Role | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [athletes, setAthletes] = useState<Athlete[] | null>(null);
@@ -122,11 +128,11 @@ function CoachClientsPageInner() {
         }
         setRole(me.role);
       } catch (error) {
-        if (!cancelled && requestId === roleRequestId.current) setRoleError(errorMessage(error));
+        if (!cancelled && requestId === roleRequestId.current) setRoleError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, router]);
+  }, [idToken, router, t]);
 
   useEffect(() => {
     if (!idToken || role !== "COACH") return;
@@ -141,11 +147,11 @@ function CoachClientsPageInner() {
           setLoadError(null);
         }
       } catch (error) {
-        if (!cancelled && requestId === athleteRequestId.current) setLoadError(errorMessage(error));
+        if (!cancelled && requestId === athleteRequestId.current) setLoadError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, role]);
+  }, [idToken, role, t]);
 
   async function handleRemoveAthlete(athleteId: string) {
     if (!idToken) return;
@@ -156,7 +162,7 @@ function CoachClientsPageInner() {
       await apiFetch<void>(idToken, `/api/v1/athletes/${encodeURIComponent(athleteId)}`, { method: "DELETE" });
     } catch (error) {
       setAthletes(previous);
-      setRemoveError(errorMessage(error));
+      setRemoveError(errorMessage(t, error, API_ERROR_POLICY));
     }
   }
 
@@ -167,7 +173,7 @@ function CoachClientsPageInner() {
   }
 
   if (authLoading || (user && !idToken) || (user && !role && !roleError)) {
-    return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading…</main>;
+    return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("common.loading")}</main>;
   }
   if (!user) return null;
 
@@ -176,12 +182,12 @@ function CoachClientsPageInner() {
       <AppHeader
         actions={<SignOutButton className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 transition hover:text-white disabled:opacity-50" />}
       >
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Clients</h1>
-        <p className="mt-2 text-sm text-slate-300">Your connected athletes.</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">{t("coach.clients.title")}</h1>
+        <p className="mt-2 text-sm text-slate-300">{t("coach.clients.subtitle")}</p>
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => router.push("/coach/calendar")} className="min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">← Coach Calendar</button>
+          <button type="button" onClick={() => router.push("/coach/calendar")} className="min-h-11 rounded-xl border border-slate-600 px-4 text-sm font-bold text-white transition hover:border-slate-400 hover:bg-slate-900">{t("coach.nav.calendar")}</button>
           {role === "COACH" && (
-            <button ref={createTriggerRef} type="button" onClick={() => setShowCreateModal(true)} className="min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700">+ Invite Athletes</button>
+            <button ref={createTriggerRef} type="button" onClick={() => setShowCreateModal(true)} className="min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700">{t("coach.clients.inviteCta")}</button>
           )}
         </div>
       </AppHeader>
@@ -190,9 +196,9 @@ function CoachClientsPageInner() {
         {roleError && <Notice>{roleError}</Notice>}
         {role === "COACH" && (
           <>
-            <nav aria-label="Clients sections" className="flex gap-2">
-              <Link href="/coach/clients?tab=athletes" className={tabLinkClass(tab === "athletes")}>Athletes</Link>
-              <Link href="/coach/clients?tab=codes" className={tabLinkClass(tab === "codes")}>Invite Codes</Link>
+            <nav aria-label={t("coach.clients.sectionsNav")} className="flex gap-2">
+              <Link href="/coach/clients?tab=athletes" className={tabLinkClass(tab === "athletes")}>{t("coach.clients.tabAthletes")}</Link>
+              <Link href="/coach/clients?tab=codes" className={tabLinkClass(tab === "codes")}>{t("coach.clients.tabCodes")}</Link>
             </nav>
 
             {tab === "athletes" ? (
@@ -235,6 +241,7 @@ function AthletesTab({
   onRequestInvite: () => void;
   onOpenAthlete: (athleteId: string) => void;
 }) {
+  const t = useT();
   const [search, setSearch] = useState("");
   const [confirmTarget, setConfirmTarget] = useState<Athlete | null>(null);
 
@@ -246,27 +253,27 @@ function AthletesTab({
       {removeError && <Notice>{removeError}</Notice>}
 
       {athletes === null ? (
-        <LoadingCard label="Loading connected athletes…" />
+        <LoadingCard label={t("coach.clients.loading")} />
       ) : athletes.length === 0 ? (
         <section className="rounded-3xl border border-dashed border-slate-200 bg-stone-50 px-5 py-6 text-center">
-          <p className="font-semibold">No athletes yet. Create an invite code and send the link.</p>
-          <button type="button" onClick={onRequestInvite} className="mt-4 min-h-14 rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">+ Invite Athletes</button>
+          <p className="font-semibold">{t("coach.clients.empty")}</p>
+          <button type="button" onClick={onRequestInvite} className="mt-4 min-h-14 rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{t("coach.clients.inviteCta")}</button>
         </section>
       ) : (
         <>
-          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search athletes" aria-label="Search athletes" className="min-h-14 w-full rounded-2xl border border-slate-200 bg-white px-4 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" />
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("coach.clients.search")} aria-label={t("coach.clients.search")} className="min-h-14 w-full rounded-2xl border border-slate-200 bg-white px-4 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" />
 
           {filtered && filtered.length === 0 ? (
-            <p className="mt-3 px-1 text-sm font-medium text-slate-500">No athletes match &ldquo;{search}&rdquo;.</p>
+            <p className="mt-3 px-1 text-sm font-medium text-slate-500">{t("coach.clients.noMatch", { query: search })}</p>
           ) : (
             <>
               <div className="mt-3 hidden overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5 sm:block">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-stone-50 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                     <tr>
-                      <th className="px-5 py-3 font-semibold">Name</th>
-                      <th className="px-5 py-3 font-semibold">Status</th>
-                      <th className="px-5 py-3 text-right font-semibold">Actions</th>
+                      <th className="px-5 py-3 font-semibold">{t("coach.col.name")}</th>
+                      <th className="px-5 py-3 font-semibold">{t("coach.col.status")}</th>
+                      <th className="px-5 py-3 text-right font-semibold">{t("coach.col.actions")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -278,9 +285,9 @@ function AthletesTab({
                             {athlete.name}
                           </button>
                         </td>
-                        <td className="px-5 py-3"><StatusChip /></td>
+                        <td className="px-5 py-3"><StatusChip label={t("coach.clients.connected")} /></td>
                         <td className="px-5 py-3 text-right">
-                          <button type="button" onClick={() => setConfirmTarget(athlete)} className="min-h-11 rounded-lg px-3 text-sm font-bold text-red-700 transition hover:bg-red-50">Remove</button>
+                          <button type="button" onClick={() => setConfirmTarget(athlete)} className="min-h-11 rounded-lg px-3 text-sm font-bold text-red-700 transition hover:bg-red-50">{t("common.remove")}</button>
                         </td>
                       </tr>
                     ))}
@@ -295,10 +302,10 @@ function AthletesTab({
                       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-100 text-sm font-bold text-slate-600">{initials(athlete.name)}</span>
                       <span className="min-w-0 flex-1">
                         <span className="block break-words font-semibold">{athlete.name}</span>
-                        <span className="mt-0.5 block text-xs font-bold uppercase tracking-wide text-teal-700">Connected</span>
+                        <span className="mt-0.5 block text-xs font-bold uppercase tracking-wide text-teal-700">{t("coach.clients.connected")}</span>
                       </span>
                     </button>
-                    <button type="button" onClick={() => setConfirmTarget(athlete)} aria-label={`Remove ${athlete.name}`} className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-bold text-red-700 transition hover:bg-red-50">Remove</button>
+                    <button type="button" onClick={() => setConfirmTarget(athlete)} aria-label={t("coach.clients.removeAria", { name: athlete.name })} className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-bold text-red-700 transition hover:bg-red-50">{t("common.remove")}</button>
                   </li>
                 ))}
               </ul>
@@ -309,9 +316,9 @@ function AthletesTab({
 
       {confirmTarget && (
         <ConfirmDialog
-          title={`Remove ${confirmTarget.name}?`}
-          body="They'll no longer appear in your roster, and you won't be able to schedule new training for them. Their existing history is unaffected."
-          confirmLabel="Remove"
+          title={t("coach.clients.removeTitle", { name: confirmTarget.name })}
+          body={t("coach.clients.removeBody")}
+          confirmLabel={t("common.remove")}
           danger
           onConfirm={() => { onRemove(confirmTarget.id); setConfirmTarget(null); }}
           onCancel={() => setConfirmTarget(null)}
@@ -321,8 +328,8 @@ function AthletesTab({
   );
 }
 
-function StatusChip() {
-  return <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700 ring-1 ring-teal-600/20">Connected</span>;
+function StatusChip({ label }: { label: string }) {
+  return <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700 ring-1 ring-teal-600/20">{label}</span>;
 }
 
 function ConfirmDialog({
@@ -340,6 +347,7 @@ function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   useFocusTrap(containerRef, onCancel);
 
@@ -349,7 +357,7 @@ function ConfirmDialog({
         <h2 id="confirm-dialog-title" className="text-lg font-semibold tracking-tight">{title}</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">{body}</p>
         <div className="mt-6 flex gap-3">
-          <button type="button" onClick={onCancel} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">Cancel</button>
+          <button type="button" onClick={onCancel} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{t("common.cancel")}</button>
           <button type="button" onClick={onConfirm} className={`min-h-14 flex-1 rounded-2xl text-base font-bold text-white shadow-sm transition ${danger ? "bg-red-600 hover:bg-red-700" : "bg-teal-600 hover:bg-teal-700"}`}>{confirmLabel}</button>
         </div>
       </div>
@@ -358,6 +366,7 @@ function ConfirmDialog({
 }
 
 function CreateInviteModal({ idToken, onClose }: { idToken: string; onClose: () => void }) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const [step, setStep] = useState<"form" | "success">("form");
   const [description, setDescription] = useState("");
@@ -406,7 +415,7 @@ function CreateInviteModal({ idToken, onClose }: { idToken: string; onClose: () 
       setCreated(result);
       setStep("success");
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errorMessage(t, err, API_ERROR_POLICY));
     } finally {
       setSubmitting(false);
     }
@@ -417,40 +426,40 @@ function CreateInviteModal({ idToken, onClose }: { idToken: string; onClose: () 
       <div ref={containerRef} role="dialog" aria-modal="true" aria-labelledby="invite-modal-title" className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
         {step === "form" ? (
           <form onSubmit={handleCreate}>
-            <h2 id="invite-modal-title" className="text-xl font-semibold tracking-tight">Invite athletes</h2>
+            <h2 id="invite-modal-title" className="text-xl font-semibold tracking-tight">{t("coach.invite.title")}</h2>
             <label className="mt-5 block">
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Description (optional)</span>
-              <input type="text" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={120} placeholder="Fall squad" className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
-              <span className="mt-1.5 block text-xs text-slate-500">Athletes see this when they open the link.</span>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("coach.invite.descriptionLabel")}</span>
+              <input type="text" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={120} placeholder={t("coach.invite.descriptionPlaceholder")} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
+              <span className="mt-1.5 block text-xs text-slate-500">{t("coach.invite.descriptionHelp")}</span>
             </label>
             <div className="mt-5">
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Expires in</span>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("coach.invite.expiresIn")}</span>
               <div className="grid grid-cols-3 gap-2">
                 {([7, 30, 90] as const).map((days) => (
-                  <button key={days} type="button" onClick={() => setExpiresInDays(days)} aria-pressed={expiresInDays === days} className={`min-h-14 rounded-xl text-sm font-bold ring-1 transition ${expiresInDays === days ? "bg-teal-600 text-white ring-teal-600" : "bg-stone-50 text-slate-700 ring-slate-200 hover:bg-stone-100"}`}>{days} days</button>
+                  <button key={days} type="button" onClick={() => setExpiresInDays(days)} aria-pressed={expiresInDays === days} className={`min-h-14 rounded-xl text-sm font-bold ring-1 transition ${expiresInDays === days ? "bg-teal-600 text-white ring-teal-600" : "bg-stone-50 text-slate-700 ring-slate-200 hover:bg-stone-100"}`}>{t("coach.invite.days", { count: days })}</button>
                 ))}
               </div>
             </div>
             {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{error}</p>}
             <div className="mt-6 flex gap-3">
-              <button type="button" onClick={onClose} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">Cancel</button>
-              <button type="submit" disabled={submitting} className="min-h-14 flex-1 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? "Creating…" : "Create invite"}</button>
+              <button type="button" onClick={onClose} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{t("common.cancel")}</button>
+              <button type="submit" disabled={submitting} className="min-h-14 flex-1 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{submitting ? t("coach.invite.creating") : t("coach.invite.create")}</button>
             </div>
           </form>
         ) : created ? (
           <div>
-            <h2 id="invite-modal-title" className="text-xl font-semibold tracking-tight">Invite ready</h2>
-            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Join code</p>
+            <h2 id="invite-modal-title" className="text-xl font-semibold tracking-tight">{t("coach.invite.readyTitle")}</h2>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t("coach.invite.joinCode")}</p>
             <p className="mt-1 font-mono text-2xl font-bold tracking-widest text-slate-900">{formatCode(created.code)}</p>
-            <button type="button" onClick={() => copy(formatCode(created.code), "code")} className="mt-3 min-h-14 w-full rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{copied === "code" ? "Copied ✓" : "Copy code"}</button>
+            <button type="button" onClick={() => copy(formatCode(created.code), "code")} className="mt-3 min-h-14 w-full rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{copied === "code" ? t("coach.invite.copied") : t("coach.invite.copyCode")}</button>
 
-            <p className="mt-5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Invite link</p>
+            <p className="mt-5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t("coach.invite.inviteLink")}</p>
             <p className="mt-1 break-all rounded-xl bg-stone-50 px-3 py-2 text-sm text-slate-600">{inviteLink(created.code)}</p>
-            <button type="button" onClick={() => copy(inviteLink(created.code), "link")} className="mt-3 min-h-14 w-full rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{copied === "link" ? "Copied ✓" : "Copy link"}</button>
+            <button type="button" onClick={() => copy(inviteLink(created.code), "link")} className="mt-3 min-h-14 w-full rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{copied === "link" ? t("coach.invite.copied") : t("coach.invite.copyLink")}</button>
 
-            <p className="mt-5 text-sm text-slate-500">Expires {formatExpiry(created.expiresAt)}{created.description ? ` · ${created.description}` : ""}</p>
-            <p className="mt-4 text-sm font-medium text-slate-600">Send it over LINE, WhatsApp, or email.</p>
-            <button type="button" onClick={onClose} className="mt-4 min-h-14 w-full rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">Done</button>
+            <p className="mt-5 text-sm text-slate-500">{t("coach.invite.expiresOn", { date: formatExpiry(created.expiresAt) })}{created.description ? ` · ${created.description}` : ""}</p>
+            <p className="mt-4 text-sm font-medium text-slate-600">{t("coach.invite.share")}</p>
+            <button type="button" onClick={onClose} className="mt-4 min-h-14 w-full rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{t("common.done")}</button>
           </div>
         ) : null}
       </div>

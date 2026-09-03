@@ -17,12 +17,14 @@
 // settings.*, clients.*, workouts.*, exercises.*, join.*, errors.* (shared),
 // common.* (Save/Cancel/Delete/Back…).
 import { auth } from "./auth.ts";
+import { coach } from "./coach.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
 
 export const en = {
   ...auth,
+  ...coach,
   ...common,
   ...errors,
   ...settings,
