@@ -154,6 +154,9 @@ jobs:
         # red build actionable.
         run: npx tsc --noEmit
 
+      - name: Test
+        run: npm test
+
   deploy-api-staging:
     name: deploy api (staging)
     needs: [api, web]

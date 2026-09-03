@@ -131,14 +131,26 @@ All 12 files must run; state the count in the completion report.
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | Task Doc | Done | This document |
-| Implementation | Not Started | |
-| Verification | Not Started | Whole suite green locally, then confirm the CI job runs it |
+| Implementation | Done | 5 files changed exactly as designed |
+| Verification | Done | `npm ci`, lint, build, `tsc --noEmit`, `npm test` all green locally; CI `web` job now runs `npm test` after `Typecheck` |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`. Keep this table
 current — do not write it once and abandon it.
 
 ## 5. Outcome (filled at completion)
 
-- Final status:
-- Deviations from plan:
-- Follow-ups:
+- Final status: **Done.** All 5 planned files changed. `npm test` (`node --import
+  tsx --test`, no path — default discovery finds all 12 `.test.ts` files
+  outside `node_modules`) runs 137 assertions across 12 files, 137 pass, 0
+  fail. The CI `web` job runs the identical `npm test` command as a new
+  `Test` step placed after `Typecheck` (i.e. after `npm run build`, per the
+  design's ordering requirement).
+- Deviations from plan: None. Neither of the two wrapped tests needed an
+  assertion change — `LocaleProvider`'s English catalog already matched both
+  files' existing string assertions verbatim (including the `client`
+  wording in `duplicate-day-panel.test.ts`, which the test already asserted
+  on before this change). Defect 2 described in §1 (assertions drifting from
+  the `athlete` → `client` copy change) turned out not to have hit these two
+  files' assertions — both were already written against the post-rename
+  copy. No rendering or behavioral regression was found.
+- Follow-ups: None identified.

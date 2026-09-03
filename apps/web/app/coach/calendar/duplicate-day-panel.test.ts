@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { LocaleProvider } from "@/lib/i18n";
 import DuplicateDayPanel, { canDuplicateSelectedWorkouts } from "./duplicate-day-panel.tsx";
 import type { Workout } from "./types";
 
@@ -25,7 +26,7 @@ function workout(id: string, exerciseName: string): Workout {
 }
 
 test("defaults all source workouts and the focused client, distinguishes identical names, and keeps the +7 target", () => {
-  const markup = renderToStaticMarkup(React.createElement(DuplicateDayPanel, {
+  const markup = renderToStaticMarkup(React.createElement(LocaleProvider, null, React.createElement(DuplicateDayPanel, {
     athletes: [{ id: "client", name: "Kevin" }],
     sourceDate: "2026-08-24",
     sourceAssignments,
@@ -39,7 +40,7 @@ test("defaults all source workouts and the focused client, distinguishes identic
     initialAthleteId: "client",
     onClose: () => {},
     onDuplicate: async () => undefined,
-  }));
+  })));
 
   assert.match(markup, /value="2026-08-31"/);
   assert.equal((markup.match(/checked=""/g) ?? []).length, 3);

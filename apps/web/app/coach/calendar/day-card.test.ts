@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { LocaleProvider } from "@/lib/i18n";
 import DayCard from "./day-card.tsx";
 
 test("renders a separate status for every assignment and no S/R footer", () => {
-  const markup = renderToStaticMarkup(React.createElement(DayCard, {
+  const markup = renderToStaticMarkup(React.createElement(LocaleProvider, null, React.createElement(DayCard, {
     date: "2026-08-24",
     selectedDate: "2026-08-24",
     monthAnchor: "2026-08-01",
@@ -19,7 +20,7 @@ test("renders a separate status for every assignment and no S/R footer", () => {
     disabled: false,
     onSelect: () => {},
     onAddWorkout: () => {},
-  }));
+  })));
 
   assert.equal((markup.match(/Not started/g) ?? []).length, 1);
   assert.equal((markup.match(/In progress/g) ?? []).length, 1);
