@@ -15,6 +15,7 @@ import type { Catalog } from "../en/index.ts";
 import { auth } from "./auth.ts";
 import { coach } from "./coach.ts";
 import { calendar } from "./calendar.ts";
+import { athlete } from "./athlete.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
@@ -23,6 +24,7 @@ export const zhTW: Catalog = {
   ...auth,
   ...coach,
   ...calendar,
+  ...athlete,
   ...common,
   ...errors,
   ...settings,
