@@ -18,7 +18,7 @@ export const settings = {
   "settings.backToCalendar": "← Coach Calendar",
   "settings.signedInAs": "Signed in as",
   "settings.roleCoach": "Coach",
-  "settings.roleAthlete": "Athlete",
+  "settings.roleAthlete": "Client",
 
   "settings.language.heading": "Language",
   "settings.language.description": "Applies to this device only.",

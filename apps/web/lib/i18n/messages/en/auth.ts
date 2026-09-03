@@ -16,7 +16,7 @@
 // to common.* is a later, mechanical move once the parallel sessions land.
 export const auth = {
   // --- shared across the four pages ---------------------------------
-  "auth.eyebrow": "Coach & Athlete Training",
+  "auth.eyebrow": "Coach & Client Training",
   "auth.field.name": "Name",
   "auth.field.email": "Email",
   "auth.field.password": "Password",
@@ -42,7 +42,7 @@ export const auth = {
   // translated string is exactly how a locale ends up unable to move it.
   "auth.login.heroTitleLine1": "Train.",
   "auth.login.heroTitleLine2": "Track. Improve.",
-  "auth.login.heroSubtitle": "A focused training space for coaches and athletes.",
+  "auth.login.heroSubtitle": "A focused training space for coaches and clients.",
   "auth.login.heading": "Sign in",
   "auth.login.submit": "Sign In",
   "auth.login.submitting": "Signing in…",
@@ -61,10 +61,10 @@ export const auth = {
   "auth.coachSignup.heroTitleLine1": "Build your",
   "auth.coachSignup.heroTitleLine2": "coaching practice.",
   "auth.coachSignup.heroSubtitle":
-    "Create your Coach account to start programming and inviting athletes.",
+    "Create your Coach account to start programming and inviting clients.",
   "auth.coachSignup.confirmHeading": "Confirm your name",
   "auth.coachSignup.confirmIntro":
-    "You're signed in with {provider}. This is the name your athletes will see.",
+    "You're signed in with {provider}. This is the name your clients will see.",
   "auth.coachSignup.nameMissingApple":
     "Apple didn't share your name — enter it above to continue.",
   "auth.coachSignup.nameMissingProvider":
@@ -73,7 +73,7 @@ export const auth = {
   "auth.coachSignup.retry": "Retry account setup",
   "auth.coachSignup.retrying": "Retrying…",
   "auth.coachSignup.useDifferentAccount": "Use a different account",
-  "auth.coachSignup.error.nameRequired": "Enter the name your athletes will see.",
+  "auth.coachSignup.error.nameRequired": "Enter the name your clients will see.",
   "auth.coachSignup.error.sessionExpiredSignInAgain":
     "Your session expired. Please sign in again.",
   "auth.coachSignup.error.sessionExpiredSignInInstead":
@@ -81,7 +81,7 @@ export const auth = {
   // The 409 an athlete can actually trigger: the backend never promotes an
   // ATHLETE row to COACH, and a bare conflict would not say so.
   "auth.coachSignup.error.athleteAccount":
-    "That account is already registered as an athlete. Sign in instead, or use a different account.",
+    "That account is already registered as a client. Sign in instead, or use a different account.",
   // Both provisioning failures keep the "the account exists, the setup
   // didn't finish" framing. The Firebase account is real at this point, so
   // the server's own sentence alone would read as if nothing had happened.
@@ -113,7 +113,7 @@ export const auth = {
   "auth.joinCode.coachSignedIn": "You're currently signed in as a Coach.",
   "auth.joinCode.coachSignedInNamed": "You're currently signed in as a Coach ({name}).",
   "auth.joinCode.coachSignedInBody":
-    "Sign out to join {coach} with an Athlete account. Your Coach account isn't changed by this.",
+    "Sign out to join {coach} with a Client account. Your Coach account isn't changed by this.",
   "auth.joinCode.signOutAndContinue": "Sign out and continue",
   "auth.joinCode.stayAsCoach": "Stay signed in as a Coach",
   "auth.joinCode.authTabsLabel": "Sign in or create account",

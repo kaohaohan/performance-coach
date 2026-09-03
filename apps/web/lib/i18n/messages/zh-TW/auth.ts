@@ -7,7 +7,7 @@ import type { AuthMessages } from "../en/auth.ts";
 
 export const auth: AuthMessages = {
   // --- 四個頁面共用 ---------------------------------------------------
-  "auth.eyebrow": "教練與運動員訓練",
+  "auth.eyebrow": "教練與學員訓練",
   "auth.field.name": "姓名",
   "auth.field.email": "電子郵件",
   "auth.field.password": "密碼",
@@ -28,7 +28,7 @@ export const auth: AuthMessages = {
   // --- /login ---------------------------------------------------------
   "auth.login.heroTitleLine1": "訓練。",
   "auth.login.heroTitleLine2": "記錄。進步。",
-  "auth.login.heroSubtitle": "為教練與運動員打造的專注訓練空間。",
+  "auth.login.heroSubtitle": "為教練與學員打造的專注訓練空間。",
   "auth.login.heading": "登入",
   "auth.login.submit": "登入",
   "auth.login.submitting": "登入中…",
@@ -43,20 +43,20 @@ export const auth: AuthMessages = {
   // --- /coach/signup ---------------------------------------------------
   "auth.coachSignup.heroTitleLine1": "打造你的",
   "auth.coachSignup.heroTitleLine2": "教練事業。",
-  "auth.coachSignup.heroSubtitle": "建立教練帳號，開始安排課表並邀請運動員。",
+  "auth.coachSignup.heroSubtitle": "建立教練帳號，開始安排課表並邀請學員。",
   "auth.coachSignup.confirmHeading": "確認你的名稱",
-  "auth.coachSignup.confirmIntro": "你已使用 {provider} 登入。這是你的運動員會看到的名稱。",
+  "auth.coachSignup.confirmIntro": "你已使用 {provider} 登入。這是你的學員會看到的名稱。",
   "auth.coachSignup.nameMissingApple": "Apple 沒有提供你的名稱，請在上方輸入後繼續。",
   "auth.coachSignup.nameMissingProvider": "你的登入方式沒有提供名稱，請在上方輸入後繼續。",
   "auth.coachSignup.submitting": "建立帳號中…",
   "auth.coachSignup.retry": "重試帳號設定",
   "auth.coachSignup.retrying": "重試中…",
   "auth.coachSignup.useDifferentAccount": "使用其他帳號",
-  "auth.coachSignup.error.nameRequired": "請輸入你的運動員會看到的名稱。",
+  "auth.coachSignup.error.nameRequired": "請輸入你的學員會看到的名稱。",
   "auth.coachSignup.error.sessionExpiredSignInAgain": "你的登入已過期，請重新登入。",
   "auth.coachSignup.error.sessionExpiredSignInInstead": "你的登入已過期，請改為直接登入。",
   "auth.coachSignup.error.athleteAccount":
-    "這個帳號已註冊為運動員。請改為登入，或使用其他帳號。",
+    "這個帳號已註冊為學員。請改為登入，或使用其他帳號。",
   "auth.coachSignup.error.provisioningFailed":
     "你的帳號已建立，但我們無法完成設定。請再試一次。",
   "auth.coachSignup.error.provisioningFailedDetail":
@@ -80,7 +80,7 @@ export const auth: AuthMessages = {
   "auth.joinCode.coachSignedIn": "你目前是以教練身分登入。",
   "auth.joinCode.coachSignedInNamed": "你目前是以教練身分登入（{name}）。",
   "auth.joinCode.coachSignedInBody":
-    "登出後即可用運動員帳號加入 {coach}。這不會變更你的教練帳號。",
+    "登出後即可用學員帳號加入 {coach}。這不會變更你的教練帳號。",
   "auth.joinCode.signOutAndContinue": "登出並繼續",
   "auth.joinCode.stayAsCoach": "維持以教練身分登入",
   "auth.joinCode.authTabsLabel": "登入或建立帳號",
