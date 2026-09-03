@@ -40,6 +40,18 @@ test("a YYYY-MM prefix is read as the first of that month", () => {
   assert.equal(parsed.getDate(), 1);
 });
 
+// The invite-code screens format `expiresAt`, which the Go API sends as a
+// full ISO instant rather than a calendar day.
+test("a full ISO timestamp is read as the instant it names, not its date half", () => {
+  // 23:00 UTC on the 3rd is already the 4th in Taipei (UTC+8) and still the
+  // 3rd in Denver (UTC-6), so slicing the string down to "2026-09-03" and
+  // reading it at local midnight would show one of them the wrong day. The
+  // instant is kept whole and Intl does the zone conversion.
+  const late = "2026-09-03T23:00:00.000Z";
+  assert.equal(parseISODate(late).getTime(), Date.parse(late));
+  assert.notEqual(parseISODate(late).getTime(), parseISODate("2026-09-03").getTime());
+});
+
 // --- formats ----------------------------------------------------------
 
 test("fullDate names the weekday in each language", () => {
@@ -71,6 +83,21 @@ test("uppercasing a Chinese month/day is a no-op — call sites styling it must 
 test("monthDayYear puts the year where each language puts it", () => {
   assert.equal(monthDayYear("en", THURSDAY), "Sep 3, 2026");
   assert.equal(monthDayYear("zh-TW", THURSDAY), "2026年9月3日");
+});
+
+test("monthDayYear accepts a timestamp, which is what the invite-code screens pass", () => {
+  // `expiresAt` reaches the same shape a bare "YYYY-MM-DD" would. The
+  // expectation is the helper's own output for the local calendar day the
+  // instant falls on, rather than a literal: no one instant is the same date
+  // in every zone, and this file must not depend on the host's.
+  const noon = "2026-09-03T12:00:00.000Z";
+  const local = parseISODate(noon);
+  const localDay = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+  for (const locale of ["en", "zh-TW"] as const) {
+    assert.equal(monthDayYear(locale, noon), monthDayYear(locale, localDay));
+  }
+  assert.ok(monthDayYear("zh-TW", noon).includes("年"));
+  assert.ok(!monthDayYear("zh-TW", noon).includes("Sep"));
 });
 
 test("timeOfDay uses each language's own clock convention", () => {

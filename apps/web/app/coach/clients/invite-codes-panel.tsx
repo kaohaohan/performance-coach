@@ -6,7 +6,8 @@
 // — this component only maps it to a color, never re-derives it.
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
-import { useT, type MessageKey } from "@/lib/i18n";
+import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
+import { monthDayYear } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 
 type InviteCode = {
@@ -27,8 +28,11 @@ function formatCode(code: string): string {
   return `${code.slice(0, 5)}-${code.slice(5)}`;
 }
 
-function formatDate(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(iso));
+// `expiresAt` is a full ISO instant, not a calendar day; monthDayYear reads
+// it as one and renders the coach's own date — en "Sep 3, 2026",
+// zh-TW "2026年9月3日".
+function formatDate(locale: Locale, iso: string): string {
+  return monthDayYear(locale, iso);
 }
 
 function inviteLink(code: string): string {
@@ -69,6 +73,7 @@ function statusChipClass(status: InviteCode["status"]): string {
 
 export default function InviteCodesPanel({ idToken, reloadToken }: { idToken: string; reloadToken: number }) {
   const t = useT();
+  const { locale } = useLocale();
   const [codes, setCodes] = useState<InviteCode[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
@@ -142,7 +147,7 @@ export default function InviteCodesPanel({ idToken, reloadToken }: { idToken: st
                   <tr key={code.id} className="align-top">
                     <td className="px-5 py-3 font-medium text-slate-700">{code.description ?? <span className="text-slate-400">—</span>}</td>
                     <td className="px-5 py-3 font-mono text-sm tracking-wide text-slate-900">{formatCode(code.code)}</td>
-                    <td className="px-5 py-3 text-slate-600">{formatDate(code.expiresAt)}</td>
+                    <td className="px-5 py-3 text-slate-600">{formatDate(locale, code.expiresAt)}</td>
                     <td className="px-5 py-3"><span className={`rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusChipClass(code.status)}`}>{t(STATUS_KEYS[code.status])}</span></td>
                     <td className="px-5 py-3">
                       <div className="flex flex-wrap justify-end gap-2">
@@ -167,7 +172,7 @@ export default function InviteCodesPanel({ idToken, reloadToken }: { idToken: st
                   </div>
                   <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusChipClass(code.status)}`}>{t(STATUS_KEYS[code.status])}</span>
                 </div>
-                <p className="mt-2 text-xs text-slate-500">{t("coach.invite.expiresOn", { date: formatDate(code.expiresAt) })}</p>
+                <p className="mt-2 text-xs text-slate-500">{t("coach.invite.expiresOn", { date: formatDate(locale, code.expiresAt) })}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" onClick={() => handleCopy(`link-${code.id}`, inviteLink(code.code))} className="min-h-11 flex-1 rounded-xl bg-stone-50 px-3 text-sm font-bold text-slate-700 transition hover:bg-stone-100">{copiedField === `link-${code.id}` ? t("coach.invite.copied") : t("coach.invite.copyLink")}</button>
                   <button type="button" onClick={() => handleCopy(`code-${code.id}`, formatCode(code.code))} className="min-h-11 flex-1 rounded-xl bg-stone-50 px-3 text-sm font-bold text-slate-700 transition hover:bg-stone-100">{copiedField === `code-${code.id}` ? t("coach.invite.copied") : t("coach.invite.copyCode")}</button>

@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { useT, type MessageKey } from "@/lib/i18n";
+import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
+import { monthDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
@@ -518,8 +519,12 @@ function WorkoutHistory({
   </>;
 }
 
-function displayHistoryDate(date: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00`)).toUpperCase();
+// The eyebrow above each history group, and the date on each row inside it.
+// The uppercasing that used to live here has moved to the `uppercase` class
+// on the elements themselves, so it can be dropped for Chinese along with the
+// letter-spacing beside it — see HistoryDateGroup.
+function displayHistoryDate(locale: Locale, date: string): string {
+  return monthDay(locale, date);
 }
 
 function historyStatusClass(session: HistorySession | null): string {
@@ -530,8 +535,15 @@ function historyStatusClass(session: HistorySession | null): string {
 
 function HistoryDateGroup({ date, entries, startingId, onAction }: { date: string; entries: HistoryEntry[]; startingId: string | null; onAction: (entry: HistoryEntry) => void }) {
   const t = useT();
+  const { locale } = useLocale();
+  // Uppercasing and letter-spacing are Latin typography, the same call
+  // day-card.tsx makes: `uppercase` does nothing to "9月3日" and tracking
+  // pushes CJK glyphs apart into something that reads as broken spacing.
+  // English keeps the eyebrow exactly as it was.
+  const headingCase = locale === "zh-TW" ? "" : "uppercase tracking-[0.16em]";
+  const rowCase = locale === "zh-TW" ? "" : "uppercase";
   return <section aria-labelledby={`history-${date}`}>
-    <h2 id={`history-${date}`} className="mb-3 px-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{displayHistoryDate(date)}</h2>
+    <h2 id={`history-${date}`} className={`mb-3 px-1 text-xs font-semibold text-slate-500 ${headingCase}`}>{displayHistoryDate(locale, date)}</h2>
     <ul className="grid gap-3">
       {entries.map((entry) => {
         const actionLabel = entry.session === null ? t("coach.session.start") : entry.session.status === "ACTIVE" ? t("coach.session.resume") : t("coach.session.review");
@@ -545,7 +557,7 @@ function HistoryDateGroup({ date, entries, startingId, onAction }: { date: strin
             <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${historyStatusClass(entry.session)}`}>{t(HISTORY_STATUS_KEYS[historyStatusLabel(entry.session)])}</span>
           </div>
           <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <time dateTime={entry.scheduledDate} className="text-sm font-medium text-slate-500">{displayHistoryDate(entry.scheduledDate)}</time>
+            <time dateTime={entry.scheduledDate} className={`text-sm font-medium text-slate-500 ${rowCase}`}>{displayHistoryDate(locale, entry.scheduledDate)}</time>
             <button type="button" onClick={() => onAction(entry)} disabled={startingId !== null} className="min-h-11 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">{starting ? t("coach.session.starting") : actionLabel}</button>
           </div>
         </li>;

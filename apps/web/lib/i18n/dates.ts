@@ -39,7 +39,16 @@ function formatter(locale: Locale, options: Intl.DateTimeFormatOptions): Intl.Da
 // zone rather than UTC, which is what keeps "today" correct for coaches west
 // of Greenwich. A "YYYY-MM" prefix is accepted and read as the first of that
 // month, for the month-heading call sites.
+//
+// A full ISO *timestamp* — anything carrying a "T", which is how the API
+// sends an invite code's `expiresAt` — names an instant rather than a
+// calendar day, so it is parsed as-is and then rendered in the viewer's
+// zone. That distinction is not pedantry: a code expiring at 23:00 UTC has
+// already rolled into the next day for a coach in Taipei, and the next day
+// is the date to show them. Slicing the string down to its date half would
+// show the UTC day instead, which is a different day.
 export function parseISODate(date: string): Date {
+  if (date.includes("T")) return new Date(date);
   const day = date.length === 7 ? `${date}-01` : date;
   return new Date(`${day}T00:00:00`);
 }
@@ -72,6 +81,8 @@ export function monthDay(locale: Locale, date: string): string {
 
 // monthDayYear is monthDay plus the year, for dates far enough from today
 // that the year matters (a client's join date, an invite code's expiry).
+// Both expiry call sites pass a full ISO timestamp, which parseISODate
+// handles — see its note on why that is not the same as its date half.
 //   en    → "Sep 3, 2026"
 //   zh-TW → "2026年9月3日"
 export function monthDayYear(locale: Locale, date: string): string {

@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { useT, type MessageKey } from "@/lib/i18n";
+import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
+import { monthDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { AppHeader } from "@/components/app-header";
 
@@ -34,8 +35,11 @@ function dateRange(): { from: string; to: string } {
   };
 }
 
-function displayDate(date: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00`));
+// The date above each scheduled workout in the client's timeline —
+// en "Sep 3", zh-TW "9月3日". Nothing uppercases it, so there is no Latin
+// casing to strip for Chinese here.
+function displayDate(locale: Locale, date: string): string {
+  return monthDay(locale, date);
 }
 
 // The chip shows the raw API status, so its three keys carry the API's own
@@ -64,6 +68,7 @@ export default function CoachClientDetailPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
   const t = useT();
+  const { locale } = useLocale();
   const [role, setRole] = useState<Role | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [athletes, setAthletes] = useState<Athlete[] | null>(null);
@@ -202,7 +207,7 @@ export default function CoachClientDetailPage() {
                 <li key={scheduledWorkout.id} className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-500">{displayDate(scheduledWorkout.scheduledDate)}</p>
+                      <p className="text-sm font-semibold text-slate-500">{displayDate(locale, scheduledWorkout.scheduledDate)}</p>
                       <h2 className="mt-1 break-words text-xl font-semibold tracking-tight">{scheduledWorkout.workout.name}</h2>
                     </div>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusClass(scheduledWorkout.session)}`}>{t(statusKey(scheduledWorkout.session))}</span>

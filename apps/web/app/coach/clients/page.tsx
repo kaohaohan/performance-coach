@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { useT } from "@/lib/i18n";
+import { useLocale, useT, type Locale } from "@/lib/i18n";
+import { monthDayYear } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
@@ -42,8 +43,11 @@ function formatCode(code: string): string {
   return `${code.slice(0, 5)}-${code.slice(5)}`;
 }
 
-function formatExpiry(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(iso));
+// `expiresAt` is a full ISO instant, not a calendar day; monthDayYear reads
+// it as one and renders the coach's own date — en "Sep 3, 2026",
+// zh-TW "2026年9月3日".
+function formatExpiry(locale: Locale, iso: string): string {
+  return monthDayYear(locale, iso);
 }
 
 // useFocusTrap keeps keyboard focus inside a modal dialog while it's open:
@@ -367,6 +371,7 @@ function ConfirmDialog({
 
 function CreateInviteModal({ idToken, onClose }: { idToken: string; onClose: () => void }) {
   const t = useT();
+  const { locale } = useLocale();
   const containerRef = useRef<HTMLDivElement>(null);
   const [step, setStep] = useState<"form" | "success">("form");
   const [description, setDescription] = useState("");
@@ -457,7 +462,7 @@ function CreateInviteModal({ idToken, onClose }: { idToken: string; onClose: () 
             <p className="mt-1 break-all rounded-xl bg-stone-50 px-3 py-2 text-sm text-slate-600">{inviteLink(created.code)}</p>
             <button type="button" onClick={() => copy(inviteLink(created.code), "link")} className="mt-3 min-h-14 w-full rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{copied === "link" ? t("coach.invite.copied") : t("coach.invite.copyLink")}</button>
 
-            <p className="mt-5 text-sm text-slate-500">{t("coach.invite.expiresOn", { date: formatExpiry(created.expiresAt) })}{created.description ? ` · ${created.description}` : ""}</p>
+            <p className="mt-5 text-sm text-slate-500">{t("coach.invite.expiresOn", { date: formatExpiry(locale, created.expiresAt) })}{created.description ? ` · ${created.description}` : ""}</p>
             <p className="mt-4 text-sm font-medium text-slate-600">{t("coach.invite.share")}</p>
             <button type="button" onClick={onClose} className="mt-4 min-h-14 w-full rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{t("common.done")}</button>
           </div>
