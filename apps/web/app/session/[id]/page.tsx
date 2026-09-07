@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
-import { useT, type Translate } from "@/lib/i18n";
+import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 
 type PlannedSet = { scheduledWorkoutPlannedSetId: string; position: number; reps?: number; prescriptionNote?: string; load?: number; unit?: "kg" | "lb"; rpe?: number };
@@ -75,6 +76,7 @@ export default function SessionPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
   const t = useT();
+  const { locale } = useLocale();
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [forms, setForms] = useState<Record<string, SetLogFormState>>({});
@@ -242,7 +244,7 @@ export default function SessionPage() {
           return <section key={exercise.scheduledWorkoutExerciseId} className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
             <div className="border-b border-slate-100 px-5 py-5">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.exerciseEyebrow")}</p>
-              <h2 className="mt-2 break-words text-2xl font-semibold tracking-tight">{exercise.name}</h2>
+              <h2 className="mt-2 break-words text-2xl font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>
               <p className="mt-2 text-sm text-slate-500">{t(targets.length === 1 ? "athlete.session.plannedSetCountOne" : "athlete.session.plannedSetCountOther", { count: targets.length })}</p>
             </div>
 

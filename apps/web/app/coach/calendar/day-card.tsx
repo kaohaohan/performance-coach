@@ -1,6 +1,7 @@
 "use client";
 
 import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { dayHeading } from "@/lib/i18n/dates";
 import { isSameMonth, todayLocalISODate } from "./calendar-date";
 import type { ScheduledWorkoutSummary, Session, Workout, WorkoutExercise } from "./types";
@@ -138,7 +139,7 @@ export default function DayCard({
                     <ul className="mt-1 grid gap-1">
                       {workout.exercises.map((exercise) => (
                         <li key={exercise.workoutExerciseId} className="border-l-2 border-slate-200 pl-2">
-                          <p className="truncate text-[13px] font-medium leading-tight text-slate-700">{exercise.name}</p>
+                          <p className="truncate text-[13px] font-medium leading-tight text-slate-700">{localizeExerciseName(exercise.name, locale)}</p>
                           <p className="text-[11px] leading-tight text-slate-400">{prescriptionSummary(t, exercise)}</p>
                         </li>
                       ))}

@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
 import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { fullDate } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 
@@ -189,7 +190,7 @@ export default function AthleteTodayPage() {
                   <ul className="divide-y divide-slate-100 px-5">
                     {workout.exercises.map((exercise) => (
                       <li key={exercise.scheduledWorkoutExerciseId} className="py-4">
-                        <p className="text-sm font-bold uppercase tracking-wide text-slate-900">{exercise.name}</p>
+                        <p className="text-sm font-bold uppercase tracking-wide text-slate-900">{localizeExerciseName(exercise.name, locale)}</p>
                         <PlannedSetPreview plan={exercise.plan} />
                       </li>
                     ))}

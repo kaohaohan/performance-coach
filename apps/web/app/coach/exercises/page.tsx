@@ -4,8 +4,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { useT } from "@/lib/i18n";
+import { useLocale, useT } from "@/lib/i18n";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
+import { localizeExerciseName, matchesExerciseQuery } from "@/lib/i18n/exercise-names";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
 
@@ -25,6 +26,7 @@ export default function CoachExercisesPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
   const t = useT();
+  const { locale } = useLocale();
   const [role, setRole] = useState<Role | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -73,11 +75,14 @@ export default function CoachExercisesPage() {
   useEffect(() => {
     if (!idToken || role !== "COACH") return;
 
-    const trimmedQuery = query.trim();
-    const endpoint = trimmedQuery === ""
-      ? "/api/v1/exercises"
-      : `/api/v1/exercises?q=${encodeURIComponent(query)}`;
-    const delay = trimmedQuery === "" ? 0 : 275;
+    // The whole visible catalog, unfiltered. Searching moved client-side
+    // (see the filter below) because the server matches the stored English
+    // name, so "臥推" could never reach the row named "Bench Press". Fetching
+    // once also drops the per-keystroke request and its 275 ms debounce; the
+    // catalog is the system seed plus this coach's own Exercises, which the
+    // MVP keeps small.
+    const endpoint = "/api/v1/exercises";
+    const delay = 0;
     const requestId = ++exerciseRequestId.current;
     let cancelled = false;
 
@@ -105,7 +110,7 @@ export default function CoachExercisesPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [idToken, query, reloadKey, role, t]);
+  }, [idToken, reloadKey, role, t]);
 
   function openCreate() {
     setCreateOpen(true);
@@ -152,9 +157,12 @@ export default function CoachExercisesPage() {
   }
   if (!user) return null;
 
-  const systemExercises = exercises?.filter((exercise) => exercise.scope === "SYSTEM") ?? [];
-  const privateExercises = exercises?.filter((exercise) => exercise.scope === "PRIVATE") ?? [];
-  const hasNoResults = exercises !== null && exercises.length === 0;
+  const matching = exercises?.filter((exercise) => matchesExerciseQuery(exercise.name, query, locale)) ?? [];
+  const systemExercises = matching.filter((exercise) => exercise.scope === "SYSTEM");
+  const privateExercises = matching.filter((exercise) => exercise.scope === "PRIVATE");
+  // Filtered, not fetched: the request is now unconditional, so an empty
+  // catalog and a query that matches nothing must both reach the empty state.
+  const hasNoResults = exercises !== null && matching.length === 0;
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
@@ -220,6 +228,7 @@ function LoadingCard({ label }: { label: string }) {
 }
 
 function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate, createLabel }: { title: string; badge: Exercise["scope"]; badgeLabel: string; exercises: Exercise[]; empty: string; onCreate?: () => void; createLabel?: string }) {
+  const { locale } = useLocale();
   return (
     <section>
       <div className="mb-3 px-1">
@@ -233,7 +242,7 @@ function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate,
       ) : (
         <ul className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
           {exercises.map((exercise, index) => <li key={exercise.id} className={`flex min-h-14 items-center justify-between gap-3 px-5 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}>
-            <p className="min-w-0 break-words font-semibold">{exercise.name}</p>
+            <p className="min-w-0 break-words font-semibold">{localizeExerciseName(exercise.name, locale)}</p>
             <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${badge === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{badgeLabel}</span>
           </li>)}
         </ul>

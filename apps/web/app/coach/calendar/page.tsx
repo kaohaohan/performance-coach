@@ -9,6 +9,7 @@ import SignOutButton from "@/components/sign-out-button";
 import { BRAND_NAME } from "@/lib/brand";
 import { useLocale, useT, type Translate } from "@/lib/i18n";
 import { timeOfDay as formatTimeOfDay } from "@/lib/i18n/dates";
+import { localizeExerciseName, matchesExerciseQuery } from "@/lib/i18n/exercise-names";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import {
   assignmentIdsForSession,
@@ -772,9 +773,9 @@ export default function CoachCalendarPage() {
   useEffect(() => {
     if (!idToken || programmingMode !== "BUILD" || !pickerOpen) return;
     const requestId = ++pickerRequestId.current;
-    const trimmedQuery = pickerQuery.trim();
-    if (trimmedQuery === "") return;
-    const endpoint = `/api/v1/exercises?q=${encodeURIComponent(trimmedQuery)}`;
+    // Whole visible catalog: the server matches the stored English name, so a
+    // zh-TW query could never reach it. Filtering moved into ExercisePicker.
+    const endpoint = "/api/v1/exercises";
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       (async () => {
@@ -799,7 +800,7 @@ export default function CoachCalendarPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [idToken, pickerOpen, pickerQuery, programmingMode, t]);
+  }, [idToken, pickerOpen, programmingMode, t]);
 
   // Restore a saved draft exactly once per Coach session, the first time a
   // coachId is available. Reopens the builder in Build mode (including a
@@ -2126,6 +2127,7 @@ function ProgrammingModeButton({ active, children, ...props }: { active: boolean
 
 function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
   const t = useT();
+  const { locale } = useLocale();
   const setsInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!focusSets) return;
@@ -2147,7 +2149,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, on
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
   return <article className="rounded-2xl border border-slate-200 bg-white p-4">
-    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{item.exercise.name}</h3></div>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div>
+    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></div>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.sets")}</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
@@ -2198,7 +2200,11 @@ function PrescriptionModeButton({ active, children, ...props }: { active: boolea
 
 function ExercisePicker({ query, exercises, loading, creating, error, selectedIds, disabled, onQueryChange, onAdd, onCreate, onClose, onOpenLibrary }: { query: string; exercises: Exercise[] | null; loading: boolean; creating: boolean; error: string | null; selectedIds: Set<string>; disabled: boolean; onQueryChange: (value: string) => void; onAdd: (exercise: Exercise) => void; onCreate: () => void; onClose: () => void; onOpenLibrary: () => void }) {
   const t = useT();
-  const availableExercises = exercises?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
+  const { locale } = useLocale();
+  // Matches the English name the API stores OR the name actually on screen,
+  // so "臥推" finds the row named "Bench Press".
+  const matched = exercises?.filter((exercise) => matchesExerciseQuery(exercise.name, query, locale)) ?? null;
+  const availableExercises = matched?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
   const visibleExercises = availableExercises.slice(0, 8);
   const system = visibleExercises.filter((exercise) => exercise.scope === "SYSTEM");
   const privateExercises = visibleExercises.filter((exercise) => exercise.scope === "PRIVATE");
@@ -2210,12 +2216,13 @@ function ExercisePicker({ query, exercises, loading, creating, error, selectedId
       {creating ? t("calendar.picker.creating") : t("calendar.picker.create", { name: trimmedQuery })}
     </button>
   );
-  return <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">{t("calendar.picker.title")}</p><button type="button" onClick={onClose} disabled={actionsDisabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{t("common.close")}</button></div><label className="mt-3 block"><span className="sr-only">{t("calendar.picker.searchLabel")}</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} disabled={actionsDisabled} placeholder={t("calendar.picker.searchPlaceholder")} autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">{t("calendar.picker.startTyping")}</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">{t("calendar.picker.loading")}</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">{t("calendar.picker.noneFound")}</p><p className="mt-1 text-sm text-slate-500">{t("calendar.picker.noneFoundBody")}</p><div className="mt-3 flex flex-wrap gap-2">{createAction}<button type="button" onClick={onOpenLibrary} disabled={actionsDisabled} className="min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50">{t("calendar.picker.openLibrary")}</button></div></div> : exercises !== null && availableExercises.length === 0 ? <div className="mt-4 grid gap-3"><p className="text-sm font-medium text-slate-500">{t("calendar.picker.allAdded")}</p>{createAction}</div> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title={t("calendar.picker.systemGroup")} exercises={system} selectedIds={selectedIds} disabled={actionsDisabled} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title={t("calendar.picker.myGroup")} exercises={privateExercises} selectedIds={selectedIds} disabled={actionsDisabled} onAdd={onAdd} />}{createAction}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{hiddenCount === 1 ? t("calendar.picker.moreResultsOne") : t("calendar.picker.moreResultsOther", { count: hiddenCount })}</p>}{loading && <p className="text-sm font-medium text-slate-500">{t("calendar.picker.updating")}</p>}</div>}</div>;
+  return <div className="rounded-2xl border border-slate-200 p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">{t("calendar.picker.title")}</p><button type="button" onClick={onClose} disabled={actionsDisabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{t("common.close")}</button></div><label className="mt-3 block"><span className="sr-only">{t("calendar.picker.searchLabel")}</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} disabled={actionsDisabled} placeholder={t("calendar.picker.searchPlaceholder")} autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">{t("calendar.picker.startTyping")}</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">{t("calendar.picker.loading")}</p> : matched !== null && matched.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">{t("calendar.picker.noneFound")}</p><p className="mt-1 text-sm text-slate-500">{t("calendar.picker.noneFoundBody")}</p><div className="mt-3 flex flex-wrap gap-2">{createAction}<button type="button" onClick={onOpenLibrary} disabled={actionsDisabled} className="min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-50">{t("calendar.picker.openLibrary")}</button></div></div> : matched !== null && availableExercises.length === 0 ? <div className="mt-4 grid gap-3"><p className="text-sm font-medium text-slate-500">{t("calendar.picker.allAdded")}</p>{createAction}</div> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title={t("calendar.picker.systemGroup")} exercises={system} selectedIds={selectedIds} disabled={actionsDisabled} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title={t("calendar.picker.myGroup")} exercises={privateExercises} selectedIds={selectedIds} disabled={actionsDisabled} onAdd={onAdd} />}{createAction}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{hiddenCount === 1 ? t("calendar.picker.moreResultsOne") : t("calendar.picker.moreResultsOther", { count: hiddenCount })}</p>}{loading && <p className="text-sm font-medium text-slate-500">{t("calendar.picker.updating")}</p>}</div>}</div>;
 }
 
 function PickerGroup({ title, exercises, selectedIds, disabled, onAdd }: { title: string; exercises: Exercise[]; selectedIds: Set<string>; disabled: boolean; onAdd: (exercise: Exercise) => void }) {
   const t = useT();
-  return <div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p><ul className="overflow-hidden rounded-2xl border border-slate-100">{exercises.map((exercise, index) => { const added = selectedIds.has(exercise.id); return <li key={exercise.id} className={`flex items-center justify-between gap-3 px-3 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}><span className="min-w-0 break-words font-semibold text-slate-800">{exercise.name}</span><button type="button" disabled={disabled || added} onClick={() => onAdd(exercise)} className="min-h-10 shrink-0 rounded-xl border border-teal-600 px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500">{added ? t("calendar.picker.added") : t("common.add")}</button></li>; })}</ul></div>;
+  const { locale } = useLocale();
+  return <div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p><ul className="overflow-hidden rounded-2xl border border-slate-100">{exercises.map((exercise, index) => { const added = selectedIds.has(exercise.id); return <li key={exercise.id} className={`flex items-center justify-between gap-3 px-3 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}><span className="min-w-0 break-words font-semibold text-slate-800">{localizeExerciseName(exercise.name, locale)}</span><button type="button" disabled={disabled || added} onClick={() => onAdd(exercise)} className="min-h-10 shrink-0 rounded-xl border border-teal-600 px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500">{added ? t("calendar.picker.added") : t("common.add")}</button></li>; })}</ul></div>;
 }
 
 function Notice({ children, tone }: { children: ReactNode; tone: "error" | "success" }) {
