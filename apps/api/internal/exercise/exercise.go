@@ -16,11 +16,15 @@ import (
 )
 
 // Exercise is the Exercise Library API response shape. Scope is derived from
-// ownership and is deliberately not persisted.
+// ownership and is deliberately not persisted. Description, YouTube, and
+// image metadata are optional catalog attributes — never part of name identity.
 type Exercise struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Scope string `json:"scope"`
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	Scope          string  `json:"scope"`
+	Description    *string `json:"description,omitempty"`
+	YoutubeURL     *string `json:"youtubeUrl,omitempty"`
+	ImageObjectKey *string `json:"imageObjectKey,omitempty"`
 }
 
 // ErrForbidden indicates the caller is authenticated but is not a coach.
@@ -60,7 +64,8 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, ra
 
 	query := strings.TrimSpace(rawQuery)
 	const listQuery = `
-		SELECT e.id, e.name, e.owner_coach_id IS NULL AS is_system
+		SELECT e.id, e.name, e.owner_coach_id IS NULL AS is_system,
+		       e.description, e.youtube_url, e.image_object_key
 		FROM exercises e
 		LEFT JOIN (
 			SELECT swe.exercise_id,
@@ -88,12 +93,10 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, ra
 
 	exercises := make([]Exercise, 0)
 	for rows.Next() {
-		var item Exercise
-		var isSystem bool
-		if err := rows.Scan(&item.ID, &item.Name, &isSystem); err != nil {
-			return nil, fmt.Errorf("exercise: scan visible exercise: %w", err)
+		item, err := scanExerciseRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		item.Scope = scopeFor(isSystem)
 		exercises = append(exercises, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -175,6 +178,20 @@ func FindOrCreateVisible(ctx context.Context, tx pgx.Tx, coachID, rawName string
 
 type queryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanExerciseRow(row rowScanner) (Exercise, error) {
+	var item Exercise
+	var isSystem bool
+	if err := row.Scan(&item.ID, &item.Name, &isSystem, &item.Description, &item.YoutubeURL, &item.ImageObjectKey); err != nil {
+		return Exercise{}, fmt.Errorf("exercise: scan visible exercise: %w", err)
+	}
+	item.Scope = scopeFor(isSystem)
+	return item, nil
 }
 
 func normalizeName(rawName string) (string, error) {

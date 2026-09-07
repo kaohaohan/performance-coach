@@ -219,6 +219,7 @@ export const coach = {
   "coach.exercises.systemEmpty": "No system exercises available yet.",
   "coach.exercises.privateTitle": "My exercises",
   "coach.exercises.privateEmpty": "You haven't created any exercises yet.",
+  "coach.exercises.watchVideo": "Watch demo",
 } as const;
 
 export type CoachMessages = Record<keyof typeof coach, string>;

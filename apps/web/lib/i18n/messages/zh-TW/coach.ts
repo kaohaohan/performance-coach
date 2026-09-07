@@ -194,4 +194,5 @@ export const coach: CoachMessages = {
   "coach.exercises.systemEmpty": "目前還沒有系統動作。",
   "coach.exercises.privateTitle": "我的動作",
   "coach.exercises.privateEmpty": "你還沒有建立任何動作。",
+  "coach.exercises.watchVideo": "觀看示範",
 };
