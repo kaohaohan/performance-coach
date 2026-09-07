@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
+import { localizeExerciseName, matchesExerciseQuery } from "@/lib/i18n/exercise-names";
 import { monthDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import SignOutButton from "@/components/sign-out-button";
@@ -193,9 +194,9 @@ export default function CoachWorkoutsPage() {
   useEffect(() => {
     if (!idToken || role !== "COACH" || !pickerOpen) return;
     const requestId = ++pickerRequestId.current;
-    const trimmedQuery = pickerQuery.trim();
-    if (trimmedQuery === "") return;
-    const endpoint = `/api/v1/exercises?q=${encodeURIComponent(trimmedQuery)}`;
+    // Whole visible catalog: the server matches the stored English name, so a
+    // zh-TW query could never reach it. Filtering moved into ExercisePicker.
+    const endpoint = "/api/v1/exercises";
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       (async () => {
@@ -220,7 +221,7 @@ export default function CoachWorkoutsPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [idToken, pickerOpen, pickerQuery, role, t]);
+  }, [idToken, pickerOpen, role, t]);
 
   function resetDraft() {
     setDraftName("");
@@ -568,6 +569,7 @@ function HistoryDateGroup({ date, entries, startingId, onAction }: { date: strin
 
 function DraftExerciseCard({ item, index, total, errors, saving, onChange, onSetCountChange, onMove, onRemove }: { item: DraftExercise; index: number; total: number; errors?: FieldErrors["items"][number]; saving: boolean; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void }) {
   const t = useT();
+  const { locale } = useLocale();
   const textMode = item.prescriptionMode === "TEXT";
   const setCount = /^\d+$/.test(item.setCount) ? Number(item.setCount) : 0;
   const effectivePrescription = (position: number) => {
@@ -581,7 +583,7 @@ function DraftExerciseCard({ item, index, total, errors, saving, onChange, onSet
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? item.editingPositions.filter((candidate) => candidate !== position) : [...item.editingPositions, position] });
 
   return <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5">
-    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("coach.workouts.exerciseIndex", { number: index + 1 })}</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{item.exercise.name}</h3></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${item.exercise.scope === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{t(item.exercise.scope === "SYSTEM" ? "coach.scope.system" : "coach.scope.private")}</span></div>
+    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("coach.workouts.exerciseIndex", { number: index + 1 })}</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${item.exercise.scope === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{t(item.exercise.scope === "SYSTEM" ? "coach.scope.system" : "coach.scope.private")}</span></div>
     <div className="mt-5 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("coach.workouts.sets")}</span><input type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("coach.workouts.targetRpe")} <span className="font-normal text-slate-500">{t("coach.optional")}</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} disabled={saving} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
@@ -608,18 +610,23 @@ function DraftExerciseCard({ item, index, total, errors, saving, onChange, onSet
 
 function ExercisePicker({ query, exercises, loading, error, selectedIds, onQueryChange, onAdd, onClose, onOpenLibrary }: { query: string; exercises: Exercise[] | null; loading: boolean; error: string | null; selectedIds: Set<string>; onQueryChange: (value: string) => void; onAdd: (exercise: Exercise) => void; onClose: () => void; onOpenLibrary: () => void }) {
   const t = useT();
-  const availableExercises = exercises?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
+  const { locale } = useLocale();
+  // Matches the English name the API stores OR the name actually on screen,
+  // so "臥推" finds the row named "Bench Press".
+  const matched = exercises?.filter((exercise) => matchesExerciseQuery(exercise.name, query, locale)) ?? null;
+  const availableExercises = matched?.filter((exercise) => !selectedIds.has(exercise.id)) ?? [];
   const visibleExercises = availableExercises.slice(0, 8);
   const system = visibleExercises.filter((exercise) => exercise.scope === "SYSTEM");
   const privateExercises = visibleExercises.filter((exercise) => exercise.scope === "PRIVATE");
   const hiddenCount = availableExercises.length - visibleExercises.length;
   const trimmedQuery = query.trim();
-  return <div><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">{t("coach.picker.title")}</p><button type="button" onClick={onClose} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100">{t("common.close")}</button></div><label className="mt-3 block"><span className="sr-only">{t("coach.exercises.searchLabel")}</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={t("coach.exercises.searchPlaceholder")} autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">{t("coach.picker.startTyping")}</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">{t("coach.exercises.loading")}</p> : exercises !== null && exercises.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">{t("coach.exercises.noneFound")}</p><p className="mt-1 text-sm text-slate-500">{t("coach.picker.cantFind")}</p><button type="button" onClick={onOpenLibrary} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700">{t("coach.picker.openLibrary")}</button></div> : exercises !== null && availableExercises.length === 0 ? <p className="mt-4 text-sm font-medium text-slate-500">{t("coach.picker.allAdded")}</p> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title={t("coach.exercises.systemTitle")} exercises={system} selectedIds={selectedIds} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title={t("coach.exercises.privateTitle")} exercises={privateExercises} selectedIds={selectedIds} onAdd={onAdd} />}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{t(hiddenCount === 1 ? "coach.picker.moreResultsOne" : "coach.picker.moreResultsOther", { count: hiddenCount })}</p>}{loading && <p className="text-sm font-medium text-slate-500">{t("coach.picker.updating")}</p>}</div>}</div>;
+  return <div><div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-800">{t("coach.picker.title")}</p><button type="button" onClick={onClose} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100">{t("common.close")}</button></div><label className="mt-3 block"><span className="sr-only">{t("coach.exercises.searchLabel")}</span><input type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={t("coach.exercises.searchPlaceholder")} autoFocus className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" /></label>{error && trimmedQuery !== "" && <FieldError>{error}</FieldError>}{trimmedQuery === "" ? <p className="mt-4 text-sm font-medium text-slate-500">{t("coach.picker.startTyping")}</p> : loading && exercises === null ? <p className="mt-4 text-sm font-medium text-slate-500">{t("coach.exercises.loading")}</p> : matched !== null && matched.length === 0 ? <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-stone-50 p-4"><p className="font-semibold">{t("coach.exercises.noneFound")}</p><p className="mt-1 text-sm text-slate-500">{t("coach.picker.cantFind")}</p><button type="button" onClick={onOpenLibrary} className="mt-3 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white hover:bg-teal-700">{t("coach.picker.openLibrary")}</button></div> : matched !== null && availableExercises.length === 0 ? <p className="mt-4 text-sm font-medium text-slate-500">{t("coach.picker.allAdded")}</p> : <div className="mt-4 grid gap-4">{system.length > 0 && <PickerGroup title={t("coach.exercises.systemTitle")} exercises={system} selectedIds={selectedIds} onAdd={onAdd} />}{privateExercises.length > 0 && <PickerGroup title={t("coach.exercises.privateTitle")} exercises={privateExercises} selectedIds={selectedIds} onAdd={onAdd} />}{hiddenCount > 0 && <p className="text-sm font-medium text-slate-500">{t(hiddenCount === 1 ? "coach.picker.moreResultsOne" : "coach.picker.moreResultsOther", { count: hiddenCount })}</p>}{loading && <p className="text-sm font-medium text-slate-500">{t("coach.picker.updating")}</p>}</div>}</div>;
 }
 
 function PickerGroup({ title, exercises, selectedIds, onAdd }: { title: string; exercises: Exercise[]; selectedIds: Set<string>; onAdd: (exercise: Exercise) => void }) {
   const t = useT();
-  return <div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p><ul className="overflow-hidden rounded-2xl border border-slate-100">{exercises.map((exercise, index) => { const added = selectedIds.has(exercise.id); return <li key={exercise.id} className={`flex items-center justify-between gap-3 px-3 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}><span className="min-w-0 break-words font-semibold text-slate-800">{exercise.name}</span><button type="button" disabled={added} onClick={() => onAdd(exercise)} className="min-h-10 shrink-0 rounded-xl border border-teal-600 px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500">{added ? t("coach.picker.added") : t("common.add")}</button></li>; })}</ul></div>;
+  const { locale } = useLocale();
+  return <div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</p><ul className="overflow-hidden rounded-2xl border border-slate-100">{exercises.map((exercise, index) => { const added = selectedIds.has(exercise.id); return <li key={exercise.id} className={`flex items-center justify-between gap-3 px-3 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}><span className="min-w-0 break-words font-semibold text-slate-800">{localizeExerciseName(exercise.name, locale)}</span><button type="button" disabled={added} onClick={() => onAdd(exercise)} className="min-h-10 shrink-0 rounded-xl border border-teal-600 px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500">{added ? t("coach.picker.added") : t("common.add")}</button></li>; })}</ul></div>;
 }
 
 function ModeButton({ active, children, ...props }: { active: boolean; children: string; onClick: () => void; disabled: boolean }) {

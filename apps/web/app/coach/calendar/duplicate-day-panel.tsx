@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { useLocale, useT, type Locale, type Translate } from "@/lib/i18n";
+import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { WEEKDAY_SHORT_KEYS, displayDate, isValidISODate, monthDays, monthLabel, shiftMonth, todayLocalISODate } from "./calendar-date";
 import type { Athlete, ScheduledWorkoutSummary, Workout } from "./types";
 
@@ -57,14 +58,14 @@ export function sourceWorkoutIds(assignments: ScheduledWorkoutSummary[]): string
   return [...new Set(assignments.map((assignment) => assignment.workout.id))];
 }
 
-// Takes `t` rather than calling useT(): it is a pure exported helper that
-// duplicate-day-panel.test.ts drives directly, and a hook would make it
-// callable only from inside a rendered provider.
-export function sourceWorkoutsFrom(t: Translate, assignments: ScheduledWorkoutSummary[], workoutsById: ReadonlyMap<string, Workout>): SourceWorkout[] {
+// Takes `t` and `locale` rather than calling useT()/useLocale(): it is a pure
+// exported helper that duplicate-day-panel.test.ts drives directly, and a hook
+// would make it callable only from inside a rendered provider.
+export function sourceWorkoutsFrom(t: Translate, locale: Locale, assignments: ScheduledWorkoutSummary[], workoutsById: ReadonlyMap<string, Workout>): SourceWorkout[] {
   return sourceWorkoutIds(assignments).map((id) => {
     const assignment = assignments.find((item) => item.workout.id === id)!;
     const exercises = workoutsById.get(id)?.exercises ?? [];
-    const exerciseNames = exercises.slice(0, 2).map((exercise) => exercise.name).join(" · ");
+    const exerciseNames = exercises.slice(0, 2).map((exercise) => localizeExerciseName(exercise.name, locale)).join(" · ");
     const remaining = exercises.length - 2;
     const names = remaining > 0 ? t("calendar.duplicate.moreExercises", { names: exerciseNames, count: remaining }) : exerciseNames;
     const count = exercises.length === 1
@@ -142,8 +143,8 @@ export default function DuplicateDayPanel({
     return needle === "" ? athletes : athletes.filter((athlete) => athlete.name.toLowerCase().includes(needle));
   }, [athletes, query]);
   const sourceWorkouts = useMemo(
-    () => sourceAssignments === null ? [] : sourceWorkoutsFrom(t, sourceAssignments, workoutsById),
-    [t, sourceAssignments, workoutsById],
+    () => sourceAssignments === null ? [] : sourceWorkoutsFrom(t, locale, sourceAssignments, workoutsById),
+    [t, locale, sourceAssignments, workoutsById],
   );
   const canDuplicate = canDuplicateSelectedWorkouts({ sourceAssignments, selectedWorkoutIds, selectedAthleteIds, targetDate });
 
