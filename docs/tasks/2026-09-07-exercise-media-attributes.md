@@ -54,14 +54,15 @@ SYSTEM rows first. Do not put these fields on `workout_exercises` (prescription)
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | Feasibility + design | Done | Baseline lock 2026-09-07 |
-| Contract update | Not Started | Picked up separately |
-| Migration + repository | Not Started | |
-| Handler / API | Not Started | |
-| Frontend display | Not Started | |
-| Object-storage upload | Not Started | May split to its own task |
+| Contract update | Done | `docs/go-backend-api-contract-v0.1.md` §3.2 optional fields |
+| Migration + repository | Done | `0005_exercise_media_attributes`; `ListForCoach` scans nullable columns |
+| Handler / API | Done | GET list returns optional fields; POST shape unchanged |
+| Frontend display | Done | `/coach/exercises` shows description + YouTube link when present |
+| Seed demo copy | Done | Back Squat + Bench Press description/YouTube in seed UPDATE block |
+| Object-storage upload | Not Started | `imageObjectKey` column only; no signed URL or upload UI |
 
 ## 5. Outcome
 
-- Final status: **Not implemented.** Design recorded so a later session does not invent a second identity or a VideoAsset table.
-- Deviations from plan: none.
-- Follow-ups: start at sub-task 1 when explicitly picked up. Update `docs/mvp-specification.md` Exercise Library bullets when this becomes user-visible scope.
+- Final status: **Done** for description/YouTube read path and Exercise Library display. Image upload and signed URLs remain a follow-up.
+- Deviations from plan: bundled demo seed UPDATEs for two SYSTEM rows so staging verification is visible without a separate content task.
+- Follow-ups: object-storage upload + signed URL resolution; optional zh-TW description display map; Calendar picker detail surface.

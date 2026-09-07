@@ -64,7 +64,7 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 | `account_deletion_jobs` | `user_id`, `original_firebase_uid`, `apple_refresh_token`, `firebase_deleted_at`, `apple_revoked_at`, `status` | User 1:0..1 | Durable external-cleanup record for Firebase `DeleteUser` and Apple `/auth/revoke`. Not an audit log. |
 | `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Join row retained after account deletion as **historical access** ACL. Service layer distinguishes that from an **active relationship** (`deleted_at IS NULL` on both users). No `ended_at` column in V0.10. |
 | `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
-| `exercises` | `id`, `name`, `owner_coach_id` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. SYSTEM `name` is English identity, not a localized label. |
+| `exercises` | `id`, `name`, `owner_coach_id`, optional `description`, `youtube_url`, `image_object_key` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. SYSTEM `name` is English identity, not a localized label. Media columns are nullable catalog attributes, not part of identity. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
 | `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults for one template exercise. |
 | `workout_exercise_set_overrides` | `workout_exercise_id`, `planned_position`, nullable override values | WorkoutExercise 1:N | Sparse, property-specific explicit values; absent property means inherit. |
@@ -117,7 +117,10 @@ exercises(
   id uuid primary key,
   name text not null,
   owner_coach_id uuid null references users(id),
-  created_at timestamptz not null
+  created_at timestamptz not null,
+  description text null,
+  youtube_url text null,
+  image_object_key text null
 )
 
 workouts(

@@ -154,7 +154,7 @@ The Coach may maintain a small Exercise Library used by Calendar and saved Worko
 - Another Coach's private Exercise is invisible.
 - Athlete cannot manage the Exercise Library.
 - SYSTEM `exercises.name` is English identity. zh-TW labels are display-only. The shared catalog is `apps/api/seeds/system_exercises_v1.sql` (manual idempotent seed, not `cmd/migrate`). Do not store Chinese SYSTEM names. Catalog growth and media rules: `docs/tasks/2026-09-07-exercise-catalog-baseline.md`.
-- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, and assets remain out of scope for this slice. Media attributes (description / YouTube / image key) are designed, not implemented: `docs/tasks/2026-09-07-exercise-media-attributes.md`.
+- Edit/archive Exercise, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, and assets remain out of scope for this slice. Coaches can **view** optional SYSTEM exercise description and YouTube links when present (`GET /api/v1/exercises`); image upload and coach editing are not implemented (`docs/tasks/2026-09-07-exercise-media-attributes.md`).
 
 ---
 

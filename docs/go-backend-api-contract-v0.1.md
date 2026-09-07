@@ -314,10 +314,25 @@ Response `200`：
 
 ```json
 [
-  { "id": "...", "name": "Back Squat", "scope": "SYSTEM" },
+  {
+    "id": "...",
+    "name": "Back Squat",
+    "scope": "SYSTEM",
+    "description": "Feet shoulder-width; brace; sit between hips.",
+    "youtubeUrl": "https://www.youtube.com/watch?v=example",
+    "imageObjectKey": "exercises/back-squat.jpg"
+  },
   { "id": "...", "name": "Tempo Back Squat", "scope": "PRIVATE" }
 ]
 ```
+
+Optional catalog attributes on each element:
+
+- `description` — English coaching cue text; omitted when null.
+- `youtubeUrl` — external demo link; omitted when null.
+- `imageObjectKey` — object-storage key for a catalog image; omitted when null. The API returns the key only; signed URL resolution is a separate concern when object storage is wired.
+
+`POST /api/v1/exercises` response shape is unchanged (`id`, `name`, `scope` only). Media attributes are SYSTEM-catalog data seeded or maintained out of band in V0 of this feature; coaches cannot set them through this endpoint.
 
 `scope` 是由 API 依 `ownerCoachId` 衍生的 presentation metadata，不是新的資料庫欄位。
 

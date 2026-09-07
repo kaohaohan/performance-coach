@@ -64,9 +64,9 @@ Filed separately: `docs/tasks/2026-09-07-exercise-media-attributes.md`. Nullable
 | --- | --- | --- |
 | Lock English identity + seed + display map in canonical docs | Done | mvp-spec, frontend-ui-spec, API contract §3.2, schema §4 |
 | Catalog-growth runbook | Done | Process above; no rows appended |
-| Append seed + zh-TW for a founder name list | Blocked | No list provided 2026-09-07 |
+| Append seed + zh-TW for a founder name list | Blocked | No list provided 2026-09-07 — do not invent names |
 | Re-run seed on staging + verify staging alias | Blocked | Follows the append PR |
-| Media attributes | Not Started | `docs/tasks/2026-09-07-exercise-media-attributes.md` |
+| Media attributes | Done | `docs/tasks/2026-09-07-exercise-media-attributes.md` — read path + UI; upload deferred |
 
 ## 5. Outcome
 

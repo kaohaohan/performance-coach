@@ -15,6 +15,9 @@ type Exercise = {
   id: string;
   name: string;
   scope: "SYSTEM" | "PRIVATE";
+  description?: string;
+  youtubeUrl?: string;
+  imageObjectKey?: string;
 };
 
 // The Go API is the authority on why it rejected a call — a duplicate
@@ -229,6 +232,7 @@ function LoadingCard({ label }: { label: string }) {
 
 function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate, createLabel }: { title: string; badge: Exercise["scope"]; badgeLabel: string; exercises: Exercise[]; empty: string; onCreate?: () => void; createLabel?: string }) {
   const { locale } = useLocale();
+  const t = useT();
   return (
     <section>
       <div className="mb-3 px-1">
@@ -241,9 +245,15 @@ function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate,
         </div>
       ) : (
         <ul className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
-          {exercises.map((exercise, index) => <li key={exercise.id} className={`flex min-h-14 items-center justify-between gap-3 px-5 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}>
-            <p className="min-w-0 break-words font-semibold">{localizeExerciseName(exercise.name, locale)}</p>
-            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${badge === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{badgeLabel}</span>
+          {exercises.map((exercise, index) => <li key={exercise.id} className={`px-5 py-3 ${index > 0 ? "border-t border-slate-100" : ""}`}>
+            <div className="flex min-h-14 items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="break-words font-semibold">{localizeExerciseName(exercise.name, locale)}</p>
+                {exercise.description && <p className="mt-1 text-sm leading-6 text-slate-500">{exercise.description}</p>}
+                {exercise.youtubeUrl && <a href={exercise.youtubeUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-sm font-semibold text-teal-700 underline-offset-2 hover:underline">{t("coach.exercises.watchVideo")}</a>}
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${badge === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{badgeLabel}</span>
+            </div>
           </li>)}
         </ul>
       )}

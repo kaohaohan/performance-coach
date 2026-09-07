@@ -163,4 +163,16 @@ VALUES
     (gen_random_uuid(), 'Hammer Strength Hack Squat', NULL, now())
 ON CONFLICT (lower(name)) WHERE owner_coach_id IS NULL DO NOTHING;
 
+-- Demo catalog media for staging verification. Safe to re-run: overwrites the
+-- same rows each time without touching identity or other exercises.
+UPDATE exercises
+SET description = 'Stand with feet about shoulder-width. Brace the core and sit hips back and down between the legs.',
+    youtube_url = 'https://www.youtube.com/watch?v=Dy28GEHCSf8'
+WHERE owner_coach_id IS NULL AND lower(name) = lower('Back Squat');
+
+UPDATE exercises
+SET description = 'Lie on the bench with eyes under the bar. Retract the shoulder blades and press with a stable bar path.',
+    youtube_url = 'https://www.youtube.com/watch?v=rT7DgCr-3pg'
+WHERE owner_coach_id IS NULL AND lower(name) = lower('Bench Press');
+
 COMMIT;
