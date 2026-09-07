@@ -189,6 +189,10 @@ Deliberately out of scope: decision D4's persisted workout name
 (`docs/tasks/2026-09-03-workout-name-fallback-locale.md`), the App Store
 zh-Hant listing, and any change to how names are stored or compared.
 
+Catalog identity is frozen as the follow-up baseline:
+`docs/tasks/2026-09-07-exercise-catalog-baseline.md`. Media attributes:
+`docs/tasks/2026-09-07-exercise-media-attributes.md`.
+
 ## 6. 術語審閱表（founder 簽核用）
 
 134 筆全數列出。規則：品牌／人名保留英文，動作部分翻中文（2026-09-07 決定）。
