@@ -1,14 +1,19 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
-// Phase I2 (Option B): WKWebView loads the fixed Vercel staging alias for
-// the `staging` git branch instead of the bundled `capacitor-shell/index.html`
-// placeholder. See docs/tasks/2026-08-23-ios-capacitor-staging-webview.md.
+// Public App Store 1.0: WKWebView loads Vercel Production, not the staging
+// alias. Production web/API/database were promoted and smoke-verified first
+// (docs/ios-release-runbook.md § "Public App Store 1.0", steps 1-6) before
+// this switch — see docs/tasks/2026-08-23-ios-capacitor-staging-webview.md
+// for the original staging-alias rationale this supersedes for release
+// builds. Do not merge this onto staging until production has been smoked;
+// every subsequent TestFlight/Debug build from staging would otherwise talk
+// to production.
 const config: CapacitorConfig = {
   appId: "com.pumpslate.app",
   appName: "PumpLoop",
   webDir: "capacitor-shell",
   server: {
-    url: "https://performance-coach-git-staging-kaohaohans-projects.vercel.app",
+    url: "https://dontworkout.vercel.app",
   },
   plugins: {
     // Google and Apple are bundled. The plugin enables every provider by
