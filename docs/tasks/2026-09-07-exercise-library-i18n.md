@@ -71,15 +71,21 @@ because no stored value changes.
 
 ### Risks & unknowns
 
-- **The system seed list is not in this repository.** `docs/mvp-specification.md:156`
-  and `docs/frontend-ui-spec.md:99` both put "System exercise seed
-  implementation" out of scope, and no migration inserts these rows — they were
-  inserted directly into the database. The map is therefore seeded from the rows
-  visible in the founder's screenshot plus standard barbell/bodyweight
-  movements. **An unknown name falls back to its English name**, i.e. exactly
-  today's behavior, so an incomplete map degrades gracefully and is never a
-  regression. Completing it needs the real catalog: `SELECT name FROM exercises
-  WHERE owner_coach_id IS NULL ORDER BY name;`
+- ~~**The system seed list is not in this repository.**~~ **RESOLVED 2026-09-07.**
+  The catalog was found on the unmerged branch `origin/claude/system-exercise-seed-wk3iv9`
+  (single commit `67b1a4e`, no PR ever opened): `apps/api/seeds/system_exercises_v1.sql`,
+  **134 SYSTEM exercises**. All seven names visible in the founder's screenshot appear in
+  it, so the database was almost certainly seeded from this file by hand. It is now
+  cherry-picked onto this branch (`8e3ac69`) and is the source of truth the translation
+  map is checked against. Measured against it, the original hand-guessed map covered
+  **20/134 (15%)** and contained **12 keys matching no real row** (e.g. `deadlift` when
+  the catalog says `Conventional Deadlift`; `hip thrust` vs `Barbell Hip Thrust`) — all
+  since removed. **Still open:** the seed branch was never merged, so the live database
+  is not *provably* these 134 rows; the founder is running
+  `SELECT name FROM exercises WHERE owner_coach_id IS NULL ORDER BY name;` against
+  staging, to be diffed **both directions** and recorded here. A row present in the
+  database but absent from the seed would render in English and no test can see it.
+
 - **Inline creation can still mint a Chinese duplicate.** If a coach types
   「臥推」 into the Calendar picker's create box while the system row `Bench
   Press` exists, `exercise-creation.ts` compares against raw names, finds no
@@ -126,6 +132,29 @@ already-filed task and is deliberately untouched here.
   ordering from `ListForCoach` (system-first, coach's usage count, alphabetical)
   is preserved because the unfiltered list is what gets fetched. The catalog is
   the system seed plus one coach's private Exercises, which the MVP keeps small.
+- **Completeness enforcement.** `exercise-names.test.ts` reads
+  `apps/api/seeds/system_exercises_v1.sql` and asserts: exactly one `INSERT`; every
+  non-comment line in the `VALUES`…`ON CONFLICT` region parses (an unreadable row fails
+  rather than being skipped); exactly 134 names, unique under `lower()`; every seed name
+  has a translation; no map key lacks a seed row; every key is already in lookup form;
+  every value contains a Han character unless declared in `KEPT_ENGLISH`; no stale
+  `KEPT_ENGLISH` entry; and **no two exercises share one Chinese name** — that last one
+  is a correctness bug, not a cosmetic one, since a coach picking a collided row sends a
+  *different* English name on the wire.
+
+  The parser is anchored whole-line rather than a scan. An unanchored
+  `/'([^']+)', NULL/g` fails *silently*: on a future SQL-escaped name like
+  `'Farmer''s Walk'` it resyncs on the second quote and yields `s Walk` while the row
+  count still looks right. Verified: the old form produces `s Walk`, the anchored form
+  produces `Farmer's Walk`.
+
+  This is the only test in `apps/web` that reads from disk, and it deliberately reaches
+  into `apps/api`. Copying the 134 names into `apps/web` to buy a *compile-time* check
+  would create the second, drifting list this test exists to prevent, and would put
+  domain data in the frontend (AGENTS.md §4). `resolveJsonModule` would not help either —
+  it widens string values to `string`, giving no key checking at all. `next build` never
+  touches the path, so no deploy depends on it.
+
 - **Backward compatibility / backfill.** None required — no stored value
   changes. Reverting the change restores English display exactly.
 
@@ -146,7 +175,8 @@ already-filed task and is deliberately untouched here.
 | 2 — display call sites | Done | 9 sites across 7 files. Verified by grep that every `localizeExerciseName(` call is inside JSX and that no payload/comparison uses it. |
 | 3 — client-side search | Done | `/coach/exercises`, Workouts picker, Calendar picker. `?q=` removed from all three; the find-or-create search at `calendar/page.tsx` (`exercise-creation`) deliberately still queries the raw name — it is identity resolution, not display. |
 | 4 — verification | Done | `npm run lint` clean; `npx tsc --noEmit` clean; `npm run build` clean (15 routes, `/privacy` + `/support` still static `○`); `npm test` **146 pass / 0 fail** (137 before, +9 new). |
-| 5 — complete the translation map | **Not Started** | Needs the real system catalog from the database (query in §1). Until then, unlisted names render in English — a graceful fallback, not a regression. |
+| 5 — complete the translation map | Done | Seed found and cherry-picked (`8e3ac69`). All **134** names translated, 12 dead keys removed, ordered to mirror the seed's own equipment blocks so the two files diff by eye. Full table in §6. |
+| 6 — enforce completeness | Done | `exercise-names.test.ts` reads the seed and asserts 9 properties (see §2). Each was verified by deliberate sabotage — a deleted translation, an invented key, a copy-pasted English value, an unparseable seed row, and a duplicated Chinese name each turn the suite red. |
 
 ## 5. Outcome
 
@@ -157,3 +187,172 @@ Not yet verified in a browser against a deployed environment. Per README.md
 Deliberately out of scope: decision D4's persisted workout name
 (`docs/tasks/2026-09-03-workout-name-fallback-locale.md`), the App Store
 zh-Hant listing, and any change to how names are stored or compared.
+
+## 6. 術語審閱表（founder 簽核用）
+
+134 筆全數列出。規則：品牌／人名保留英文，動作部分翻中文（2026-09-07 決定）。
+
+
+### 槓鈴 Barbell（25）
+
+| English | 繁中 |
+|---|---|
+| Back Squat | 背蹲舉 |
+| Front Squat | 前蹲舉 |
+| Box Squat | 箱上蹲 |
+| Pause Squat | 停頓蹲 |
+| Zercher Squat | Zercher 深蹲 |
+| Barbell Split Squat | 槓鈴分腿蹲 |
+| Barbell Reverse Lunge | 槓鈴後跨弓箭步 |
+| Conventional Deadlift | 傳統硬舉 |
+| Sumo Deadlift | 相撲硬舉 |
+| Romanian Deadlift | 羅馬尼亞硬舉 |
+| Stiff-Leg Deadlift | 直腿硬舉 |
+| Barbell Hip Thrust | 槓鈴臀推 |
+| Barbell Glute Bridge | 槓鈴臀橋 |
+| Bench Press | 臥推 |
+| Incline Bench Press | 上斜臥推 |
+| Close-Grip Bench Press | 窄握臥推 |
+| Floor Press | 地板臥推 |
+| Overhead Press | 過頭推舉 |
+| Push Press | 借力推舉 |
+| Barbell Row | 槓鈴划船 |
+| Pendlay Row | Pendlay 划船 |
+| Good Morning | 早安式 |
+| Hang High Pull | 懸垂高拉 |
+| Clean Pull | 上膊拉 |
+| Snatch-Grip Deadlift | 抓舉握硬舉 |
+
+### 啞鈴 Dumbbell（25）
+
+| English | 繁中 |
+|---|---|
+| Dumbbell Bench Press | 啞鈴臥推 |
+| Incline Dumbbell Bench Press | 上斜啞鈴臥推 |
+| Dumbbell Floor Press | 啞鈴地板臥推 |
+| Dumbbell Fly | 啞鈴飛鳥 |
+| Dumbbell Shoulder Press | 啞鈴肩推 |
+| Arnold Press | Arnold 推舉 |
+| Dumbbell Lateral Raise | 啞鈴側平舉 |
+| Dumbbell Front Raise | 啞鈴前平舉 |
+| Dumbbell Rear Delt Raise | 啞鈴後三角平舉 |
+| One-Arm Dumbbell Row | 單手啞鈴划船 |
+| Chest-Supported Dumbbell Row | 胸靠啞鈴划船 |
+| Dumbbell Pullover | 啞鈴仰臥拉舉 |
+| Dumbbell Goblet Squat | 啞鈴高腳杯深蹲 |
+| Dumbbell Front Squat | 啞鈴前蹲舉 |
+| Dumbbell Split Squat | 啞鈴分腿蹲 |
+| Dumbbell Bulgarian Split Squat | 啞鈴保加利亞分腿蹲 |
+| Dumbbell Reverse Lunge | 啞鈴後跨弓箭步 |
+| Dumbbell Walking Lunge | 啞鈴行走弓箭步 |
+| Dumbbell Romanian Deadlift | 啞鈴羅馬尼亞硬舉 |
+| Single-Leg Dumbbell Romanian Deadlift | 單腿啞鈴羅馬尼亞硬舉 |
+| Dumbbell Step-Up | 啞鈴登階 |
+| Dumbbell Hip Thrust | 啞鈴臀推 |
+| Dumbbell Biceps Curl | 啞鈴二頭彎舉 |
+| Hammer Curl | 錘式彎舉 |
+| Dumbbell Triceps Extension | 啞鈴三頭伸展 |
+
+### 纜繩 Cable（21）
+
+| English | 繁中 |
+|---|---|
+| Cable Chest Press | 纜繩胸推 |
+| Cable Fly | 纜繩飛鳥 |
+| Cable Incline Fly | 纜繩上斜飛鳥 |
+| Cable Row | 纜繩划船 |
+| Seated Cable Row | 坐姿纜繩划船 |
+| One-Arm Cable Row | 單手纜繩划船 |
+| Cable Lat Pulldown | 纜繩滑輪下拉 |
+| Straight-Arm Pulldown | 直臂下拉 |
+| Cable Face Pull | 纜繩臉拉 |
+| Cable Lateral Raise | 纜繩側平舉 |
+| Cable Front Raise | 纜繩前平舉 |
+| Cable Rear Delt Fly | 纜繩後三角飛鳥 |
+| Cable Biceps Curl | 纜繩二頭彎舉 |
+| Cable Hammer Curl | 纜繩錘式彎舉 |
+| Cable Triceps Pushdown | 纜繩三頭下壓 |
+| Cable Overhead Triceps Extension | 纜繩過頭三頭伸展 |
+| Cable Pull-Through | 纜繩前拉 |
+| Cable Wood Chop | 纜繩劈砍 |
+| Cable Pallof Press | 纜繩 Pallof 推 |
+| Cable Hip Abduction | 纜繩髖外展 |
+| Cable Hip Adduction | 纜繩髖內收 |
+
+### 徒手 Bodyweight（24）
+
+| English | 繁中 |
+|---|---|
+| Push-Up | 伏地挺身 |
+| Incline Push-Up | 上斜伏地挺身 |
+| Decline Push-Up | 下斜伏地挺身 |
+| Pull-Up | 引體向上 |
+| Chin-Up | 反手引體向上 |
+| Neutral-Grip Pull-Up | 中立握引體向上 |
+| Inverted Row | 反向划船 |
+| Bodyweight Squat | 徒手深蹲 |
+| Split Squat | 分腿蹲 |
+| Bulgarian Split Squat | 保加利亞分腿蹲 |
+| Reverse Lunge | 後跨弓箭步 |
+| Walking Lunge | 行走弓箭步 |
+| Step-Up | 登階 |
+| Single-Leg Squat | 單腿深蹲 |
+| Pistol Squat | 手槍蹲 |
+| Glute Bridge | 臀橋 |
+| Single-Leg Glute Bridge | 單腿臀橋 |
+| Nordic Hamstring Curl | 北歐腿彎舉 |
+| Calf Raise | 提踵 |
+| Single-Leg Calf Raise | 單腿提踵 |
+| Plank | 棒式 |
+| Side Plank | 側棒式 |
+| Dead Bug | 死蟲式 |
+| Bird Dog | 鳥狗式 |
+
+### 器械 Machine（25）
+
+| English | 繁中 |
+|---|---|
+| Leg Press | 腿推舉 |
+| Hack Squat | 哈克深蹲 |
+| Pendulum Squat | 鐘擺深蹲 |
+| Belt Squat | 腰帶深蹲 |
+| Leg Extension | 腿伸展 |
+| Seated Leg Curl | 坐姿腿彎舉 |
+| Lying Leg Curl | 俯臥腿彎舉 |
+| Standing Leg Curl | 站姿腿彎舉 |
+| Hip Abduction Machine | 髖外展機 |
+| Hip Adduction Machine | 髖內收機 |
+| Glute Drive | 臀推機 |
+| Chest Press Machine | 胸推機 |
+| Incline Chest Press Machine | 上斜胸推機 |
+| Shoulder Press Machine | 肩推機 |
+| Lat Pulldown Machine | 滑輪下拉機 |
+| Seated Row Machine | 坐姿划船機 |
+| High Row Machine | 高位划船機 |
+| Low Row Machine | 低位划船機 |
+| Pec Deck | 蝴蝶機 |
+| Reverse Pec Deck | 反向蝴蝶機 |
+| Assisted Pull-Up | 輔助引體向上 |
+| Biceps Curl Machine | 二頭彎舉機 |
+| Triceps Extension Machine | 三頭伸展機 |
+| Seated Calf Raise | 坐姿提踵 |
+| Standing Calf Raise | 站姿提踵 |
+
+### Hammer Strength（14）
+
+| English | 繁中 |
+|---|---|
+| Hammer Strength Iso-Lateral Bench Press | Hammer Strength 單邊臥推 |
+| Hammer Strength Iso-Lateral Incline Press | Hammer Strength 單邊上斜推 |
+| Hammer Strength Iso-Lateral Decline Press | Hammer Strength 單邊下斜推 |
+| Hammer Strength Iso-Lateral Shoulder Press | Hammer Strength 單邊肩推 |
+| Hammer Strength Iso-Lateral Wide Chest | Hammer Strength 單邊寬握胸推 |
+| Hammer Strength Iso-Lateral Row | Hammer Strength 單邊划船 |
+| Hammer Strength Iso-Lateral High Row | Hammer Strength 單邊高位划船 |
+| Hammer Strength Iso-Lateral Low Row | Hammer Strength 單邊低位划船 |
+| Hammer Strength Iso-Lateral Front Lat Pulldown | Hammer Strength 單邊滑輪下拉 |
+| Hammer Strength Ground Base Jammer | Hammer Strength 推舉架 |
+| Hammer Strength Ground Base Squat | Hammer Strength 深蹲架 |
+| Hammer Strength Ground Base High Pull | Hammer Strength 高拉架 |
+| Hammer Strength Linear Leg Press | Hammer Strength 直線腿推舉 |
+| Hammer Strength Hack Squat | Hammer Strength 哈克深蹲 |
