@@ -150,6 +150,56 @@ screen -S pc-firebase -X quit
 
 After stopping a session, confirm its listener disappeared. If it is still present, identify only that listener's PID with `lsof`; do not delete locks or start another server until the exact stale process is stopped. Apply the two-minute stop rule to shutdown and permission waits as well.
 
+## Testing a Deployed (Non-Local) Environment
+
+Vercel gives every branch and every pull request its own preview URL
+(`performance-coach-git-<branch-slug>-kaohaohans-projects.vercel.app`, or an
+even more specific per-PR hash). **Do not use one of these ad hoc URLs to test
+anything that goes through "Continue with Google."** It will fail with
+Firebase's `auth/unauthorized-domain`, which the frontend shows as a generic
+"Google sign-in isn't available yet" message — it reads like an outage, not a
+missing setting, and has caused real confusion before (see
+`docs/ios-release-runbook.md` step 5).
+
+The reason: Google's `signInWithPopup` requires the page's hostname to be on
+Firebase's **Authorized domains** list (Firebase Console → Authentication →
+Settings → Authorized domains), and that list is small and manually
+maintained. It does not — and cannot practically — track every ephemeral
+Vercel preview URL a branch or PR happens to get.
+
+**The one non-production hostname on that list, and therefore the canonical
+place to test a deployed change in a browser, is the `staging` branch
+alias:**
+
+```
+https://performance-coach-git-staging-kaohaohans-projects.vercel.app
+```
+
+This URL is stable — Vercel keeps it pinned to the `staging` branch and
+updates its content on every push to that branch — and it is already
+authorized, so password sign-in, Google sign-in, and Apple sign-in (native
+iOS) all work on it without any Firebase configuration change.
+
+Practical consequence for reviewing a pull request before it merges: a PR's
+own preview URL is fine for eyeballing layout, copy, and any screen reachable
+without signing in via Google. It is not sufficient for a Google-sign-in smoke
+test — that has to wait until the branch is merged to `staging` (or you
+temporarily add the PR's preview hostname to Authorized domains and remember
+to remove it afterward; the stale entries below are what happens when that
+second step gets skipped).
+
+**Known stale entries:** the Authorized domains list already contains at
+least one custom hostname tied to a long-abandoned branch preview
+(`performance-coach-git-claude-google-...`), added for a past task and never
+removed. Vercel does eventually recycle branch-alias slugs, so a stale
+authorized entry is not inert — it can end up pointing at whatever new branch
+later claims that slug. Prune an entry once its branch is gone; this is a
+Firebase Console change, not something to script from a repo checkout.
+
+This section exists because a Vercel PR preview URL was handed out for
+testing without checking this file first — see `AGENTS.md` §1, which now
+requires reading this section before pointing anyone at a deployed URL.
+
 ## Ports
 
 | Service | Port |
