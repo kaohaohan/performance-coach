@@ -321,7 +321,7 @@ Response `200`：
 
 `scope` 是由 API 依 `ownerCoachId` 衍生的 presentation metadata，不是新的資料庫欄位。
 
-V0.1 的 System exercise seed implementation 另列 follow-up；零筆 SYSTEM exercise 不得阻擋 private Exercise 的 list 或 creation。
+`name` 是 identity，SYSTEM 目錄為英文。zh-TW 顯示名由前端 display map 處理，不寫入此 response、也不允許以中文名 find-or-create 出私有重複列。SYSTEM 種子資料為 `apps/api/seeds/system_exercises_v1.sql`（手動、冪等 `ON CONFLICT DO NOTHING`，**不**接入 `cmd/migrate`）。零筆 SYSTEM exercise 仍不得阻擋 private Exercise 的 list 或 creation。目錄擴充與 media 屬性見 `docs/tasks/2026-09-07-exercise-catalog-baseline.md`。
 
 ### POST /api/v1/exercises — Coach only
 

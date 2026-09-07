@@ -153,7 +153,8 @@ The Coach may maintain a small Exercise Library used by Calendar and saved Worko
 - Zero SYSTEM exercises does not block listing or creating private Exercises.
 - Another Coach's private Exercise is invisible.
 - Athlete cannot manage the Exercise Library.
-- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, assets, and System exercise seed implementation remain out of scope for this slice.
+- SYSTEM `exercises.name` is English identity. zh-TW labels are display-only. The shared catalog is `apps/api/seeds/system_exercises_v1.sql` (manual idempotent seed, not `cmd/migrate`). Do not store Chinese SYSTEM names. Catalog growth and media rules: `docs/tasks/2026-09-07-exercise-catalog-baseline.md`.
+- Edit/archive Exercise, media, descriptions, tags, categories, Warm-Up/Cooldown type, SAQ, Circuit, Questionnaire, Health, progressions, PR behavior, and assets remain out of scope for this slice. Media attributes (description / YouTube / image key) are designed, not implemented: `docs/tasks/2026-09-07-exercise-media-attributes.md`.
 
 ---
 

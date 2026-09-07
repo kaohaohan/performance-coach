@@ -64,7 +64,7 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 | `account_deletion_jobs` | `user_id`, `original_firebase_uid`, `apple_refresh_token`, `firebase_deleted_at`, `apple_revoked_at`, `status` | User 1:0..1 | Durable external-cleanup record for Firebase `DeleteUser` and Apple `/auth/revoke`. Not an audit log. |
 | `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Join row retained after account deletion as **historical access** ACL. Service layer distinguishes that from an **active relationship** (`deleted_at IS NULL` on both users). No `ended_at` column in V0.10. |
 | `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
-| `exercises` | `id`, `name`, `owner_coach_id` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. |
+| `exercises` | `id`, `name`, `owner_coach_id` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. SYSTEM `name` is English identity, not a localized label. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
 | `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults for one template exercise. |
 | `workout_exercise_set_overrides` | `workout_exercise_id`, `planned_position`, nullable override values | WorkoutExercise 1:N | Sparse, property-specific explicit values; absent property means inherit. |
@@ -319,6 +319,8 @@ WHERE owner_coach_id IS NOT NULL;
 
 V0.1 rule: if a system exercise and requested name match after `lower(trim(name))`, the system exercise wins. Same-name private override is not supported in V0.1.
 
+SYSTEM `name` values are English identity strings. The catalog source of truth is `apps/api/seeds/system_exercises_v1.sql` (manual idempotent seed, not a schema migration). zh-TW labels are a frontend display map keyed by `lower(name)` and must not be stored as SYSTEM rows. Do not put description, YouTube, or image data into `name`; those attributes are a later additive migration (`docs/tasks/2026-09-07-exercise-media-attributes.md`). Catalog baseline: `docs/tasks/2026-09-07-exercise-catalog-baseline.md`.
+
 ## 5. Prescription vs Actual
 
 > **Prescription can be ambiguous; actual performance must be structured.**
@@ -420,6 +422,10 @@ Explicit-none overrides, mixed planned units inside one WorkoutExercise, persist
 ### WorkoutItem
 
 Future workout items may include `EXERCISE`, `NOTE`, `REST`, or `VIDEO`. Do not add these meanings to the `exercises` table.
+
+### Exercise media attributes
+
+Description, YouTube URL, and an object-storage image key are future nullable columns on `exercises`, not a `VideoAsset` table and not `WorkoutItem.VIDEO`. They must not be stored in `name`. See `docs/tasks/2026-09-07-exercise-media-attributes.md`.
 
 ### Program / Calendar
 
