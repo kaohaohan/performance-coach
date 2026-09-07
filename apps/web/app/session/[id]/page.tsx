@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT, type Translate } from "@/lib/i18n";
+import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 
 type PlannedSet = { scheduledWorkoutPlannedSetId: string; position: number; reps?: number; prescriptionNote?: string; load?: number; unit?: "kg" | "lb"; rpe?: number };
 type Plan = { sets: PlannedSet[] };
@@ -13,9 +15,12 @@ type SessionDetail = { id: string; status: "ACTIVE" | "COMPLETED"; athlete: { id
 type SetLogFormState = { load: string; unit: "kg" | "lb"; reps: string; rpe: string; submitting: boolean; error: string | null };
 type SetLogKind = "PLANNED" | "EXTRA";
 
-function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
-}
+// Loading the session, logging a set and completing the workout all fail
+// through the Go API, which explains its own refusals (a set logged against a
+// completed session, a session that is not yours). serverMessage keeps that
+// explanation; everything else falls back to errors.unexpected, exactly as
+// the page's old local errorMessage() did.
+const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
 function emptyForm(): SetLogFormState {
   return { load: "", unit: "kg", reps: "", rpe: "", submitting: false, error: null };
@@ -42,13 +47,18 @@ function firstIncompleteTarget(exercise: SessionExercise): PlannedSet | undefine
   return orderedTargets(exercise).find((target) => !completedPlannedSetIds.has(target.scheduledWorkoutPlannedSetId));
 }
 
-function targetSummary(target: PlannedSet): string {
-  const prescription = target.reps === undefined ? target.prescriptionNote ?? "" : `${target.reps} reps`;
+// The two summary lines are the densest domain copy on the screen, and both
+// take `t` rather than reading a hook so they stay callable from inside the
+// render map. "RPE" and kg/lb are left as literals on purpose: Taiwan coaches
+// write both exactly as they appear in English, so there is nothing to
+// translate and a catalog key would only invite someone to invent a form.
+function targetSummary(t: Translate, target: PlannedSet): string {
+  const prescription = target.reps === undefined ? target.prescriptionNote ?? "" : t("athlete.set.reps", { count: target.reps });
   return [prescription, target.load === undefined ? "" : `${target.load} ${target.unit}`, target.rpe === undefined ? "" : `RPE ${target.rpe}`].filter(Boolean).join(" · ");
 }
 
-function actualSummary(log: SetLog): string {
-  return [log.load === undefined ? "Bodyweight" : `${log.load} ${log.unit}`, `${log.reps} reps`, log.rpe === undefined ? "" : `RPE ${log.rpe}`].filter(Boolean).join(" · ");
+function actualSummary(t: Translate, log: SetLog): string {
+  return [log.load === undefined ? t("athlete.set.bodyweight") : `${log.load} ${log.unit}`, t("athlete.set.reps", { count: log.reps }), log.rpe === undefined ? "" : `RPE ${log.rpe}`].filter(Boolean).join(" · ");
 }
 
 function plannedFormKey(target: PlannedSet): string {
@@ -64,6 +74,7 @@ export default function SessionPage() {
   const sessionId = params.id;
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
+  const t = useT();
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [forms, setForms] = useState<Record<string, SetLogFormState>>({});
@@ -88,11 +99,11 @@ export default function SessionPage() {
           setSession(response);
         }
       } catch (error) {
-        if (!cancelled) setLoadError(errorMessage(error));
+        if (!cancelled) setLoadError(errorMessage(t, error, API_ERROR_POLICY));
       }
     })();
     return () => { cancelled = true; };
-  }, [idToken, sessionId]);
+  }, [idToken, sessionId, t]);
 
   function getForm(key: string, initial: SetLogFormState): SetLogFormState {
     return forms[key] ?? initial;
@@ -133,14 +144,14 @@ export default function SessionPage() {
 
     const reps = Number(form.reps);
     if (form.reps.trim() === "" || !Number.isInteger(reps) || reps < 1) {
-      updateForm(key, initial, { error: "Reps must be a whole number ≥ 1." });
+      updateForm(key, initial, { error: t("athlete.session.repsInvalid") });
       return;
     }
     let load: number | undefined;
     if (form.load.trim() !== "") {
       load = Number(form.load);
       if (!Number.isFinite(load) || load < 0) {
-        updateForm(key, initial, { error: "Load must be a number ≥ 0." });
+        updateForm(key, initial, { error: t("athlete.session.loadInvalid") });
         return;
       }
     }
@@ -148,7 +159,7 @@ export default function SessionPage() {
     if (form.rpe.trim() !== "") {
       rpe = Number(form.rpe);
       if (!Number.isFinite(rpe) || rpe < 1 || rpe > 10) {
-        updateForm(key, initial, { error: "Actual RPE must be between 1 and 10." });
+        updateForm(key, initial, { error: t("athlete.session.rpeInvalid") });
         return;
       }
     }
@@ -177,7 +188,7 @@ export default function SessionPage() {
         setExtraOpen((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: false }));
       }
     } catch (error) {
-      updateForm(key, initial, { submitting: false, error: errorMessage(error) });
+      updateForm(key, initial, { submitting: false, error: errorMessage(t, error, API_ERROR_POLICY) });
     } finally {
       submittingFormKeys.current.delete(key);
     }
@@ -191,29 +202,29 @@ export default function SessionPage() {
       const completed = await apiFetch<{ id: string; status: "COMPLETED" }>(idToken, `/api/v1/sessions/${sessionId}/complete`, { method: "POST" });
       setSession((previous) => previous === null ? previous : { ...previous, status: completed.status });
     } catch (error) {
-      setCompleteError(errorMessage(error));
+      setCompleteError(errorMessage(t, error, API_ERROR_POLICY));
     } finally {
       setCompleting(false);
     }
   }
 
-  if (authLoading || (user && !idToken)) return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading…</main>;
+  if (authLoading || (user && !idToken)) return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("common.loading")}</main>;
   if (!user) return null;
   if (loadError) return <main className="min-h-screen bg-stone-100 p-6"><p role="alert" className="mx-auto max-w-lg rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{loadError}</p></main>;
-  if (!session) return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">Loading…</main>;
+  if (!session) return <main className="min-h-screen bg-stone-100 p-6 text-slate-700">{t("common.loading")}</main>;
 
   const isActive = session.status === "ACTIVE";
   return (
     <main className="min-h-screen bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
       <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto max-w-lg">
-          <button type="button" onClick={() => router.back()} aria-label="Back" className="mb-2 -ml-2 flex h-9 w-9 items-center justify-center rounded-full text-white/80 hover:bg-white/10">
+          <button type="button" onClick={() => router.back()} aria-label={t("common.back")} className="mb-2 -ml-2 flex h-9 w-9 items-center justify-center rounded-full text-white/80 hover:bg-white/10">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5"><path fillRule="evenodd" d="M12.79 4.22a.75.75 0 0 1 0 1.06L8.06 10l4.73 4.72a.75.75 0 1 1-1.06 1.06l-5.25-5.25a.75.75 0 0 1 0-1.06l5.25-5.25a.75.75 0 0 1 1.06 0Z" clipRule="evenodd" /></svg>
           </button>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">Workout Session</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-300">{t("athlete.session.eyebrow")}</p>
           <div className="mt-4 flex items-start justify-between gap-4">
-            <div><h1 className="text-3xl font-semibold tracking-tight">{session.athlete.name}</h1><p className="mt-2 text-sm text-slate-300">{isActive ? "Live training" : "Training complete"}</p></div>
-            <span className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold tracking-wide ${isActive ? "bg-teal-400 text-slate-950" : "bg-emerald-400 text-emerald-950"}`}>{session.status}</span>
+            <div><h1 className="text-3xl font-semibold tracking-tight">{session.athlete.name}</h1><p className="mt-2 text-sm text-slate-300">{isActive ? t("athlete.session.live") : t("athlete.session.finished")}</p></div>
+            <span className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold tracking-wide ${isActive ? "bg-teal-400 text-slate-950" : "bg-emerald-400 text-emerald-950"}`}>{t(isActive ? "athlete.status.active" : "athlete.status.completed")}</span>
           </div>
         </div>
       </header>
@@ -230,9 +241,9 @@ export default function SessionPage() {
 
           return <section key={exercise.scheduledWorkoutExerciseId} className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
             <div className="border-b border-slate-100 px-5 py-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Exercise</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.exerciseEyebrow")}</p>
               <h2 className="mt-2 break-words text-2xl font-semibold tracking-tight">{exercise.name}</h2>
-              <p className="mt-2 text-sm text-slate-500">{targets.length} planned set{targets.length === 1 ? "" : "s"}</p>
+              <p className="mt-2 text-sm text-slate-500">{t(targets.length === 1 ? "athlete.session.plannedSetCountOne" : "athlete.session.plannedSetCountOther", { count: targets.length })}</p>
             </div>
 
             <div className="space-y-3 px-4 py-4">
@@ -244,52 +255,57 @@ export default function SessionPage() {
                 const form = getForm(key, initial);
 
                 if (actual !== undefined) return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border border-emerald-200 bg-emerald-50/50 px-4 py-4">
-                  <CardHeading position={target.position} total={targets.length} status="Completed" statusClass="bg-emerald-100 text-emerald-800" />
-                  <Detail label="Target" value={targetSummary(target)} />
-                  <Detail label="Actual" value={actualSummary(actual)} />
-                  <p className="mt-2 text-xs font-medium text-emerald-800">Logged #{actual.setNumber}</p>
+                  <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setCompleted")} statusClass="bg-emerald-100 text-emerald-800" />
+                  <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
+                  <Detail label={t("athlete.session.actual")} value={actualSummary(t, actual)} />
+                  <p className="mt-2 text-xs font-medium text-emerald-800">{t("athlete.session.loggedNumber", { number: actual.setNumber })}</p>
                 </article>;
 
                 if (isCurrent) return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border-2 border-teal-600 bg-teal-50/60 px-4 py-4 shadow-sm">
-                  <CardHeading position={target.position} total={targets.length} status="Next" statusClass="bg-teal-600 text-white" />
-                  <Detail label="Target" value={targetSummary(target)} />
+                  <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setNext")} statusClass="bg-teal-600 text-white" />
+                  <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
                   <SetLogFields form={form} onChange={(patch) => updateForm(key, initial, patch)} textPrescription={target.prescriptionNote !== undefined} />
                   {form.error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{form.error}</p>}
-                  <button type="button" onClick={() => handleLogSet(exercise, "PLANNED", target)} disabled={form.submitting} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm hover:bg-teal-700 disabled:opacity-50">{form.submitting ? "Logging set…" : "Log Set"}</button>
+                  <button type="button" onClick={() => handleLogSet(exercise, "PLANNED", target)} disabled={form.submitting} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm hover:bg-teal-700 disabled:opacity-50">{form.submitting ? t("athlete.session.loggingSet") : t("athlete.session.logSet")}</button>
                 </article>;
 
                 return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                  <CardHeading position={target.position} total={targets.length} status="Not logged" statusClass="bg-slate-100 text-slate-600" />
-                  <Detail label="Target" value={targetSummary(target)} />
-                  {isActive && <button type="button" onClick={() => setSelectedTargets((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: target.scheduledWorkoutPlannedSetId }))} className="mt-3 min-h-11 rounded-xl px-3 text-sm font-bold text-teal-700 hover:bg-teal-50">Log this set instead</button>}
+                  <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setNotLogged")} statusClass="bg-slate-100 text-slate-600" />
+                  <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
+                  {isActive && <button type="button" onClick={() => setSelectedTargets((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: target.scheduledWorkoutPlannedSetId }))} className="mt-3 min-h-11 rounded-xl px-3 text-sm font-bold text-teal-700 hover:bg-teal-50">{t("athlete.session.logThisSetInstead")}</button>}
                 </article>;
               })}
             </div>
 
             <div className="border-t border-slate-100 px-5 py-5">
-              <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Extra sets</p><span className="text-sm font-semibold text-slate-500">{extras.length}</span></div>
-              {extras.length > 0 && <ul className="mt-3 space-y-2">{extras.map((log) => <li key={log.id} className="rounded-2xl bg-stone-50 px-4 py-3"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Extra · Logged #{log.setNumber}</p><p className="mt-1 text-sm font-semibold text-slate-800">{actualSummary(log)}</p></li>)}</ul>}
+              <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.extraSetsHeading")}</p><span className="text-sm font-semibold text-slate-500">{extras.length}</span></div>
+              {extras.length > 0 && <ul className="mt-3 space-y-2">{extras.map((log) => <li key={log.id} className="rounded-2xl bg-stone-50 px-4 py-3"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold text-slate-800">{actualSummary(t, log)}</p></li>)}</ul>}
               {isActive && <div className="mt-4">
-                {!showExtraForm ? <button type="button" onClick={() => setExtraOpen((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: true }))} className={`min-h-12 w-full rounded-2xl px-4 text-sm font-bold ${currentTarget === undefined ? "bg-slate-950 text-white hover:bg-slate-800" : "border border-slate-300 bg-white text-slate-800 hover:bg-slate-50"}`}>Add Extra Set</button> :
+                {!showExtraForm ? <button type="button" onClick={() => setExtraOpen((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: true }))} className={`min-h-12 w-full rounded-2xl px-4 text-sm font-bold ${currentTarget === undefined ? "bg-slate-950 text-white hover:bg-slate-800" : "border border-slate-300 bg-white text-slate-800 hover:bg-slate-50"}`}>{t("athlete.session.addExtraSet")}</button> :
                   <div className="rounded-2xl border border-slate-200 bg-stone-50 p-4">
-                    <div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-900">Add Extra Set</p><button type="button" onClick={() => setExtraOpen((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: false }))} className="min-h-11 px-2 text-sm font-bold text-slate-600">Close</button></div>
+                    <div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-slate-900">{t("athlete.session.addExtraSet")}</p><button type="button" onClick={() => setExtraOpen((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: false }))} className="min-h-11 px-2 text-sm font-bold text-slate-600">{t("common.close")}</button></div>
                     <SetLogFields form={extraForm} onChange={(patch) => updateForm(extraKey, extraInitial, patch)} />
                     {extraForm.error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{extraForm.error}</p>}
-                    <button type="button" onClick={() => handleLogSet(exercise, "EXTRA")} disabled={extraForm.submitting} className="mt-4 min-h-14 w-full rounded-2xl bg-slate-950 px-5 text-base font-bold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50">{extraForm.submitting ? "Logging set…" : "Log Extra Set"}</button>
+                    <button type="button" onClick={() => handleLogSet(exercise, "EXTRA")} disabled={extraForm.submitting} className="mt-4 min-h-14 w-full rounded-2xl bg-slate-950 px-5 text-base font-bold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50">{extraForm.submitting ? t("athlete.session.loggingSet") : t("athlete.session.logExtraSet")}</button>
                   </div>}
               </div>}
             </div>
           </section>;
         })}
 
-        {isActive && <section className="pt-2"><p className="mb-3 px-1 text-sm leading-6 text-slate-500">When training is finished, complete the workout to lock in these results.</p>{completeError && <p role="alert" className="mb-3 rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{completeError}</p>}<button type="button" onClick={handleComplete} disabled={completing} className="min-h-14 w-full rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-900 shadow-sm hover:bg-slate-50 disabled:opacity-50">{completing ? "Completing workout…" : "Complete Workout"}</button></section>}
+        {isActive && <section className="pt-2"><p className="mb-3 px-1 text-sm leading-6 text-slate-500">{t("athlete.session.completeHint")}</p>{completeError && <p role="alert" className="mb-3 rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{completeError}</p>}<button type="button" onClick={handleComplete} disabled={completing} className="min-h-14 w-full rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-900 shadow-sm hover:bg-slate-50 disabled:opacity-50">{completing ? t("athlete.session.completingWorkout") : t("athlete.session.completeWorkout")}</button></section>}
       </div>
     </main>
   );
 }
 
+// `status` arrives already translated: the three call sites each pick a
+// different key, so resolving it here would mean passing the key instead and
+// re-deriving which one — the same decision, one level further from where it
+// is made.
 function CardHeading({ position, total, status, statusClass }: { position: number; total: number; status: string; statusClass: string }) {
-  return <div className="flex items-center justify-between gap-3"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-600">Set {position} of {total}</p><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${statusClass}`}>{status}</span></div>;
+  const t = useT();
+  return <div className="flex items-center justify-between gap-3"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-600">{t("athlete.set.labelOfTotal", { position, total })}</p><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${statusClass}`}>{status}</span></div>;
 }
 
 function Detail({ label, value }: { label: string; value: string }) {
@@ -297,19 +313,22 @@ function Detail({ label, value }: { label: string; value: string }) {
 }
 
 function SetLogFields({ form, onChange, textPrescription = false }: { form: SetLogFormState; onChange: (patch: Partial<SetLogFormState>) => void; textPrescription?: boolean }) {
+  const t = useT();
   return <div className="mt-4">
     <div className="grid grid-cols-[minmax(0,1fr)_5.5rem] gap-3">
-      <Field label="Load" optional><input type="number" inputMode="decimal" value={form.load} onChange={(event) => onChange({ load: event.target.value })} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" /></Field>
-      <Field label="Unit"><select value={form.unit} onChange={(event) => onChange({ unit: event.target.value as "kg" | "lb" })} disabled={form.load.trim() === ""} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"><option value="kg">kg</option><option value="lb">lb</option></select></Field>
+      <Field label={t("athlete.session.fieldLoad")} optional><input type="number" inputMode="decimal" value={form.load} onChange={(event) => onChange({ load: event.target.value })} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" /></Field>
+      {/* kg / lb are the written symbols in both languages — not translated. */}
+      <Field label={t("athlete.session.fieldUnit")}><select value={form.unit} onChange={(event) => onChange({ unit: event.target.value as "kg" | "lb" })} disabled={form.load.trim() === ""} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"><option value="kg">kg</option><option value="lb">lb</option></select></Field>
     </div>
     <div className="mt-3 grid grid-cols-2 gap-3">
-      <Field label="Reps"><input type="number" inputMode="numeric" value={form.reps} onChange={(event) => onChange({ reps: event.target.value })} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" /></Field>
-      <Field label="Actual RPE" optional><input type="number" inputMode="decimal" value={form.rpe} onChange={(event) => onChange({ rpe: event.target.value })} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" /></Field>
+      <Field label={t("athlete.session.fieldReps")}><input type="number" inputMode="numeric" value={form.reps} onChange={(event) => onChange({ reps: event.target.value })} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" /></Field>
+      <Field label={t("athlete.session.fieldActualRpe")} optional><input type="number" inputMode="decimal" value={form.rpe} onChange={(event) => onChange({ rpe: event.target.value })} className="min-h-14 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" /></Field>
     </div>
-    {textPrescription && <p className="mt-3 text-sm leading-5 text-slate-600">Record the numeric reps completed.</p>}
+    {textPrescription && <p className="mt-3 text-sm leading-5 text-slate-600">{t("athlete.session.textPrescriptionHint")}</p>}
   </div>;
 }
 
 function Field({ children, label, optional = false }: { children: ReactNode; label: string; optional?: boolean }) {
-  return <label className="min-w-0"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{label}{optional && <span className="ml-1 font-normal text-slate-400">optional</span>}</span>{children}</label>;
+  const t = useT();
+  return <label className="min-w-0"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{label}{optional && <span className="ml-1 font-normal text-slate-400">{t("athlete.session.fieldOptional")}</span>}</span>{children}</label>;
 }

@@ -4,8 +4,43 @@
 // layer. Parsing always appends "T00:00:00" so a date string is read in the
 // viewer's local zone rather than UTC, which is what keeps "today" correct
 // for coaches west of Greenwich.
+//
+// The *arithmetic* here is locale-independent and stays that way. Only the
+// three label functions format for a reader, and since sub-task 6a (decision
+// D3 in docs/tasks/2026-08-27-i18n-zh-tw.md) they take the active locale as
+// their first argument and delegate the formatting to lib/i18n/dates.ts.
+// Relative import rather than the "@/" alias so this module stays loadable
+// under `node --test`.
+import { dateRange, fullDate, monthYear } from "../../../lib/i18n/dates.ts";
+import type { Locale } from "../../../lib/i18n/locale.ts";
+import type { MessageKey } from "../../../lib/i18n/messages/en/index.ts";
 
 export type CalendarView = "day" | "week" | "month";
+
+// The column headers above a month grid, Sunday-first to match monthDays()
+// and monthGridDays() below. Message keys rather than derived strings: the
+// English day view shows Latin initials, which Chinese has no equivalent of
+// (see messages/en/calendar.ts). Two sets because the two pickers have never
+// used the same width.
+export const WEEKDAY_NARROW_KEYS = [
+  "calendar.weekdayNarrow.sun",
+  "calendar.weekdayNarrow.mon",
+  "calendar.weekdayNarrow.tue",
+  "calendar.weekdayNarrow.wed",
+  "calendar.weekdayNarrow.thu",
+  "calendar.weekdayNarrow.fri",
+  "calendar.weekdayNarrow.sat",
+] as const satisfies readonly MessageKey[];
+
+export const WEEKDAY_SHORT_KEYS = [
+  "calendar.weekdayShort.sun",
+  "calendar.weekdayShort.mon",
+  "calendar.weekdayShort.tue",
+  "calendar.weekdayShort.wed",
+  "calendar.weekdayShort.thu",
+  "calendar.weekdayShort.fri",
+  "calendar.weekdayShort.sat",
+] as const satisfies readonly MessageKey[];
 
 export function todayLocalISODate(): string {
   const now = new Date();
@@ -25,17 +60,17 @@ export function isValidISODate(value: string): boolean {
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
 
-export function displayDate(date: string): string {
-  if (!isValidISODate(date)) return "Choose a date";
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  }).format(new Date(`${date}T00:00:00`));
+// invalidLabel is passed in rather than looked up: this module is React-free
+// (so it stays testable under `node --test`), and the fallback is the one
+// piece of *copy* the calendar's date helpers own. Callers hand over
+// t("calendar.chooseDate").
+export function displayDate(locale: Locale, date: string, invalidLabel: string): string {
+  if (!isValidISODate(date)) return invalidLabel;
+  return fullDate(locale, date);
 }
 
-export function monthLabel(date: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date(`${date.slice(0, 7)}-01T00:00:00`));
+export function monthLabel(locale: Locale, date: string): string {
+  return monthYear(locale, date);
 }
 
 export function monthBounds(date: string): { start: string; end: string } {
@@ -127,20 +162,15 @@ export function visibleRange(date: string, view: CalendarView): { start: string;
 
 // rangeLabel is the heading above the grid: "August 2026" for day/month,
 // and an explicit span for a week that crosses a month or year boundary.
-export function rangeLabel(date: string, view: CalendarView): string {
-  if (view === "day") return displayDate(date);
-  if (view === "month") return monthLabel(date);
+export function rangeLabel(locale: Locale, date: string, view: CalendarView, invalidLabel: string): string {
+  if (view === "day") return displayDate(locale, date, invalidLabel);
+  if (view === "month") return monthLabel(locale, date);
 
+  // The three-branch hand assembly this replaced existed because asking Intl
+  // for { day, year } without a month yields "2026 (day: 22)". The answer is
+  // Intl's own formatRange, which elides the shared month or year itself —
+  // and, unlike concatenation, does it in each language's word order. See
+  // dateRange() in lib/i18n/dates.ts; the English output is unchanged.
   const days = weekDays(date);
-  const start = new Date(`${days[0]}T00:00:00`);
-  const end = new Date(`${days[6]}T00:00:00`);
-  const monthDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
-
-  // Assembled by hand rather than with a second Intl format: asking Intl for
-  // { day, year } without a month yields "2026 (day: 22)", not "22, 2026".
-  if (start.getFullYear() !== end.getFullYear()) {
-    return `${monthDay.format(start)}, ${start.getFullYear()} – ${monthDay.format(end)}, ${end.getFullYear()}`;
-  }
-  const endLabel = start.getMonth() === end.getMonth() ? String(end.getDate()) : monthDay.format(end);
-  return `${monthDay.format(start)} – ${endLabel}, ${end.getFullYear()}`;
+  return dateRange(locale, days[0], days[6]);
 }

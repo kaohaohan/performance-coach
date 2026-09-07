@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ApiError } from "./api.ts";
+import { BRAND_NAME } from "./brand.ts";
 import {
   AccountDeletionError,
   clearAccountScopedLocalState,
@@ -83,6 +84,10 @@ test("non-Apple DELETE sends no Apple code", () => {
   assert.equal(deleteMeRequestBody(false, "should-not-send"), undefined);
   assert.equal(deleteMeRequestBody(false, undefined), undefined);
   assert.deepEqual(deleteMeRequestBody(true, "c-1"), { appleAuthorizationCode: "c-1" });
+  assert.throws(() => deleteMeRequestBody(true, "  "), (err: unknown) => {
+    assert.equal((err as AccountDeletionError).messageKey, "errors.deletion.appleCodeMissing");
+    return true;
+  });
 });
 
 test("Apple cancellation is silent and does not delete", async () => {
@@ -208,7 +213,10 @@ test("uid mismatch after Apple re-auth → no DELETE", async () => {
     current: user({ providerIds: ["apple.com"] }),
     reauthenticateWithCredential: async () => ({ user: { uid: "other-uid" } }),
   });
-  await assert.rejects(() => deleteCurrentAccount(d));
+  await assert.rejects(() => deleteCurrentAccount(d), (err: unknown) => {
+    assert.equal((err as AccountDeletionError).messageKey, "errors.deletion.reauthFailed");
+    return true;
+  });
   assert.equal(d.deleteCalls.length, 0);
   assert.equal(d.counters.signedOut, false);
 });
@@ -243,6 +251,7 @@ test("400 remains signed in and is retryable", async () => {
   });
   await assert.rejects(() => deleteCurrentAccount(d), (err: unknown) => {
     assert.equal(err instanceof AccountDeletionError, true);
+    assert.equal((err as AccountDeletionError).messageKey, "errors.deletion.invalidRequest");
     assert.equal((err as AccountDeletionError).retryable, true);
     return true;
   });
@@ -257,7 +266,10 @@ test("403 RECENT_AUTH_REQUIRED remains signed in", async () => {
     },
   });
   await assert.rejects(() => deleteCurrentAccount(d), (err: unknown) => {
-    assert.match(userFacingDeletionError(err).message, /confirm it's you/i);
+    // The key, not a sentence: what the person reads is the catalog's job
+    // (errors.deletion.*), and asserting English here would have quietly
+    // pinned this flow to one language.
+    assert.equal(userFacingDeletionError(err).messageKey, "errors.deletion.recentAuthRequired");
     return true;
   });
   assert.equal(d.counters.signedOut, false);
@@ -270,7 +282,30 @@ test("network/500 remains signed in", async () => {
       throw new ApiError(500, "boom", "INTERNAL");
     },
   });
-  await assert.rejects(() => deleteCurrentAccount(d));
+  await assert.rejects(() => deleteCurrentAccount(d), (err: unknown) => {
+    assert.equal((err as AccountDeletionError).messageKey, "errors.deletion.failed");
+    return true;
+  });
+  assert.equal(d.counters.signedOut, false);
+});
+
+test("Apple-linked account off iOS refuses with a non-retryable, brand-interpolated key", async () => {
+  const d = deps({
+    current: user({ providerIds: ["apple.com"] }),
+    isNativePlatform: () => false,
+  });
+  await assert.rejects(() => deleteCurrentAccount(d), (err: unknown) => {
+    const deletionError = err as AccountDeletionError;
+    assert.equal(deletionError.messageKey, "errors.deletion.appleRequiresIos");
+    // Retryability is the second signal this error carries and the reason
+    // /settings does not offer "try again" here: the person has to open the
+    // iOS app. The brand travels as a var so both catalogs read the same
+    // product name.
+    assert.equal(deletionError.retryable, false);
+    assert.deepEqual(deletionError.messageVars, { app: BRAND_NAME });
+    return true;
+  });
+  assert.equal(d.deleteCalls.length, 0);
   assert.equal(d.counters.signedOut, false);
 });
 
