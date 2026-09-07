@@ -15,6 +15,7 @@ test("localizeExerciseName translates a known system exercise into zh-TW", () =>
   assert.equal(localizeExerciseName("Bench Press", "zh-TW"), "臥推");
   assert.equal(localizeExerciseName("Romanian Deadlift", "zh-TW"), "羅馬尼亞硬舉");
   assert.equal(localizeExerciseName("Assisted Pull-Up", "zh-TW"), "輔助引體向上");
+  assert.equal(localizeExerciseName("Clean Pull", "zh-TW"), "高翻拉");
 });
 
 test("localizeExerciseName leaves every name alone in English", () => {

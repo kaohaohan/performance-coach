@@ -65,7 +65,7 @@ const ZH_TW: Readonly<Record<string, string>> = {
   "pendlay row": "Pendlay 划船",
   "good morning": "早安式",
   "hang high pull": "懸垂高拉",
-  "clean pull": "上膊拉",
+  "clean pull": "高翻拉",
   "snatch-grip deadlift": "抓舉握硬舉",
 
   // ── 啞鈴 Dumbbell ──

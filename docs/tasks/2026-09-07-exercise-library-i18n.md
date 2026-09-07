@@ -80,11 +80,11 @@ because no stored value changes.
   map is checked against. Measured against it, the original hand-guessed map covered
   **20/134 (15%)** and contained **12 keys matching no real row** (e.g. `deadlift` when
   the catalog says `Conventional Deadlift`; `hip thrust` vs `Barbell Hip Thrust`) — all
-  since removed. **Still open:** the seed branch was never merged, so the live database
-  is not *provably* these 134 rows; the founder is running
+  since removed. **RESOLVED 2026-09-07.** Founder ran
   `SELECT name FROM exercises WHERE owner_coach_id IS NULL ORDER BY name;` against
-  staging, to be diffed **both directions** and recorded here. A row present in the
-  database but absent from the seed would render in English and no test can see it.
+  staging. Diffed both directions against the seed: **134/134 exact match**,
+  no extras, no missing rows, no case-only duplicates. The live SYSTEM catalog
+  is this seed; a row the tests cannot see is no longer an open risk.
 
 - **Inline creation can still mint a Chinese duplicate.** If a coach types
   「臥推」 into the Calendar picker's create box while the system row `Bench
@@ -175,8 +175,9 @@ already-filed task and is deliberately untouched here.
 | 2 — display call sites | Done | 9 sites across 7 files. Verified by grep that every `localizeExerciseName(` call is inside JSX and that no payload/comparison uses it. |
 | 3 — client-side search | Done | `/coach/exercises`, Workouts picker, Calendar picker. `?q=` removed from all three; the find-or-create search at `calendar/page.tsx` (`exercise-creation`) deliberately still queries the raw name — it is identity resolution, not display. |
 | 4 — verification | Done | `npm run lint` clean; `npx tsc --noEmit` clean; `npm run build` clean (15 routes, `/privacy` + `/support` still static `○`); `npm test` **146 pass / 0 fail** (137 before, +9 new). |
-| 5 — complete the translation map | Done | Seed found and cherry-picked (`8e3ac69`). All **134** names translated, 12 dead keys removed, ordered to mirror the seed's own equipment blocks so the two files diff by eye. Full table in §6. |
+| 5 — complete the translation map | Done | Seed found and cherry-picked (`8e3ac69`). All **134** names translated, 12 dead keys removed, ordered to mirror the seed's own equipment blocks so the two files diff by eye. Full table in §6. Founder 2026-09-07: `Clean Pull` → **高翻拉** (was 上膊拉); `Cable Pull-Through` stays **纜繩前拉**. |
 | 6 — enforce completeness | Done | `exercise-names.test.ts` reads the seed and asserts 9 properties (see §2). Each was verified by deliberate sabotage — a deleted translation, an invented key, a copy-pasted English value, an unparseable seed row, and a duplicated Chinese name each turn the suite red. |
+| 7 — staging SQL reconciliation | Done | Founder query vs seed: **134/134 exact match both directions**. |
 
 ## 5. Outcome
 
@@ -191,6 +192,8 @@ zh-Hant listing, and any change to how names are stored or compared.
 ## 6. 術語審閱表（founder 簽核用）
 
 134 筆全數列出。規則：品牌／人名保留英文，動作部分翻中文（2026-09-07 決定）。
+
+Founder 2026-09-07 已確認：`Clean Pull` → 高翻拉；`Cable Pull-Through` 維持 纜繩前拉。
 
 
 ### 槓鈴 Barbell（25）
@@ -220,7 +223,7 @@ zh-Hant listing, and any change to how names are stored or compared.
 | Pendlay Row | Pendlay 划船 |
 | Good Morning | 早安式 |
 | Hang High Pull | 懸垂高拉 |
-| Clean Pull | 上膊拉 |
+| Clean Pull | 高翻拉 |
 | Snatch-Grip Deadlift | 抓舉握硬舉 |
 
 ### 啞鈴 Dumbbell（25）
