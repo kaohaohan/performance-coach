@@ -28,6 +28,8 @@
 // draft rather than silently rebinding it to whoever the Calendar loaded.
 "use client";
 
+import type { Workout } from "./types";
+
 export type ExerciseScope = "SYSTEM" | "PRIVATE";
 export type Exercise = { id: string; name: string; scope: ExerciseScope };
 export type PrescriptionMode = "REPS" | "TEXT";
@@ -55,6 +57,54 @@ export type DraftExercise = {
   customizationOpen: boolean;
   editingPositions: number[];
 };
+
+// savedWorkoutToDraft is intentionally a direct conversion, unlike the
+// scheduled-workout snapshot mapper in page.tsx. A saved Workout already has
+// the Coach-authored defaults-and-sparse-overrides model, so copying it must
+// preserve that model rather than resolving it into repeated set values.
+// The returned value is browser-local until the existing Build & Assign flow
+// creates a new Workout; this function never mutates the source object.
+export function savedWorkoutToDraft(workout: Workout): { name: string; exercises: DraftExercise[] } {
+  return {
+    name: `${workout.name} copy`,
+    exercises: [...workout.exercises]
+      .sort((left, right) => left.position - right.position)
+      .map((item) => {
+        const defaultMode: PrescriptionMode = item.plan.defaults.reps !== undefined ? "REPS" : "TEXT";
+        const overrides = [...item.plan.overrides]
+          .sort((left, right) => left.position - right.position)
+          .map((override) => {
+            const draftOverride: DraftSetOverride = { position: override.position };
+            if (override.reps !== undefined) {
+              draftOverride.prescriptionMode = "REPS";
+              draftOverride.reps = String(override.reps);
+            } else if (override.prescriptionNote !== undefined) {
+              draftOverride.prescriptionMode = "TEXT";
+              draftOverride.prescriptionNote = override.prescriptionNote;
+            }
+            if (override.load !== undefined) draftOverride.load = String(override.load);
+            if (override.rpe !== undefined) draftOverride.rpe = String(override.rpe);
+            return draftOverride;
+          });
+
+        return {
+          // The saved-workout response does not expose exercise scope. Scope
+          // affects only the Builder's cosmetic badge, not persistence.
+          exercise: { id: item.exerciseId, name: item.name, scope: "SYSTEM" },
+          setCount: String(item.plan.setCount),
+          prescriptionMode: defaultMode,
+          defaultReps: defaultMode === "REPS" ? String(item.plan.defaults.reps) : "",
+          defaultPrescriptionNote: defaultMode === "TEXT" ? (item.plan.defaults.prescriptionNote ?? "") : "",
+          defaultLoad: item.plan.defaults.load !== undefined ? String(item.plan.defaults.load) : "",
+          unit: item.plan.defaults.unit === "lb" ? "lb" : "kg",
+          defaultRpe: item.plan.defaults.rpe !== undefined ? String(item.plan.defaults.rpe) : "",
+          overrides,
+          customizationOpen: false,
+          editingPositions: [],
+        };
+      }),
+  };
+}
 
 // EditTarget marks a draft as editing one specific already-assigned
 // ScheduledWorkout (Problem B) rather than authoring a new one. When

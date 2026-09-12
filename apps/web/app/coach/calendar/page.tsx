@@ -16,6 +16,7 @@ import {
   loadDraft,
   resolveNewWorkoutClick,
   saveDraft,
+  savedWorkoutToDraft,
   shouldClearStoredDraftOnDiscard,
   shouldWriteStoredDraftOnSave,
   startNewWorkoutActionLabel,
@@ -487,6 +488,10 @@ export default function CoachCalendarPage() {
   // unmounted by the very action it is confirming and never appears.
   const [assignSuccess, setAssignSuccess] = useState<string | null>(null);
   const [programmingMode, setProgrammingMode] = useState<ProgrammingMode>("EXISTING");
+  // Non-null only while the Builder is authoring a local copy of a saved
+  // Workout. This is UI context, not a link to the source template: Build &
+  // Assign still creates a new Workout and never updates the source.
+  const [copiedFromWorkoutName, setCopiedFromWorkoutName] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftExercises, setDraftExercises] = useState<DraftExercise[]>([]);
   const [buildFieldErrors, setBuildFieldErrors] = useState<BuildFieldErrors>(initialBuildErrors);
@@ -1023,6 +1028,7 @@ export default function CoachCalendarPage() {
   function resetBuilderDraft() {
     setDraftName("");
     setDraftExercises([]);
+    setCopiedFromWorkoutName(null);
     setBuildFieldErrors(initialBuildErrors());
     setBuildError(null);
     setPickerOpen(false);
@@ -1357,6 +1363,33 @@ export default function CoachCalendarPage() {
       assignmentInFlight.current = false;
       setAssigning(false);
     }
+  }
+
+  function startSavedWorkoutCopy() {
+    if (!calendarAthleteId || programmingControlsDisabled || workouts === null || selectedWorkoutId === "") return;
+    const source = workouts.find((workout) => workout.id === selectedWorkoutId);
+    if (!source) return;
+
+    // A Build draft can be hidden behind the From saved tab. Copying is a
+    // deliberate replacement of that *live* editor state, so require a clear
+    // confirmation rather than silently dropping the Coach's unfinished work.
+    if (hasDraftContent && !window.confirm(`Replace the current draft with an editable copy of ${source.name}?`)) return;
+
+    const selectedAthleteIds = currentAssignmentAthleteIds();
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    resetBuilderDraft();
+    applyClearedBuildTransaction();
+    const copied = savedWorkoutToDraft(source);
+    setDraftName(copied.name);
+    setDraftExercises(copied.exercises);
+    setCopiedFromWorkoutName(source.name);
+    setBuilderDate(date);
+    setBuilderAthleteId(calendarAthleteId);
+    setBuilderSessionKind("new");
+    setExtraAthleteIds(selectedAthleteIds);
+    setSelectedWorkoutId("");
+    setProgrammingMode("BUILD");
+    setBuildFieldErrors(initialBuildErrors());
   }
 
   // Removes one assignment. The id comes from the card the Coach confirmed on,
@@ -1717,12 +1750,18 @@ export default function CoachCalendarPage() {
                   </label>
                 )}
                 {assignError && <div className="mt-3"><Notice tone="error">{assignError}</Notice></div>}
-                <button type="button" onClick={() => handleAssign()} disabled={assigning || !selectedWorkoutId || selectedCount === 0} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
-                  {assigning ? "Assigning workout…" : `Assign to ${selectedCount || ""} athlete${selectedCount === 1 ? "" : "s"}`}
-                </button>
+                <div className="mt-4 grid gap-2">
+                  <button type="button" onClick={startSavedWorkoutCopy} disabled={programmingControlsDisabled || !selectedWorkoutId || selectedCount === 0} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+                    Edit a copy
+                  </button>
+                  <button type="button" onClick={() => handleAssign()} disabled={assigning || !selectedWorkoutId || selectedCount === 0} className="min-h-12 w-full rounded-2xl border border-slate-300 bg-white px-5 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">
+                    {assigning ? "Assigning workout…" : `Assign as saved to ${selectedCount || ""} athlete${selectedCount === 1 ? "" : "s"}`}
+                  </button>
+                </div>
               </div> : (
                 <form onSubmit={editTarget ? handleSaveChanges : handleBuildAndAssign} className="mt-4 grid gap-4">
                   {draftRestoredNotice && <Notice tone="success">{editTarget ? "Draft restored from your last session." : "Draft restored from your last session. Please re-check who this should be assigned to."}</Notice>}
+                  {copiedFromWorkoutName !== null && <Notice tone="success">Editing a copy of <span className="font-bold">{copiedFromWorkoutName}</span>. The original workout and earlier assignments will not change.</Notice>}
 
                   {!editTarget && <label className="block">
                     <span className="mb-1.5 block text-sm font-semibold text-slate-700">Add Workout Name <span className="font-normal text-slate-500">optional</span></span>

@@ -63,11 +63,11 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Existing APIs and Builder can support a frontend-only copy flow. |
 | Phase 1 — task and canonical product/UI documentation | Done | Copy semantics defined; progression automation remains explicitly deferred. |
-| Phase 2 — draft mapper, Calendar UI, and unit tests | Not Started | Requires approval after Phase 1 report. |
-| Phase 3 — lint/build verification and completion review | Not Started | Review scoped diff and update this tracker. |
+| Phase 2 — draft mapper, Calendar UI, and unit tests | Done | Copy now hydrates the existing Builder, preserves defaults/overrides, and retains direct assignment. |
+| Phase 3 — lint/build verification and completion review | Done | Unit test, TypeScript, and scoped lint pass; production build reached a DNS failure fetching Google Fonts. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress
-- Deviations from plan: None.
+- Final status: Completed
+- Deviations from plan: The full Next production build could not complete because the local environment could not resolve `fonts.googleapis.com`; this occurred before application compilation and is unrelated to the changed Calendar modules.
 - Follow-ups: Evaluate a separate, evidence-driven bulk progression workflow after Coaches use editable copies in production.

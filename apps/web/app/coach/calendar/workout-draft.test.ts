@@ -12,6 +12,7 @@ import {
   parseSessionKind,
   resolveNewWorkoutClick,
   resolveStoredDraft,
+  savedWorkoutToDraft,
   saveDraft,
   sanitizeExtraAthleteIds,
   shouldClearStoredDraftOnDiscard,
@@ -22,6 +23,7 @@ import {
   type DraftExercise,
   type WorkoutBuilderDraftContent,
 } from "./workout-draft.ts";
+import type { Workout } from "./types.ts";
 
 const COACH = "coach-1";
 const KEY = `performance-coach:workout-builder-draft:${COACH}`;
@@ -379,4 +381,68 @@ test("Save and Discard of persistable live Build content still replace or clear 
   const live = { name: "Apple new", exercises: [EXERCISE] };
   assert.equal(shouldWriteStoredDraftOnSave(live), true);
   assert.equal(shouldClearStoredDraftOnDiscard(live), true);
+});
+
+test("savedWorkoutToDraft preserves ordered defaults and sparse overrides without mutating the source", () => {
+  const source: Workout = {
+    id: "workout-back",
+    name: "Back",
+    exercises: [
+      {
+        workoutExerciseId: "we-row",
+        exerciseId: "ex-row",
+        name: "Chest Supported Row",
+        position: 2,
+        plan: {
+          setCount: 3,
+          defaults: { prescriptionNote: "AMRAP", load: 40, unit: "lb", rpe: 8 },
+          overrides: [{ position: 3, prescriptionNote: "8+", load: 35, rpe: 7 }],
+        },
+      },
+      {
+        workoutExerciseId: "we-pulldown",
+        exerciseId: "ex-pulldown",
+        name: "Lat Pulldown",
+        position: 1,
+        plan: {
+          setCount: 4,
+          defaults: { reps: 10, load: 55, unit: "kg", rpe: 7 },
+          overrides: [{ position: 4, reps: 8, load: 60 }],
+        },
+      },
+    ],
+  };
+
+  const copied = savedWorkoutToDraft(source);
+
+  assert.equal(copied.name, "Back copy");
+  assert.deepEqual(copied.exercises.map((exercise) => exercise.exercise.name), ["Lat Pulldown", "Chest Supported Row"]);
+  assert.deepEqual(copied.exercises[0], {
+    exercise: { id: "ex-pulldown", name: "Lat Pulldown", scope: "SYSTEM" },
+    setCount: "4",
+    prescriptionMode: "REPS",
+    defaultReps: "10",
+    defaultPrescriptionNote: "",
+    defaultLoad: "55",
+    unit: "kg",
+    defaultRpe: "7",
+    overrides: [{ position: 4, prescriptionMode: "REPS", reps: "8", load: "60" }],
+    customizationOpen: false,
+    editingPositions: [],
+  });
+  assert.deepEqual(copied.exercises[1], {
+    exercise: { id: "ex-row", name: "Chest Supported Row", scope: "SYSTEM" },
+    setCount: "3",
+    prescriptionMode: "TEXT",
+    defaultReps: "",
+    defaultPrescriptionNote: "AMRAP",
+    defaultLoad: "40",
+    unit: "lb",
+    defaultRpe: "8",
+    overrides: [{ position: 3, prescriptionMode: "TEXT", prescriptionNote: "8+", load: "35", rpe: "7" }],
+    customizationOpen: false,
+    editingPositions: [],
+  });
+  assert.deepEqual(source.exercises.map((exercise) => exercise.position), [2, 1]);
+  assert.equal(source.exercises[0].plan.overrides[0].load, 35);
 });
