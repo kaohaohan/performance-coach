@@ -12,6 +12,8 @@ commit as the fix.
 - Public app name: **PumpLoop**
 - Bundle ID: **com.pumpslate.app** (intentionally kept; do not change)
 - Apple Developer Team ID: **99YPVP2249**
+- Release builds have a native hard gate: the generated Capacitor URL must be
+  exactly `https://dontworkout.vercel.app`. A staging/local URL fails the build.
 - Do **not** infer native Release readiness from an old successful TestFlight
   build (see Critical warning).
 
@@ -37,6 +39,8 @@ All of these must be true on staging before Archive:
   `com.apple.developer.applesignin = Default`, and both build configurations
   set `CODE_SIGN_ENTITLEMENTS = App/App.entitlements`
 - Bundle ID remains `com.pumpslate.app`; display name remains `PumpLoop`
+- The `Verify Capacitor target` Xcode build phase remains present and runs
+  `apps/web/ios/verify-capacitor-target.sh` before Resources are packaged.
 
 ## Before Archive
 
@@ -48,10 +52,13 @@ Run from the repo root / `apps/web` unless noted:
 4. `npm run lint`
 5. `npx tsc --noEmit`
 6. `npm run build`
-7. `npx cap sync ios`
-8. Confirm cap sync did **not** remove native wiring (re-check the
+7. `APP_TARGET=production npx cap sync ios` — never run a bare sync for an
+   Archive.
+8. `./ios/verify-capacitor-target.sh Release ios/App/App/capacitor.config.json`
+   must print the production URL.
+9. Confirm cap sync did **not** remove native wiring (re-check the
    Alamofire entries and baseConfigurationReference lines above)
-9. Run a Release build for a generic iOS device:
+10. Run a Release build for a generic iOS device:
 
 ```bash
 cd apps/web/ios/App && xcodebuild -project App.xcodeproj -scheme App \
@@ -59,17 +66,17 @@ cd apps/web/ios/App && xcodebuild -project App.xcodeproj -scheme App \
   -allowProvisioningUpdates build
 ```
 
-10. Inspect the built product's Info.plist
+11. Inspect the built product's Info.plist
     (`DerivedData/.../Build/Products/Release-iphoneos/App.app/Info.plist`):
     - `CFBundleDisplayName` = PumpLoop
     - `CFBundleIdentifier` = com.pumpslate.app
     - Google reversed-client URL scheme is non-empty
-11. Inspect built entitlements (`codesign -d --entitlements :-`):
+12. Inspect built entitlements (`codesign -d --entitlements :-`):
     - `com.apple.developer.applesignin` = Default
     - (`get-task-allow = true` is normal for a development-signed local build;
       the Archive export re-signs with distribution credentials)
-12. Confirm the Release build has no Alamofire undefined-symbol errors
-13. Set `CURRENT_PROJECT_VERSION` (both configurations) to a build number
+13. Confirm the Release build has no Alamofire undefined-symbol errors
+14. Set `CURRENT_PROJECT_VERSION` (both configurations) to a build number
     not previously uploaded to App Store Connect — it requires a unique
     build number per upload
 
@@ -92,6 +99,13 @@ cd apps/web/ios/App && xcodebuild -project App.xcodeproj -scheme App \
    - Any release-specific regression items
 
 ## Critical warning
+
+Debug builds are labeled **PumpLoop DEV** and reject a production Capacitor
+URL. They still share the public bundle identifier in this emergency safety
+gate, so a developer installation can replace the public binary. Do not use a
+Debug build as a production-app smoke test. A separate staging bundle ID plus
+Apple/Firebase/OAuth registrations is a required follow-up before treating
+native staging and production as fully isolated.
 
 A successful historical TestFlight build does **not** prove that staging
 contains the native Release configuration that produced it. A build can be
