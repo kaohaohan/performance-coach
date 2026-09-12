@@ -53,7 +53,7 @@ The MVP follows this principle:
 
 ### **Navigation Principle**
 
-**Calendar (`/coach/calendar`) is the PRIMARY Coach programming workspace on Web/Desktop.** From a selected date and one-or-more selected Athletes, the Coach has two first-class paths: choose an existing saved Workout and assign it, or build a Workout inline and Build & Assign it. The Coach is not required to visit a separate template library before scheduling training. Client management (`/coach/clients`), Workout History (`/coach/workouts`), and Exercise Library (`/coach/exercises`) are SECONDARY tools, not separate primary destinations. There is no Coach dashboard as a landing page.
+**Calendar (`/coach/calendar`) is the PRIMARY Coach programming workspace on Web/Desktop.** From a selected date and one-or-more selected Athletes, the Coach has two first-class paths: choose an existing saved Workout, then either copy and edit it or assign it as saved; or build a Workout inline and Build & Assign it. The Coach is not required to visit a separate template library before scheduling training. Client management (`/coach/clients`), Workout History (`/coach/workouts`), and Exercise Library (`/coach/exercises`) are SECONDARY tools, not separate primary destinations. There is no Coach dashboard as a landing page.
 
 **Workout History (`/coach/workouts`) is the SECONDARY cross-athlete review tool.** It lists the Coach's past and current-day ScheduledWorkout assignments separately per Athlete, including Not started, In progress, and Done outcomes. It excludes future assignments and supports Athlete and date-range filtering. Reusable saved Workouts remain available through Calendar → Create Workout → From saved; the History page keeps `+ Create Workout` as a direct entry into the existing saved-template builder but does not duplicate a standalone template list.
 
@@ -150,7 +150,7 @@ The Coach selects a date and one-or-more connected Athletes on the Calendar, the
 
 ```
 Existing Workout
-Calendar → date → Athlete(s) → choose saved Workout → Assign
+Calendar → date → Athlete(s) → choose saved Workout → Copy & edit or Assign as saved
 
 Inline Build
 Calendar → date → Athlete(s) → Build Workout → exercises / prescription → Build & Assign
@@ -173,7 +173,7 @@ Build & Assign
 
 ## **Then**
 
-For the existing Workout path, the selected saved `Workout` is scheduled to each Athlete on the selected date.
+For the existing Workout path, Copy & edit is the primary action. It hydrates the existing inline Builder from the selected saved `Workout`, including ordered Exercises, set counts, exercise-level defaults, and sparse per-position overrides. The Coach may adjust the copy before Build & Assign creates one new saved Workout and schedules it to each selected Athlete. The source Workout and all earlier ScheduledWorkout snapshots remain unchanged. Assign as saved remains a secondary shortcut that schedules the selected saved `Workout` directly.
 
 For the inline Build path, V0.1 persists two things in order:
 
@@ -210,7 +210,9 @@ Refreshing the page does not remove the workout or the schedule.
 ## **Acceptance Criteria**
 
 - Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout History.
-- Existing Workout path: Coach can choose a saved Workout and assign it to all selected Athletes.
+- Existing Workout path: Coach can choose a saved Workout and either copy it into an editable draft or assign it as saved to all selected Athletes. Copy & edit is the primary action; Assign as saved is the secondary shortcut.
+- An editable copy preserves the source Workout's ordered Exercises, set counts, reps or text prescription, load/unit, RPE, and sparse property-specific per-position overrides. The source Workout and previously scheduled prescriptions are never mutated.
+- Editing a copied exercise uses the same uniform-first semantics as any new draft: changing that exercise's set count or default prescription updates its effective planned positions while preserving explicit overrides as defined below. Workout-wide percentage progression, automatic load recommendations, and bulk cross-exercise set/load changes remain deferred.
 - Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`, or create one missing private Exercise through `POST /api/v1/exercises`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
 - Workout persists and remains available in Calendar → From saved after refresh.
@@ -245,7 +247,7 @@ Calendar
 → Build & Assign
 ```
 
-Saved Workout selection remains part of the Calendar workflow through From saved. Workout History is a read-only view over ScheduledWorkout and WorkoutSession data and must not replace Calendar programming behavior.
+Saved Workout selection remains part of the Calendar workflow through From saved. A saved Workout can be copied into the same Builder for modification before assignment, or assigned directly as saved. Copying creates a new Workout template only when Build & Assign succeeds; it never mutates the source template or a prior scheduled snapshot. Workout History is a read-only view over ScheduledWorkout and WorkoutSession data and must not replace Calendar programming behavior.
 
 For each prescribed exercise:
 
