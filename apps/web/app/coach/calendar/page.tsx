@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SyntheticEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -109,7 +109,11 @@ type ExerciseFieldErrors = Partial<Record<ExerciseFieldName, string>> & {
 
 type ExerciseDropTarget = { id: string; placement: "before" | "after" };
 type ExerciseDragMetrics = { x: number; y: number; offsetX: number; offsetY: number; width: number; height: number };
-type PendingExerciseDrag = { id: string; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; width: number; height: number };
+type PendingExerciseDrag = ExerciseDragMetrics & { id: string; pointerId: number; startX: number; startY: number; pointerType: string; card: HTMLElement };
+type ExerciseCardRect = { id: string; left: number; right: number; top: number; height: number };
+const EXERCISE_DRAG_THRESHOLD_PX = 8;
+const EXERCISE_TOUCH_LONG_PRESS_MS = 200;
+const INTERACTIVE_EXERCISE_SELECTOR = "button, input, textarea, select, [contenteditable=\"true\"]";
 
 type BuildFieldErrors = {
   date?: string;
@@ -564,6 +568,13 @@ export default function CoachCalendarPage() {
   const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null);
   const [exerciseDropTarget, setExerciseDropTarget] = useState<ExerciseDropTarget | null>(null);
   const [exerciseDragMetrics, setExerciseDragMetrics] = useState<ExerciseDragMetrics | null>(null);
+  // Refs keep the pointer lifecycle synchronous. A fast move-and-release can
+  // happen before React renders the state update that paints the lifted card.
+  const pendingExerciseDragRef = useRef<PendingExerciseDrag | null>(null);
+  const draggedExerciseIdRef = useRef<string | null>(null);
+  const exerciseDropTargetRef = useRef<ExerciseDropTarget | null>(null);
+  const exerciseCardRectsRef = useRef<ExerciseCardRect[]>([]);
+  const exerciseLongPressTimer = useRef<number | null>(null);
   const [buildFieldErrors, setBuildFieldErrors] = useState<BuildFieldErrors>(initialBuildErrors);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
@@ -1258,75 +1269,175 @@ export default function CoachCalendarPage() {
     });
   }
 
-  function startExerciseDrag(exerciseId: string, event: ReactPointerEvent<HTMLElement>) {
-    if (buildStatus !== "idle") return;
+  function clearExerciseLongPressTimer() {
+    if (exerciseLongPressTimer.current === null) return;
+    window.clearTimeout(exerciseLongPressTimer.current);
+    exerciseLongPressTimer.current = null;
+  }
+
+  function clearPendingExerciseDrag() {
+    clearExerciseLongPressTimer();
+    pendingExerciseDragRef.current = null;
+    setPendingExerciseDrag(null);
+  }
+
+  function setCurrentExerciseDropTarget(next: ExerciseDropTarget | null) {
+    const current = exerciseDropTargetRef.current;
+    if (current?.id === next?.id && current?.placement === next?.placement) return;
+    exerciseDropTargetRef.current = next;
+    setExerciseDropTarget(next);
+  }
+
+  function measureExerciseCards() {
+    exerciseCardRectsRef.current = Array.from(document.querySelectorAll<HTMLElement>("[data-exercise-card-id]")).flatMap((card) => {
+      const id = card.dataset.exerciseCardId;
+      if (id === undefined) return [];
+      const rect = card.getBoundingClientRect();
+      return [{ id, left: rect.left, right: rect.right, top: rect.top, height: rect.height }];
+    });
+  }
+
+  function activateExerciseDrag(pending: PendingExerciseDrag) {
+    clearPendingExerciseDrag();
+    measureExerciseCards();
+    window.getSelection()?.removeAllRanges();
+    draggedExerciseIdRef.current = pending.id;
+    setDraggedExerciseId(pending.id);
+    setExerciseDragMetrics({ x: pending.startX, y: pending.startY, offsetX: pending.offsetX, offsetY: pending.offsetY, width: pending.width, height: pending.height });
+    setCurrentExerciseDropTarget(null);
+  }
+
+  function resetExerciseDrag() {
+    clearPendingExerciseDrag();
+    draggedExerciseIdRef.current = null;
+    exerciseCardRectsRef.current = [];
+    setDraggedExerciseId(null);
+    setCurrentExerciseDropTarget(null);
+    setExerciseDragMetrics(null);
+  }
+
+  function suppressExerciseDragSelection(event: SyntheticEvent<HTMLElement>) {
     const target = event.target as HTMLElement;
-    // Interactive controls keep their normal click/focus behaviour. The
-    // card itself is the drag surface everywhere else, including its header.
-    if (target.closest("button, input, textarea, select, [contenteditable=\"true\"]")) return;
+    if (target.closest(INTERACTIVE_EXERCISE_SELECTOR)) return;
+    event.preventDefault();
+  }
+
+  function startExerciseDrag(exerciseId: string, event: ReactPointerEvent<HTMLElement>) {
+    if (buildStatus !== "idle" || !event.isPrimary || pendingExerciseDragRef.current !== null || draggedExerciseIdRef.current !== null) return;
+    const target = event.target as HTMLElement;
+    if (target.closest(INTERACTIVE_EXERCISE_SELECTOR)) return;
     const card = event.currentTarget.closest<HTMLElement>("[data-exercise-card-id]");
-    const rect = card?.getBoundingClientRect();
-    if (rect === undefined) return;
-    card?.setPointerCapture(event.pointerId);
-    setPendingExerciseDrag({ id: exerciseId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, width: rect.width, height: rect.height });
+    if (card === null) return;
+    const rect = card.getBoundingClientRect();
+    const pending: PendingExerciseDrag = {
+      id: exerciseId,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      card,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      x: event.clientX,
+      y: event.clientY,
+    };
+    card.setPointerCapture(event.pointerId);
+    pendingExerciseDragRef.current = pending;
+    setPendingExerciseDrag(pending);
+
+    // Touch waits briefly so an ordinary vertical swipe remains a page scroll.
+    // Mouse still starts as soon as it crosses the movement threshold.
+    if (event.pointerType === "touch") {
+      exerciseLongPressTimer.current = window.setTimeout(() => {
+        if (pendingExerciseDragRef.current?.pointerId !== pending.pointerId) return;
+        activateExerciseDrag(pending);
+      }, EXERCISE_TOUCH_LONG_PRESS_MS);
+    }
   }
 
   useEffect(() => {
     if (draggedExerciseId === null && pendingExerciseDrag === null) return;
 
     function handlePointerMove(event: PointerEvent) {
-      if (draggedExerciseId === null && pendingExerciseDrag !== null) {
-        if (event.pointerId !== pendingExerciseDrag.pointerId) return;
-        const moved = Math.hypot(event.clientX - pendingExerciseDrag.startX, event.clientY - pendingExerciseDrag.startY);
-        if (moved < 8) return;
-        event.preventDefault();
-        setDraggedExerciseId(pendingExerciseDrag.id);
-        setExerciseDragMetrics({ x: event.clientX, y: event.clientY, offsetX: pendingExerciseDrag.offsetX, offsetY: pendingExerciseDrag.offsetY, width: pendingExerciseDrag.width, height: pendingExerciseDrag.height });
-        setExerciseDropTarget(null);
+      const pending = pendingExerciseDragRef.current;
+      let activeExerciseId = draggedExerciseIdRef.current;
+      if (activeExerciseId === null && pending !== null) {
+        if (event.pointerId !== pending.pointerId) return;
+        const moved = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
+        if (pending.pointerType === "touch") {
+          if (moved >= EXERCISE_DRAG_THRESHOLD_PX) clearPendingExerciseDrag();
+          return;
+        }
+        if (moved < EXERCISE_DRAG_THRESHOLD_PX) return;
+        activateExerciseDrag(pending);
+        activeExerciseId = pending.id;
       }
-      if (draggedExerciseId === null) return;
+      if (activeExerciseId === null) return;
       event.preventDefault();
       setExerciseDragMetrics((previous) => previous === null ? previous : { ...previous, x: event.clientX, y: event.clientY });
-      const element = document.elementFromPoint(event.clientX, event.clientY);
-      const card = element?.closest<HTMLElement>("[data-exercise-card-id]");
-      const id = card?.dataset.exerciseCardId;
-      if (!card || id === undefined || id === draggedExerciseId) {
-        setExerciseDropTarget(null);
+      const targetCard = exerciseCardRectsRef.current.find((candidate) => candidate.id !== activeExerciseId && event.clientX >= candidate.left && event.clientX <= candidate.right && event.clientY >= candidate.top && event.clientY <= candidate.top + candidate.height);
+      if (targetCard === undefined) {
+        setCurrentExerciseDropTarget(null);
         return;
       }
-      const rect = card.getBoundingClientRect();
-      const placement = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
-      setExerciseDropTarget((previous) => previous?.id === id && previous.placement === placement ? previous : { id, placement });
+      setCurrentExerciseDropTarget({ id: targetCard.id, placement: event.clientY < targetCard.top + targetCard.height / 2 ? "before" : "after" });
     }
 
-    function finishExerciseDrag() {
-      setPendingExerciseDrag(null);
-      if (draggedExerciseId === null) return;
-      setDraftExercises((previous) => {
-        if (exerciseDropTarget === null) return previous;
-        const fromIndex = previous.findIndex((item) => item.exercise.id === draggedExerciseId);
-        if (fromIndex < 0) return previous;
-        const next = [...previous];
-        const [dragged] = next.splice(fromIndex, 1);
-        const targetIndex = next.findIndex((item) => item.exercise.id === exerciseDropTarget.id);
-        if (targetIndex < 0 || dragged === undefined) return previous;
-        next.splice(exerciseDropTarget.placement === "after" ? targetIndex + 1 : targetIndex, 0, dragged);
-        return next;
-      });
-      setDraggedExerciseId(null);
-      setExerciseDropTarget(null);
-      setExerciseDragMetrics(null);
+    function finishExerciseDrag(cancelled = false) {
+      const activeExerciseId = draggedExerciseIdRef.current;
+      if (activeExerciseId === null) {
+        clearPendingExerciseDrag();
+        return;
+      }
+      const dropTarget = exerciseDropTargetRef.current;
+      if (!cancelled && dropTarget !== null) {
+        setDraftExercises((previous) => {
+          const fromIndex = previous.findIndex((item) => item.exercise.id === activeExerciseId);
+          if (fromIndex < 0) return previous;
+          const next = [...previous];
+          const [dragged] = next.splice(fromIndex, 1);
+          const targetIndex = next.findIndex((item) => item.exercise.id === dropTarget.id);
+          if (targetIndex < 0 || dragged === undefined) return previous;
+          next.splice(dropTarget.placement === "after" ? targetIndex + 1 : targetIndex, 0, dragged);
+          return next;
+        });
+      }
+      resetExerciseDrag();
     }
 
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", finishExerciseDrag);
-    window.addEventListener("pointercancel", finishExerciseDrag);
+    const handlePointerUp = () => finishExerciseDrag();
+    const handlePointerCancel = () => finishExerciseDrag(true);
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", finishExerciseDrag);
-      window.removeEventListener("pointercancel", finishExerciseDrag);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
     };
-  }, [draggedExerciseId, exerciseDropTarget, pendingExerciseDrag]);
+  // Pointer listeners intentionally read the latest values from refs so a
+  // pointer-up cannot commit a stale React render between move frames.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggedExerciseId, pendingExerciseDrag]);
+
+  useEffect(() => () => clearExerciseLongPressTimer(), []);
+
+  useEffect(() => {
+    if (draggedExerciseId === null) return;
+    const bodyOverflow = document.body.style.overflow;
+    const bodyOverscrollBehavior = document.body.style.overscrollBehavior;
+    const rootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = bodyOverflow;
+      document.body.style.overscrollBehavior = bodyOverscrollBehavior;
+      document.documentElement.style.overflow = rootOverflow;
+    };
+  }, [draggedExerciseId]);
 
   // validateExercisesDraft checks only the exercise/prescription authoring
   // state — no date, no athletes. Save Workout and Save Changes both submit
@@ -1959,8 +2070,8 @@ export default function CoachCalendarPage() {
                     {buildFieldErrors.exercises && <FieldError>{buildFieldErrors.exercises}</FieldError>}
                     <div className="mt-3 grid gap-4">
                       {draftExercises.map((item, index) => <Fragment key={item.exercise.id}>
-                        {draggedExerciseId === item.exercise.id && exerciseDragMetrics !== null && <div aria-hidden="true" className="rounded-2xl border-2 border-dashed border-teal-300 bg-teal-50/40" style={{ height: exerciseDragMetrics.height }} />}
-                        <DraftExerciseCard item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} dragging={draggedExerciseId === item.exercise.id} dragMetrics={draggedExerciseId === item.exercise.id ? exerciseDragMetrics : null} dropPlacement={exerciseDropTarget?.id === item.exercise.id ? exerciseDropTarget.placement : null} onDragStart={(event) => startExerciseDrag(item.exercise.id, event)} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />
+                        {draggedExerciseId === item.exercise.id && exerciseDragMetrics !== null && <div aria-hidden="true" className="relative z-[41] rounded-2xl border-2 border-dashed border-teal-300 bg-teal-50/40" style={{ height: exerciseDragMetrics.height }} />}
+                        <DraftExerciseCard item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} dragActive={draggedExerciseId !== null} dragging={draggedExerciseId === item.exercise.id} dragMetrics={draggedExerciseId === item.exercise.id ? exerciseDragMetrics : null} dropPlacement={exerciseDropTarget?.id === item.exercise.id ? exerciseDropTarget.placement : null} onDragStart={(event) => startExerciseDrag(item.exercise.id, event)} onSuppressDragSelection={suppressExerciseDragSelection} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />
                       </Fragment>)}
                     </div>
                   </div>
@@ -2261,6 +2372,8 @@ export default function CoachCalendarPage() {
         onConfirm={confirmPendingNav}
         onCancel={() => setPendingNav(null)}
       />}
+
+      {draggedExerciseId !== null && <div aria-hidden="true" onContextMenu={(event) => event.preventDefault()} className="fixed inset-0 z-40 touch-none select-none bg-slate-950/35 backdrop-blur-[1px]" />}
     </main>
   );
 }
@@ -2269,7 +2382,7 @@ function ProgrammingModeButton({ active, children, ...props }: { active: boolean
   return <button type="button" {...props} className={`min-h-12 rounded-xl border px-4 text-sm font-bold transition ${active ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:opacity-50`}>{active ? "● " : "○ "}{children}</button>;
 }
 
-function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dragging, dragMetrics, dropPlacement, onDragStart, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; dragging: boolean; dragMetrics: ExerciseDragMetrics | null; dropPlacement: "before" | "after" | null; onDragStart: (event: ReactPointerEvent<HTMLElement>) => void; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
+function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dragActive, dragging, dragMetrics, dropPlacement, onDragStart, onSuppressDragSelection, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; dragActive: boolean; dragging: boolean; dragMetrics: ExerciseDragMetrics | null; dropPlacement: "before" | "after" | null; onDragStart: (event: ReactPointerEvent<HTMLElement>) => void; onSuppressDragSelection: (event: SyntheticEvent<HTMLElement>) => void; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
   const t = useT();
   const { locale } = useLocale();
   const setsInputRef = useRef<HTMLInputElement>(null);
@@ -2293,18 +2406,17 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
   const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRpe === "" ? "" : `RPE ${item.defaultRpe}`].filter(Boolean).join(" · ");
-  const cardClass = `relative rounded-2xl border bg-white ${disabled ? "" : "cursor-grab active:cursor-grabbing"} ${dropPlacement !== null ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragging ? "z-50 scale-[1.02] rotate-[0.3deg] border-teal-500 opacity-95 shadow-2xl ring-4 ring-teal-500/20" : ""}`;
-  // iOS treats a long press on the card as text selection unless the drag
-  // surface explicitly opts out. Keep form controls usable while preventing
-  // the copy/selection callout from appearing on the draggable card itself.
-  const dragStyle: CSSProperties = {
-    ...(disabled ? {} : { userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }),
-    ...(dragging && dragMetrics !== null ? { position: "fixed", left: dragMetrics.x - dragMetrics.offsetX, top: dragMetrics.y - dragMetrics.offsetY, width: dragMetrics.width, pointerEvents: "none", touchAction: "none", transition: "none", willChange: "left, top, transform" } : {}),
-  };
+  const cardClass = `relative rounded-2xl border bg-white ${disabled ? "" : "cursor-grab active:cursor-grabbing"} ${dropPlacement !== null ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragActive && !dragging ? "z-[41] pointer-events-none opacity-45" : ""} ${dragging ? "z-50 scale-[1.02] rotate-[0.3deg] border-teal-500 opacity-95 shadow-2xl ring-4 ring-teal-500/20" : ""}`;
+  const dragStyle: CSSProperties | undefined = dragging && dragMetrics !== null
+    ? { position: "fixed", left: dragMetrics.x - dragMetrics.offsetX, top: dragMetrics.y - dragMetrics.offsetY, width: dragMetrics.width, pointerEvents: "none", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", transition: "none", willChange: "left, top, transform" }
+    : undefined;
+  // The touch surface disables iOS's selection/callout before a long press
+  // completes. Controls sit outside it, so text inputs remain selectable.
+  const dragSurfaceStyle: CSSProperties = disabled ? {} : { touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" };
   const dropIndicator = dropPlacement !== null && <div aria-hidden="true" className={`pointer-events-none absolute left-4 right-4 z-10 h-1 rounded-full bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,0.15)] ${dropPlacement === "before" ? "-top-2" : "-bottom-2"}`} />;
-  if (!expanded) return <article data-exercise-card-id={item.exercise.id} onPointerDown={onDragStart} className={cardClass} style={dragStyle}>{dropIndicator}<div className="p-4"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span><span className="mt-2 block text-sm font-semibold text-teal-700">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></span></button></div></article>;
+  if (!expanded) return <article data-exercise-card-id={item.exercise.id} className={cardClass} style={dragStyle}>{dropIndicator}<div onPointerDown={onDragStart} onSelect={onSuppressDragSelection} onContextMenu={onSuppressDragSelection} className="min-w-0 p-3" style={dragSurfaceStyle}><span className="block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block line-clamp-2 text-base font-semibold leading-snug tracking-tight sm:text-lg">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block truncate text-sm text-slate-600">{summary}</span></div><div className="flex justify-end border-t border-slate-100 px-3 py-2"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-h-9 rounded-lg px-2 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></button></div></article>;
 
-  return <article data-exercise-card-id={item.exercise.id} onPointerDown={onDragStart} className={`${cardClass} p-4`} style={dragStyle}>{dropIndicator}<div id={`${baseId}-details`}>
+  return <article data-exercise-card-id={item.exercise.id} onPointerDown={onDragStart} onSelect={onSuppressDragSelection} onContextMenu={onSuppressDragSelection} className={`${cardClass} p-4`} style={dragStyle}>{dropIndicator}<div id={`${baseId}-details`}>
     <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="min-w-0 text-left"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></button></div><div className="flex items-center gap-2"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.collapse")} <span aria-hidden="true">▴</span></button>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div></div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.sets")}</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
