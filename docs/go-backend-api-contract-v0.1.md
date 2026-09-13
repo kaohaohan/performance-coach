@@ -135,10 +135,10 @@ User                      { id, firebaseUid, name, role: COACH|ATHLETE }
 CoachAthlete              { coachId, athleteId }              // N:N
 Exercise                  { id, name, ownerCoachId? }         // null = 系統公用動作
 Workout                   { id, coachId, name }                // 課表模板
-WorkoutExercise           { id, workoutId, exerciseId, setCount, defaults, loadUnit?, position }
+WorkoutExercise           { id, workoutId, exerciseId, setCount, defaults, loadUnit?, coachCue?, position }
 WorkoutExerciseSetOverride { id, workoutExerciseId, plannedPosition, reps?|prescriptionNote?|load?|rpe? }
 ScheduledWorkout          { id, workoutId, coachId, athleteId, scheduledDate }
-ScheduledWorkoutExercise  { id, scheduledWorkoutId, exerciseId, exerciseName, targetLoadUnit?, position }  // snapshot parent
+ScheduledWorkoutExercise  { id, scheduledWorkoutId, exerciseId, exerciseName, targetLoadUnit?, coachCue?, position }  // snapshot parent
 ScheduledWorkoutPlannedSet { id, scheduledWorkoutExerciseId, plannedPosition, reps?|prescriptionNote?, load?, rpe? } // resolved snapshot
 WorkoutSession            { id, scheduledWorkoutId, athleteId, status: ACTIVE|COMPLETED, startedAt, completedAt }
 SetLog                    { id, sessionId, scheduledWorkoutExerciseId, scheduledWorkoutPlannedSetId?, setNumber, load?, unit?, reps, rpe, loggedByUserId, createdAt }
@@ -164,7 +164,7 @@ The target wire shapes are defined below. No migration or code change is authori
 **Exercise vs WorkoutExercise**
 
 - `Exercise` = 「Back Squat」這個動作本身
-- `WorkoutExercise` = Back Squat 在某份課表裡的 prescription（4×5 @ RPE 8）
+- `WorkoutExercise` = Back Squat 在某份課表裡的 prescription（4×5 @ RPE 8）與可選 Coach cue。cue 是 workout-context technique/tempo/safety guidance，不是 `prescriptionNote` 的替代品；trim 後空值省略、最長 500 字元。
 
 **動作庫的擁有權**
 
@@ -173,7 +173,7 @@ The target wire shapes are defined below. No migration or code change is authori
 
 **Prescription snapshot（含欄位優先權規則）**
 
-排程當下把 WorkoutExercise 複製成 ScheduledWorkoutExercise。之後教練改課表模板，**不會污染已發生的訓練歷史**。
+排程當下把 WorkoutExercise（包含可選 Coach cue）複製成 ScheduledWorkoutExercise。之後教練改課表模板，**不會污染已發生的訓練歷史**。
 
 > **Snapshot 欄位優先於 Exercise current state。**所有歷史顯示（Today view、session 詳情、plan vs actual）一律讀 `scheduled_workout_exercises.exercise_name/target_load_unit` 與其 `scheduled_workout_planned_sets` resolved targets，**永不 join 回現行 `exercises` 或 `workout_exercises` 取名稱或處方**。保留的 `exercise_id` 唯一用途是 analytics / 跨課表動作歷史關聯（例如「Back Squat 的負荷趨勢」）。動作事後改名，歷史顯示不變，這是 by design。
 > 

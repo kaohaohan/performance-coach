@@ -146,6 +146,7 @@ type ScheduledExercise struct {
 	ExerciseID                 string      `json:"exerciseId"`
 	Name                       string      `json:"name"`
 	Plan                       CreatedPlan `json:"plan"`
+	CoachCue                   *string     `json:"coachCue,omitempty"`
 	Position                   int         `json:"position"`
 }
 
@@ -175,6 +176,7 @@ type CreatedScheduledExercise struct {
 	ExerciseID                 string      `json:"exerciseId"`
 	Name                       string      `json:"name"`
 	Plan                       CreatedPlan `json:"plan"`
+	CoachCue                   *string     `json:"coachCue,omitempty"`
 	Position                   int         `json:"position"`
 }
 
@@ -306,10 +308,10 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 			scheduledWorkoutExerciseID := uuid.NewString()
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO scheduled_workout_exercises
-					(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, position)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, coach_cue, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				scheduledWorkoutExerciseID, scheduledWorkoutID, p.ExerciseID, p.ExerciseName,
-				p.TargetLoadUnit, p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRPE, p.Position,
+				p.TargetLoadUnit, p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRPE, p.CoachCue, p.Position,
 			); err != nil {
 				return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
 			}
@@ -346,6 +348,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 				ExerciseID:                 p.ExerciseID,
 				Name:                       p.ExerciseName,
 				Plan:                       CreatedPlan{Sets: plannedSets},
+				CoachCue:                   p.CoachCue,
 				Position:                   p.Position,
 			})
 		}
@@ -541,6 +544,7 @@ type resolvedPrescription struct {
 	TargetLoad             *float64
 	TargetLoadUnit         *string
 	TargetRPE              *float64
+	CoachCue               *string
 	Position               int
 	Overrides              []prescription.SetOverride
 	ResolvedSets           []prescription.ResolvedPlannedSet
@@ -553,7 +557,7 @@ type resolvedPrescription struct {
 func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string) ([]resolvedPrescription, error) {
 	const query = `
 		SELECT we.id, we.exercise_id, e.name,
-		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.position,
+		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.coach_cue, we.position,
 		       o.planned_position, o.reps_override, o.prescription_note_override, o.load_override, o.rpe_override
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
@@ -578,7 +582,7 @@ func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string
 		var p resolvedPrescription
 		if err := rows.Scan(
 			&workoutExerciseID, &p.ExerciseID, &p.ExerciseName,
-			&p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetLoad, &p.TargetLoadUnit, &p.TargetRPE, &p.Position,
+			&p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetLoad, &p.TargetLoadUnit, &p.TargetRPE, &p.CoachCue, &p.Position,
 			&plannedPosition, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RPE,
 		); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan prescription: %w", err)
@@ -632,8 +636,9 @@ func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string
 // workout.CreateExerciseInput's shape (exercise identity by name, resolved
 // the same find-or-create way, plus a full authoring plan).
 type UpdateExerciseInput struct {
-	Name string
-	Plan prescription.Plan
+	Name     string
+	Plan     prescription.Plan
+	CoachCue *string
 }
 
 // UpdateInput is the decoded, wire-format-independent request for Update.
@@ -733,6 +738,10 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 
 	exercises := make([]CreatedScheduledExercise, 0, len(input.Exercises))
 	for i, ex := range input.Exercises {
+		coachCue, err := normalizeCoachCue(ex.CoachCue)
+		if err != nil {
+			return Created{}, &ValidationError{Message: fmt.Sprintf("exercises[%d].coachCue: %s", i, err.Error())}
+		}
 		exerciseID, exerciseName, err := exercise.FindOrCreateVisible(ctx, tx, caller.ID, ex.Name)
 		if err != nil {
 			return Created{}, fmt.Errorf("scheduledworkout: resolve exercise %q: %w", ex.Name, err)
@@ -742,10 +751,10 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 		scheduledWorkoutExerciseID := uuid.NewString()
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO scheduled_workout_exercises
-				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, position)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, coach_cue, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			scheduledWorkoutExerciseID, scheduledWorkoutID, exerciseID, exerciseName, ex.Plan.Defaults.Unit,
-			ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote, ex.Plan.Defaults.RPE, position,
+			ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote, ex.Plan.Defaults.RPE, coachCue, position,
 		); err != nil {
 			return Created{}, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
 		}
@@ -782,6 +791,7 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 			ExerciseID:                 exerciseID,
 			Name:                       exerciseName,
 			Plan:                       CreatedPlan{Sets: plannedSets},
+			CoachCue:                   coachCue,
 			Position:                   position,
 		})
 	}
@@ -798,6 +808,20 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 		Session:       nil,
 		Exercises:     exercises,
 	}, nil
+}
+
+func normalizeCoachCue(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if len(trimmed) > 500 {
+		return nil, fmt.Errorf("must be at most 500 characters")
+	}
+	return &trimmed, nil
 }
 
 // validateAndResolveUpdateExercises checks input.Exercises shape (no DB
@@ -1010,7 +1034,7 @@ func GetForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sch
 	}
 
 	const exercisesQuery = `
-		SELECT id, exercise_id, exercise_name, position
+		SELECT id, exercise_id, exercise_name, coach_cue, position
 		FROM scheduled_workout_exercises
 		WHERE scheduled_workout_id = $1
 		ORDER BY position`
@@ -1026,7 +1050,7 @@ func GetForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sch
 	for exRows.Next() {
 		var ex CreatedScheduledExercise
 		var id string
-		if err := exRows.Scan(&id, &ex.ExerciseID, &ex.Name, &ex.Position); err != nil {
+		if err := exRows.Scan(&id, &ex.ExerciseID, &ex.Name, &ex.CoachCue, &ex.Position); err != nil {
 			return Created{}, fmt.Errorf("scheduledworkout: scan snapshot exercise: %w", err)
 		}
 		ex.ScheduledWorkoutExerciseID = id
@@ -1253,7 +1277,7 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	}
 
 	const exercisesQuery = `
-		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.position
+		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.position
 		FROM scheduled_workout_exercises swe
 		WHERE swe.scheduled_workout_id = ANY($1)
 		ORDER BY swe.scheduled_workout_id, swe.position`
@@ -1273,9 +1297,10 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	for rows.Next() {
 		var (
 			exerciseID, scheduledWorkoutID, exerciseDefinitionID, exerciseName string
+			coachCue                                                           *string
 			position                                                           int
 		)
-		if err := rows.Scan(&exerciseID, &scheduledWorkoutID, &exerciseDefinitionID, &exerciseName, &position); err != nil {
+		if err := rows.Scan(&exerciseID, &scheduledWorkoutID, &exerciseDefinitionID, &exerciseName, &coachCue, &position); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan today snapshot exercise: %w", err)
 		}
 
@@ -1286,6 +1311,7 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 			ExerciseID:                 exerciseDefinitionID,
 			Name:                       exerciseName,
 			Plan:                       CreatedPlan{Sets: make([]PlannedSet, 0)},
+			CoachCue:                   coachCue,
 			Position:                   position,
 		})
 		exerciseByID[exerciseID] = exerciseReference{scheduledWorkoutID: scheduledWorkoutID, index: index}

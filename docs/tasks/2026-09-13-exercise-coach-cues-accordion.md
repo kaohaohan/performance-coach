@@ -52,13 +52,13 @@
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Existing template/snapshot architecture supports the field without a route or auth change. |
-| Phase 1 — task doc and canonical documentation | In Progress | Task Doc created; canonical docs pending implementation. |
-| Phase 2 — migration and backend contract implementation | Not Started | |
-| Phase 3 — Calendar, Today, Session UI and tests | Not Started | |
-| Phase 4 — verification and staging-only rollout | Not Started | Production excluded. |
+| Phase 1 — task doc and canonical documentation | Done | Product, UI, API, and schema docs record Coach-cue snapshot semantics. |
+| Phase 2 — migration and backend contract implementation | Done | Additive 0005 migration, trim/500-character validation, template/snapshot/read plumbing completed. |
+| Phase 3 — Calendar, Today, Session UI and tests | Done | Draft/copy persistence, accessible single-open cards, labels, and Athlete rendering completed. |
+| Phase 4 — verification and staging-only rollout | In Progress | Local migration, Go vet/test, TypeScript, lint, and web tests pass; staging rollout remains. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress
+- Final status: In progress — staging rollout pending
 - Deviations from plan: None yet.
 - Follow-ups: None yet.

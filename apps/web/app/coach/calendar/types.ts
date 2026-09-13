@@ -50,6 +50,7 @@ export type WorkoutExercise = {
   exerciseId: string;
   name: string;
   plan: WorkoutPlan;
+  coachCue?: string;
   position: number;
 };
 

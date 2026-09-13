@@ -11,7 +11,7 @@ import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 type PlannedSet = { scheduledWorkoutPlannedSetId: string; position: number; reps?: number; prescriptionNote?: string; load?: number; unit?: "kg" | "lb"; rpe?: number };
 type Plan = { sets: PlannedSet[] };
 type SetLog = { id: string; kind: "PLANNED" | "EXTRA"; scheduledWorkoutPlannedSetId?: string; plannedPosition?: number; setNumber: number; load?: number; unit?: "kg" | "lb"; reps: number; rpe?: number; loggedByUserId: string };
-type SessionExercise = { scheduledWorkoutExerciseId: string; name: string; plan: Plan; setLogs: SetLog[] };
+type SessionExercise = { scheduledWorkoutExerciseId: string; name: string; plan: Plan; coachCue?: string; setLogs: SetLog[] };
 type SessionDetail = { id: string; status: "ACTIVE" | "COMPLETED"; athlete: { id: string; name: string }; exercises: SessionExercise[] };
 type SetLogFormState = { load: string; unit: "kg" | "lb"; reps: string; rpe: string; submitting: boolean; error: string | null };
 type SetLogKind = "PLANNED" | "EXTRA";
@@ -246,6 +246,7 @@ export default function SessionPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.exerciseEyebrow")}</p>
               <h2 className="mt-2 break-words text-2xl font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>
               <p className="mt-2 text-sm text-slate-500">{t(targets.length === 1 ? "athlete.session.plannedSetCountOne" : "athlete.session.plannedSetCountOther", { count: targets.length })}</p>
+              {exercise.coachCue && <p className="mt-3 rounded-xl bg-teal-50 px-3 py-2 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
             </div>
 
             <div className="space-y-3 px-4 py-4">

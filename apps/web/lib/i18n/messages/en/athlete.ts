@@ -46,6 +46,7 @@ export const athlete = {
   "athlete.plan.setCountOne": "{count} set",
   "athlete.plan.setCountOther": "{count} sets",
   "athlete.plan.plannedSetCount": "{count} planned sets",
+  "athlete.coachCue": "Coach cue:",
 
   // --- shared set vocabulary (both pages) -----------------------------
   "athlete.set.label": "Set {position}",

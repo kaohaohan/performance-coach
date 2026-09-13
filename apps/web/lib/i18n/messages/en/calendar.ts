@@ -162,17 +162,19 @@ export const calendar = {
   // "RPE" itself is not a key: Taiwan coaches say "RPE", so a zh-TW value
   // would be identical to the English and the label stays a literal in the
   // JSX, exactly like the kg / lb unit options.
-  "calendar.field.prescription": "Prescription",
-  "calendar.field.instruction": "Instruction",
+  "calendar.field.prescription": "Training target",
+  "calendar.field.instruction": "Custom target",
   "calendar.field.instructionPlaceholder": "AMAP, 30 sec, 10–12",
   "calendar.field.reps": "Reps",
+  "calendar.field.coachCue": "Coach cues (optional)",
+  "calendar.field.coachCuePlaceholder": "Keep shoulders down; pause for one second at the top.",
   "calendar.field.repsHintLabel": "About reps",
   "calendar.field.repsHint":
     "Reps takes one whole number, used for every set. For 8-12, 8+, AMAP, or timed sets, switch Prescription to Text — or edit an individual set under Planned sets to vary reps set by set.",
   "calendar.field.load": "Load",
   "calendar.field.unit": "Unit",
   "calendar.prescription.reps": "Reps",
-  "calendar.prescription.text": "Text",
+  "calendar.prescription.text": "Custom target",
   "calendar.plannedSets": "Planned sets",
   "calendar.setNumber": "Set {position}",
   "calendar.setSummaryReps": "{reps} reps",

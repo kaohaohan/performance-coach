@@ -21,7 +21,7 @@ type PlannedSet = {
   rpe?: number;
 };
 type Plan = { sets: PlannedSet[] };
-type ExerciseSummary = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; position: number };
+type ExerciseSummary = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; coachCue?: string; position: number };
 type Session = { id: string; status: "ACTIVE" | "COMPLETED" };
 type TodayScheduledWorkout = { id: string; scheduledDate: string; workoutName: string; exercises: ExerciseSummary[]; session: Session | null };
 
@@ -192,6 +192,7 @@ export default function AthleteTodayPage() {
                       <li key={exercise.scheduledWorkoutExerciseId} className="py-4">
                         <p className="text-sm font-bold uppercase tracking-wide text-slate-900">{localizeExerciseName(exercise.name, locale)}</p>
                         <PlannedSetPreview plan={exercise.plan} />
+                        {exercise.coachCue && <p className="mt-3 rounded-xl bg-teal-50 px-3 py-2 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
                       </li>
                     ))}
                   </ul>

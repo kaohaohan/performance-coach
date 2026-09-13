@@ -53,6 +53,7 @@ export type DraftExercise = {
   defaultLoad: string;
   unit: PlannedUnit;
   defaultRpe: string;
+  coachCue: string;
   overrides: DraftSetOverride[];
   customizationOpen: boolean;
   editingPositions: number[];
@@ -98,6 +99,7 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
           defaultLoad: item.plan.defaults.load !== undefined ? String(item.plan.defaults.load) : "",
           unit: item.plan.defaults.unit === "lb" ? "lb" : "kg",
           defaultRpe: item.plan.defaults.rpe !== undefined ? String(item.plan.defaults.rpe) : "",
+          coachCue: item.coachCue ?? "",
           overrides,
           customizationOpen: false,
           editingPositions: [],
@@ -277,7 +279,10 @@ function draftContentFromUnknown(draft: Record<string, unknown>): Omit<WorkoutBu
   }
   return {
     name: draft.name,
-    exercises: draft.exercises as DraftExercise[],
+    exercises: (draft.exercises as DraftExercise[]).map((exercise) => ({
+      ...exercise,
+      coachCue: typeof exercise.coachCue === "string" ? exercise.coachCue : "",
+    })),
     scheduledDate: draft.scheduledDate,
     editTarget: (draft.editTarget ?? null) as DraftEditTarget | null,
   };

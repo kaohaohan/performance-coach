@@ -83,6 +83,7 @@ type ScheduledWorkoutExerciseDTO = {
   exerciseId: string;
   name: string;
   plan: { sets: ScheduledWorkoutPlannedSetDTO[] };
+  coachCue?: string;
   position: number;
 };
 type ScheduledWorkoutDetail = {
@@ -318,6 +319,7 @@ function fallbackWorkoutName(date: string): string {
 function buildExercisesPayload(items: DraftExercise[]) {
   return items.map((item) => ({
     name: item.exercise.name,
+    ...(item.coachCue.trim() === "" ? {} : { coachCue: item.coachCue.trim() }),
     plan: {
       setCount: Number(item.setCount),
       defaults: {
@@ -382,6 +384,7 @@ function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise
     defaultLoad: base?.load !== undefined && base?.load !== null ? String(base.load) : "",
     unit: base?.unit ?? "kg",
     defaultRpe: base?.rpe !== undefined && base?.rpe !== null ? String(base.rpe) : "",
+    coachCue: ex.coachCue ?? "",
     overrides,
     customizationOpen: false,
     editingPositions: [],
@@ -552,6 +555,7 @@ export default function CoachCalendarPage() {
   const [copiedFromWorkoutName, setCopiedFromWorkoutName] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftExercises, setDraftExercises] = useState<DraftExercise[]>([]);
+  const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null);
   const [buildFieldErrors, setBuildFieldErrors] = useState<BuildFieldErrors>(initialBuildErrors);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
@@ -1094,6 +1098,7 @@ export default function CoachCalendarPage() {
   function resetBuilderDraft() {
     setDraftName("");
     setDraftExercises([]);
+    setExpandedExerciseId(null);
     setCopiedFromWorkoutName(null);
     setBuildFieldErrors(initialBuildErrors());
     setBuildError(null);
@@ -1137,12 +1142,14 @@ export default function CoachCalendarPage() {
       defaultLoad: "",
       unit: "kg",
       defaultRpe: "",
+      coachCue: "",
       overrides: [],
       customizationOpen: false,
       editingPositions: [],
     }]);
     setBuildFieldErrors((previous) => ({ ...previous, exercises: undefined }));
     setPendingSetsFocusId(exercise.id);
+    setExpandedExerciseId(exercise.id);
     setPickerOpen(false);
     setPickerQuery("");
     setPickerExercises(null);
@@ -1329,7 +1336,14 @@ export default function CoachCalendarPage() {
     setBuildError(null);
     setAssignError(null);
     setAssignSuccess(null);
-    if (errors.date || errors.athletes || hasBuildErrors(errors)) return;
+    if (errors.date || errors.athletes || hasBuildErrors(errors)) {
+      const firstInvalid = draftExercises.find((item) => errors.items[item.exercise.id] !== undefined);
+      if (firstInvalid) {
+        setExpandedExerciseId(firstInvalid.exercise.id);
+        setPendingSetsFocusId(firstInvalid.exercise.id);
+      }
+      return;
+    }
 
     const athleteIds = Object.freeze([...currentAssignmentAthleteIds()]);
     buildInFlight.current = true;
@@ -1448,6 +1462,7 @@ export default function CoachCalendarPage() {
     const copied = savedWorkoutToDraft(source);
     setDraftName(copied.name);
     setDraftExercises(copied.exercises);
+    setExpandedExerciseId(null);
     setCopiedFromWorkoutName(source.name);
     setBuilderDate(date);
     setBuilderAthleteId(calendarAthleteId);
@@ -1636,6 +1651,7 @@ export default function CoachCalendarPage() {
     setEditLoadError(null);
     setDraftName(storedDraft.name);
     setDraftExercises(storedDraft.exercises);
+    setExpandedExerciseId(null);
     setDraftSavedAt(storedDraft.savedAt);
     setBuilderSessionKind(storedDraft.sessionKind);
     setExtraAthleteIds(storedDraft.extraAthleteIds);
@@ -1724,6 +1740,7 @@ export default function CoachCalendarPage() {
 
       setDraftName("");
       setDraftExercises(detail.exercises.map(snapshotExerciseToDraft));
+      setExpandedExerciseId(null);
       setExtraAthleteIds([]);
       setBuilderAthleteId(detail.athlete.id);
       setCalendarAthleteId(detail.athlete.id);
@@ -1756,7 +1773,14 @@ export default function CoachCalendarPage() {
     const errors = validateExercisesDraft();
     setBuildFieldErrors(errors);
     setBuildError(null);
-    if (hasBuildErrors(errors)) return;
+    if (hasBuildErrors(errors)) {
+      const firstInvalid = draftExercises.find((item) => errors.items[item.exercise.id] !== undefined);
+      if (firstInvalid) {
+        setExpandedExerciseId(firstInvalid.exercise.id);
+        setPendingSetsFocusId(firstInvalid.exercise.id);
+      }
+      return;
+    }
 
     buildInFlight.current = true;
     setBuildStatus("savingChanges");
@@ -1856,7 +1880,7 @@ export default function CoachCalendarPage() {
                     </div>
                     {buildFieldErrors.exercises && <FieldError>{buildFieldErrors.exercises}</FieldError>}
                     <div className="mt-3 grid gap-4">
-                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
+                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
                     </div>
                   </div>
 
@@ -2164,7 +2188,7 @@ function ProgrammingModeButton({ active, children, ...props }: { active: boolean
   return <button type="button" {...props} className={`min-h-12 rounded-xl border px-4 text-sm font-bold transition ${active ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:opacity-50`}>{active ? "● " : "○ "}{children}</button>;
 }
 
-function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
+function DraftExerciseCard({ item, index, total, errors, disabled, expanded, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
   const t = useT();
   const { locale } = useLocale();
   const setsInputRef = useRef<HTMLInputElement>(null);
@@ -2187,8 +2211,11 @@ function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, on
   const clearOverride = (position: number, property: "prescription" | "load" | "rpe") => onChange({ overrides: clearDraftOverrideProperty(item.overrides, position, property) });
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
-  return <article className="rounded-2xl border border-slate-200 bg-white p-4">
-    <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></div>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div>
+  const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRpe === "" ? "" : `RPE ${item.defaultRpe}`].filter(Boolean).join(" · ");
+  if (!expanded) return <article className="rounded-2xl border border-slate-200 bg-white"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="flex w-full items-center justify-between gap-3 p-4 text-left"><span><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span></span><span aria-hidden="true" className="text-xl text-slate-500">⌄</span></button></article>;
+
+  return <article className="rounded-2xl border border-slate-200 bg-white p-4"><div id={`${baseId}-details`}>
+    <div className="flex items-start justify-between gap-4"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="text-left"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></button>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.sets")}</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
@@ -2212,6 +2239,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, on
           {errors?.reps && <FieldError>{errors.reps}</FieldError>}
         </div>}
     <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.unit")}</span><select value={item.unit} onChange={(event) => onChange({ unit: event.target.value as PlannedUnit })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
+    <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.coachCue")}</span><textarea value={item.coachCue} maxLength={500} rows={2} onChange={(event) => onChange({ coachCue: event.target.value })} disabled={disabled} placeholder={t("calendar.field.coachCuePlaceholder")} className="min-h-20 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 py-2 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100 placeholder:text-slate-400" /></label>
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{t("calendar.plannedSets")}</p>
       {setCount > 0 && <div className="mt-3 grid gap-2">{Array.from({ length: setCount }, (_, offset) => offset + 1).map((position) => {
         const prescription = effectivePrescription(position);
@@ -2230,7 +2258,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, focusSets, on
           under, so surface them here rather than dropping them silently. */}
       {Object.entries(errors?.overrides ?? {}).filter(([position]) => Number(position) > setCount).map(([position, message]) => <FieldError key={position}>{message}</FieldError>)}</div>
     <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4"><button type="button" onClick={() => onMove(index, -1)} disabled={disabled || index === 0} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">{t("calendar.moveUp")}</button><button type="button" onClick={() => onMove(index, 1)} disabled={disabled || index === total - 1} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">{t("calendar.moveDown")}</button><button type="button" onClick={() => onRemove(index)} disabled={disabled} className="min-h-11 rounded-xl border border-red-200 px-3 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">{t("common.remove")}</button></div>
-  </article>;
+  </div></article>;
 }
 
 function PrescriptionModeButton({ active, children, ...props }: { active: boolean; children: string; onClick: () => void; disabled: boolean }) {

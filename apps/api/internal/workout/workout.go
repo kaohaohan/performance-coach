@@ -48,11 +48,12 @@ type SetOverride struct {
 
 // Exercise is one prescribed exercise inside a Workout response.
 type Exercise struct {
-	WorkoutExerciseID string `json:"workoutExerciseId"`
-	ExerciseID        string `json:"exerciseId"`
-	Name              string `json:"name"`
-	Plan              Plan   `json:"plan"`
-	Position          int    `json:"position"`
+	WorkoutExerciseID string  `json:"workoutExerciseId"`
+	ExerciseID        string  `json:"exerciseId"`
+	Name              string  `json:"name"`
+	Plan              Plan    `json:"plan"`
+	CoachCue          *string `json:"coachCue,omitempty"`
+	Position          int     `json:"position"`
 }
 
 // Workout is the response shape for both POST /workouts and GET /workouts.
@@ -76,8 +77,9 @@ func (e *ValidationError) Error() string { return e.Message }
 
 // CreateExerciseInput is one exercise entry in a CreateInput.
 type CreateExerciseInput struct {
-	Name string
-	Plan prescription.Plan
+	Name     string
+	Plan     prescription.Plan
+	CoachCue *string
 }
 
 // CreateInput is the decoded, wire-format-independent request for Create.
@@ -135,12 +137,16 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 
 		position := i + 1
 		workoutExerciseID := uuid.NewString()
+		coachCue, err := normalizeCoachCue(ex.CoachCue)
+		if err != nil {
+			return Workout{}, &ValidationError{Message: fmt.Sprintf("exercises[%d].coachCue: %s", i, err.Error())}
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO workout_exercises
-				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rpe, position)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rpe, coach_cue, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			workoutExerciseID, workoutID, exerciseID, ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote,
-			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RPE, position,
+			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RPE, coachCue, position,
 		); err != nil {
 			return Workout{}, fmt.Errorf("workout: insert workout_exercise: %w", err)
 		}
@@ -160,6 +166,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 			ExerciseID:        exerciseID,
 			Name:              exerciseName,
 			Plan:              planFromPrescription(ex.Plan),
+			CoachCue:          coachCue,
 			Position:          position,
 		})
 	}
@@ -169,6 +176,20 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 	}
 
 	return Workout{ID: workoutID, Name: name, Exercises: exercises}, nil
+}
+
+func normalizeCoachCue(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if len(trimmed) > 500 {
+		return nil, fmt.Errorf("must be at most 500 characters")
+	}
+	return &trimmed, nil
 }
 
 // validate enforces docs/go-backend-api-contract-v0.1.md §3.3's POST
@@ -235,7 +256,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 
 	const exercisesQuery = `
 		SELECT we.workout_id, we.id, we.exercise_id, e.name,
-		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.position
+		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.coach_cue, we.position
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
 		WHERE we.workout_id = ANY($1)
@@ -252,7 +273,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 		var ex Exercise
 		var plan Plan
 		if err := exRows.Scan(&workoutID, &ex.WorkoutExerciseID, &ex.ExerciseID, &ex.Name,
-			&plan.SetCount, &plan.Defaults.Reps, &plan.Defaults.PrescriptionNote, &plan.Defaults.Load, &plan.Defaults.Unit, &plan.Defaults.RPE, &ex.Position); err != nil {
+			&plan.SetCount, &plan.Defaults.Reps, &plan.Defaults.PrescriptionNote, &plan.Defaults.Load, &plan.Defaults.Unit, &plan.Defaults.RPE, &ex.CoachCue, &ex.Position); err != nil {
 			return nil, fmt.Errorf("workout: scan workout_exercise: %w", err)
 		}
 		plan.Overrides = []SetOverride{}

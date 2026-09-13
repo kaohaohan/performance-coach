@@ -301,6 +301,7 @@ type Exercise struct {
 	ScheduledWorkoutExerciseID string   `json:"scheduledWorkoutExerciseId"`
 	Name                       string   `json:"name"`
 	Plan                       Plan     `json:"plan"`
+	CoachCue                   *string  `json:"coachCue,omitempty"`
 	SetLogs                    []SetLog `json:"setLogs"`
 }
 
@@ -464,7 +465,7 @@ func loadExercisesWithSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID
 // target_* compatibility columns on scheduled_workout_exercises are not read.
 func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWorkoutID string) ([]Exercise, map[string]*Exercise, error) {
 	const query = `
-		SELECT swe.id, swe.exercise_name,
+		SELECT swe.id, swe.exercise_name, swe.coach_cue,
 		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
 		       p.target_rpe
@@ -484,10 +485,11 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 	for rows.Next() {
 		var (
 			swExerciseID, exerciseName string
+			coachCue                   *string
 			plannedSet                 PlannedSet
 		)
 		if err := rows.Scan(
-			&swExerciseID, &exerciseName,
+			&swExerciseID, &exerciseName, &coachCue,
 			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
 		); err != nil {
 			return nil, nil, fmt.Errorf("workoutsession: scan planned exercise row: %w", err)
@@ -498,6 +500,7 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 			ex = &Exercise{
 				ScheduledWorkoutExerciseID: swExerciseID,
 				Name:                       exerciseName,
+				CoachCue:                   coachCue,
 				Plan:                       Plan{Sets: make([]PlannedSet, 0)},
 				SetLogs:                    make([]SetLog, 0),
 			}

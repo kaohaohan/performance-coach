@@ -43,6 +43,7 @@ export const athlete: AthleteMessages = {
   "athlete.plan.setCountOne": "{count} 組",
   "athlete.plan.setCountOther": "{count} 組",
   "athlete.plan.plannedSetCount": "預定 {count} 組",
+  "athlete.coachCue": "教練提示：",
 
   // --- shared set vocabulary (both pages) -----------------------------
   "athlete.set.label": "第 {position} 組",

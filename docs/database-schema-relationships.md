@@ -66,10 +66,10 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 | `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
 | `exercises` | `id`, `name`, `owner_coach_id`, optional `description`, `youtube_url`, `image_object_key` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. SYSTEM `name` is English identity, not a localized label. Media columns are nullable catalog attributes, not part of identity. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
-| `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults for one template exercise. |
+| `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, optional `coach_cue`, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults and workout-context Coach guidance for one template exercise. |
 | `workout_exercise_set_overrides` | `workout_exercise_id`, `planned_position`, nullable override values | WorkoutExercise 1:N | Sparse, property-specific explicit values; absent property means inherit. |
 | `scheduled_workouts` | `workout_id`, `coach_id`, `athlete_id`, `scheduled_date` | Workout 1:N; Athlete 1:N | One concrete workout occurrence scheduled to one athlete on one date. |
-| `scheduled_workout_exercises` | `scheduled_workout_id`, `exercise_id`, `exercise_name`, planned load unit, `position` | ScheduledWorkout 1:N | Frozen exercise identity/name/unit snapshot parent. |
+| `scheduled_workout_exercises` | `scheduled_workout_id`, `exercise_id`, `exercise_name`, planned load unit, optional `coach_cue`, `position` | ScheduledWorkout 1:N | Frozen exercise identity/name/unit/cue snapshot parent. |
 | `scheduled_workout_planned_sets` | `scheduled_workout_exercise_id`, `planned_position`, resolved target fields | ScheduledWorkoutExercise 1:N | Fully resolved immutable planned positions used by Athlete execution. |
 | `workout_sessions` | `scheduled_workout_id`, `athlete_id`, `status`, timestamps | ScheduledWorkout 1:0..1 | Actual training occurrence. One scheduled workout can create at most one session. |
 | `set_logs` | `session_id`, `scheduled_workout_exercise_id`, optional `scheduled_workout_planned_set_id`, `set_number`, actual fields | Session 1:N; ScheduledWorkoutExercise 1:N; optional PlannedSet link | Actual performance. Non-null planned-set link = PLANNED; null link = EXTRA. |
@@ -414,7 +414,7 @@ Coach
 
 V0.1 SetLog is currently reps-based. Actual `load` and `unit` are nullable for bodyweight movements. Time/distance actual metrics remain future extensions; preserving a planned text prescription such as `30 sec` does not itself make duration an actual SetLog metric.
 
-Implemented: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association (`0002_planned_set_prescription`); coach invite codes (`0003_coach_invite_codes`). Approved, not yet migrated: account-deletion tombstone (`0004_account_deletion`). Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed, `ABANDONED` session status.
+Implemented: template override rows, scheduled planned-set rows, and explicit SetLog planned-set association (`0002_planned_set_prescription`); coach invite codes (`0003_coach_invite_codes`); and optional workout-context Coach cue snapshots (`0005_exercise_coach_cues`). Approved, not yet migrated: account-deletion tombstone (`0004_account_deletion`). Still out of scope: polymorphic WorkoutItem, Program/Calendar, Organization/team hierarchy, video tables, wearable data, nutrition, payments, leaderboards, feed, `ABANDONED` session status.
 
 ## 8. Future Extension Points
 

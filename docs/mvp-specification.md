@@ -231,13 +231,13 @@ Refreshing the page does not remove the workout or the schedule.
 
 - Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout History.
 - Existing Workout path: Coach can choose a saved Workout and either copy it into an editable draft or assign it as saved to all selected Athletes. Copy & edit is the primary action; Assign as saved is the secondary shortcut.
-- An editable copy preserves the source Workout's ordered Exercises, set counts, reps or text prescription, load/unit, RPE, and sparse property-specific per-position overrides. The source Workout and previously scheduled prescriptions are never mutated.
+- An editable copy preserves the source Workout's ordered Exercises, set counts, reps or text prescription, load/unit, RPE, optional per-exercise Coach cue, and sparse property-specific per-position overrides. The source Workout and previously scheduled prescriptions are never mutated.
 - Editing a copied exercise uses the same uniform-first semantics as any new draft: changing that exercise's set count or default prescription updates its effective planned positions while preserving explicit overrides as defined below. Workout-wide percentage progression, automatic load recommendations, and bulk cross-exercise set/load changes remain deferred.
 - Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`, or create one missing private Exercise through `POST /api/v1/exercises`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
 - Workout persists and remains available in Calendar → From saved after refresh.
 - ScheduledWorkout persists on the Calendar after refresh.
-- Each Athlete receives an independent frozen ScheduledWorkoutExercise snapshot; later template edits do not alter previously scheduled prescriptions.
+- Each Athlete receives an independent frozen ScheduledWorkoutExercise snapshot, including any optional Coach cue; later template edits do not alter previously scheduled prescriptions or cues.
 - Workout belongs to the Coach who created it.
 - Coach cannot schedule a workout to an unrelated (unconnected) athlete.
 - Athlete cannot create, edit, or schedule Coach workouts.

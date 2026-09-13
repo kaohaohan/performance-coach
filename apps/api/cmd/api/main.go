@@ -632,8 +632,9 @@ func handleCreateExercise(pool *pgxpool.Pool) http.HandlerFunc {
 // a POST /api/v1/workouts request body
 // (docs/go-backend-api-contract-v0.1.md §3.3).
 type createWorkoutExerciseRequest struct {
-	Name string                   `json:"name"`
-	Plan createWorkoutPlanRequest `json:"plan"`
+	Name     string                   `json:"name"`
+	Plan     createWorkoutPlanRequest `json:"plan"`
+	CoachCue *string                  `json:"coachCue"`
 }
 
 type createWorkoutPlanRequest struct {
@@ -702,7 +703,8 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 		for i, ex := range req.Exercises {
 			input.Exercises[i] = workout.CreateExerciseInput{
-				Name: ex.Name,
+				Name:     ex.Name,
+				CoachCue: ex.CoachCue,
 				Plan: prescription.Plan{
 					SetCount:  ex.Plan.SetCount,
 					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RPE: ex.Plan.Defaults.RPE},
@@ -936,7 +938,8 @@ func handleUpdateScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 		for i, ex := range req.Exercises {
 			input.Exercises[i] = scheduledworkout.UpdateExerciseInput{
-				Name: ex.Name,
+				Name:     ex.Name,
+				CoachCue: ex.CoachCue,
 				Plan: prescription.Plan{
 					SetCount:  ex.Plan.SetCount,
 					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RPE: ex.Plan.Defaults.RPE},
