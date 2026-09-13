@@ -5,61 +5,13 @@
 // wording, size or error handling — the button itself is identical
 // everywhere; only the caller's onClick differs in which endpoint it then
 // calls with the fresh token.
-
-// googleAuthErrorMessage maps Firebase Auth error codes to copy, following
-// the same pattern as loginErrorMessage / firebaseAuthErrorMessage on the
-// password forms. Raw Firebase error strings are never shown.
 //
-// Returns null for the codes that mean "the person deliberately backed
-// out" — dismissing the account chooser is not a failure, and showing a red
-// alert for it just makes the app look broken.
-export function googleAuthErrorMessage(err: unknown): string | null {
-  // The iOS shell signs in through Google's native sheet rather than a
-  // popup (see lib/native-google-auth.ts), so dismissing it arrives as this
-  // sentinel instead of auth/popup-closed-by-user. Same meaning, same
-  // silence — backing out is not a failure.
-  if ((err as { name?: string })?.name === "NativeGoogleCancelledError") {
-    return null;
-  }
-
-  const code = (err as { code?: string })?.code;
-  switch (code) {
-    case "auth/popup-closed-by-user":
-    case "auth/user-cancelled":
-    // Fires when a second popup supersedes the first (double tap). The
-    // surviving popup is still running, so this is noise, not an error.
-    case "auth/cancelled-popup-request":
-      return null;
-    case "auth/popup-blocked":
-      return "Your browser blocked the sign-in window. Allow pop-ups for this site, then try again.";
-    // Safari in Lockdown/Private modes can refuse the storage the popup
-    // handshake needs.
-    case "auth/web-storage-unsupported":
-      return "Your browser is blocking the storage Google sign-in needs. Try again in a normal (non-private) window, or use your email and password.";
-    // Google is authoritative for addresses it hosts, so this is reachable
-    // only for a non-Google-hosted address already registered under another
-    // provider. Direct the person to the method they already have —
-    // identities are never merged automatically.
-    case "auth/account-exists-with-different-credential":
-      return "That email is already registered with a different sign-in method. Sign in with your email and password instead.";
-    // Configuration faults, not user faults: the Google provider is not
-    // enabled, or this hostname is not an authorized domain / no authDomain
-    // is configured. Generic copy for the user; the real cause is in the
-    // console for whoever is testing.
-    case "auth/operation-not-allowed":
-    case "auth/unauthorized-domain":
-    case "auth/auth-domain-config-required":
-      return "Google sign-in isn't available yet. Please use your email and password, or contact your coach.";
-    case "auth/network-request-failed":
-      return "Network problem. Check your connection and try again.";
-    case "auth/too-many-requests":
-      return "Too many attempts. Try again later.";
-    case "auth/user-disabled":
-      return "This account has been disabled.";
-    default:
-      return "Google sign-in failed. Please try again.";
-  }
-}
+// Error handling is not here: the three call sites resolve their own
+// failures through errorMessage(t, err, GOOGLE_AUTH_POLICY) from
+// lib/i18n/errors.ts, which is where the code -> copy mapping lives and where
+// node --test can reach it. The pre-i18n English-only bridge that used to sit
+// at this spot went with its last caller.
+import { useT } from "@/lib/i18n";
 
 // GoogleMark is Google's four-colour "G", inlined so the button renders
 // without a network round-trip and works offline in the PWA shell.
@@ -81,13 +33,17 @@ export function GoogleSignInButton({
   onClick,
   pending,
   disabled,
-  label = "Continue with Google",
+  label,
 }: {
   onClick: () => void;
   pending?: boolean;
   disabled?: boolean;
   label?: string;
 }) {
+  // The default is read from the catalog rather than defaulted in the
+  // signature: a default parameter is evaluated before any hook can run, so
+  // it would pin the button to English whatever the locale.
+  const t = useT();
   return (
     <button
       type="button"
@@ -96,7 +52,7 @@ export function GoogleSignInButton({
       className="flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl border border-slate-300 bg-white px-5 text-base font-bold text-slate-800 shadow-sm transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-400"
     >
       {pending ? null : <GoogleMark />}
-      {pending ? "Opening Google…" : label}
+      {pending ? t("auth.provider.googlePending") : label ?? t("auth.provider.google")}
     </button>
   );
 }
@@ -105,10 +61,11 @@ export function GoogleSignInButton({
 // email/password form. Decorative only — aria-hidden so it is not announced
 // between the two real controls.
 export function AuthDivider() {
+  const t = useT();
   return (
     <div aria-hidden="true" className="my-5 flex items-center gap-3">
       <span className="h-px flex-1 bg-slate-200" />
-      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">or</span>
+      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t("auth.divider.or")}</span>
       <span className="h-px flex-1 bg-slate-200" />
     </div>
   );

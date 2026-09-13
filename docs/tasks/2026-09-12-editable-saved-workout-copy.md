@@ -32,6 +32,8 @@
   - `apps/web/app/coach/calendar/page.tsx`
   - `apps/web/app/coach/calendar/workout-draft.ts`
   - `apps/web/app/coach/calendar/workout-draft.test.ts`
+  - `apps/web/lib/i18n/messages/en/calendar.ts`
+  - `apps/web/lib/i18n/messages/zh-TW/calendar.ts`
 - Data flow:
   1. Coach selects date, Athlete(s), and a saved Workout in Calendar → From saved.
   2. `Copy & edit` maps the selected Workout name and ordered exercises into the existing local draft representation.
@@ -63,11 +65,11 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection | Done | Existing APIs and Builder can support a frontend-only copy flow. |
 | Phase 1 — task and canonical product/UI documentation | Done | Copy semantics defined; progression automation remains explicitly deferred. |
-| Phase 2 — draft mapper, Calendar UI, and unit tests | Done | Copy now hydrates the existing Builder, preserves defaults/overrides, and retains direct assignment. |
+| Phase 2 — draft mapper, Calendar UI, and unit tests | Done | Copy now hydrates the existing Builder, preserves defaults/overrides, retains direct assignment, and uses the existing English / 繁中 Calendar catalogs. |
 | Phase 3 — lint/build verification and completion review | Done | Unit test, TypeScript, and scoped lint pass; production build reached a DNS failure fetching Google Fonts. |
 
 ## 5. Outcome (filled at completion)
 
 - Final status: Completed
-- Deviations from plan: The full Next production build could not complete because the local environment could not resolve `fonts.googleapis.com`; this occurred before application compilation and is unrelated to the changed Calendar modules.
+- Deviations from plan: The feature branch was merged onto newer staging i18n work, so the two Calendar message catalogs also gained the copy-action labels and notice. The full Next production build could not complete because the local environment could not resolve `fonts.googleapis.com`; this occurred before application compilation and is unrelated to the changed Calendar modules.
 - Follow-ups: Evaluate a separate, evidence-driven bulk progression workflow after Coaches use editable copies in production.

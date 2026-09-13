@@ -2,6 +2,8 @@
 
 Status: **Accepted**, 2026-08-18.
 
+**Release-scoped exception recorded 2026-08-27** — for the App Store 1.0 production promotion in progress (staging SHA `cd16da55c2a1c9af489ed590fef66c5073314ed5`), the founder made an explicit, informed decision to defer the Launch upgrade past the trigger-1 condition below: production's `0004_account_deletion` migration and the rest of the App Store 1.0 promotion proceed on the Free plan, with Launch upgrade required afterward, specifically **after App Review approval and before public availability / real-user rollout** — not "whenever convenient." This does not weaken trigger condition 1; it is a deliberate one-release exception to it, made with the risk stated plainly (Free's 6-hour/1 GB-month PITR window remains in effect on production data until this upgrade happens). See `docs/ios-release-runbook.md` → "Public App Store 1.0" → step 2 for the operational gate this creates. The original decision and trigger conditions below are unmodified by this note.
+
 This ADR does not modify or reopen `docs/adr/ADR-001-use-neon-launch-postgresql-for-mvp-pilot.md`. ADR-001's core verdict — Neon over Cloud SQL, region `aws-ap-southeast-1` (Singapore), Cloud Run colocated in `asia-southeast1` — remains fully in effect and unchanged. This ADR narrows one thing ADR-001 left too blunt: **when** the Launch plan is actually required, versus when Neon's Free plan is a legitimate, cheaper starting point for the same architecture.
 
 ## What changed since ADR-001

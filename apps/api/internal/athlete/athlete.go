@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
@@ -49,7 +50,7 @@ func listByCoachID(ctx context.Context, pool *pgxpool.Pool, coachID string) ([]A
 		SELECT u.id, u.name, u.role
 		FROM coach_athletes ca
 		JOIN users u ON u.id = ca.athlete_id
-		WHERE ca.coach_id = $1 AND u.role = 'ATHLETE'
+		WHERE ca.coach_id = $1 AND u.role = 'ATHLETE' AND u.deleted_at IS NULL
 		ORDER BY u.name`
 
 	rows, err := pool.Query(ctx, query, coachID)
@@ -100,6 +101,26 @@ func Remove(ctx context.Context, pool *pgxpool.Pool, caller authn.User, athleteI
 	// to the caller; treat it the same as "not found" rather than a
 	// separate 400 — resource-scoping, not shape validation.
 	if _, err := uuid.Parse(athleteID); err != nil {
+		return ErrNotFound
+	}
+
+	var tombstoned bool
+	err := pool.QueryRow(ctx, `
+		SELECT u.deleted_at IS NOT NULL
+		FROM coach_athletes ca
+		JOIN users u ON u.id = ca.athlete_id
+		WHERE ca.coach_id = $1 AND ca.athlete_id = $2`,
+		caller.ID, athleteID,
+	).Scan(&tombstoned)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("athlete: remove lookup: %w", err)
+	}
+	if tombstoned {
+		// Historical ACL must remain; a tombstoned athlete cannot be
+		// "removed" from the roster (docs/go-backend-api-contract-v0.1.md §3.1).
 		return ErrNotFound
 	}
 

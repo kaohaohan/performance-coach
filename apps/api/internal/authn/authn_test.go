@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
@@ -121,8 +122,8 @@ type fakeTokenVerifier struct {
 	err error
 }
 
-func (f fakeTokenVerifier) VerifyIDToken(ctx context.Context, idToken string) (string, error) {
-	return f.uid, f.err
+func (f fakeTokenVerifier) VerifyIDToken(ctx context.Context, idToken string) (authn.VerifiedToken, error) {
+	return authn.VerifiedToken{UID: f.uid, AuthTime: time.Now().UTC()}, f.err
 }
 
 func TestFirebaseOnlyMiddlewareRejectsMissingAuthorizationHeader(t *testing.T) {

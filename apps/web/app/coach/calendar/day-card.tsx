@@ -1,5 +1,8 @@
 "use client";
 
+import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { localizeExerciseName } from "@/lib/i18n/exercise-names";
+import { dayHeading } from "@/lib/i18n/dates";
 import { isSameMonth, todayLocalISODate } from "./calendar-date";
 import type { ScheduledWorkoutSummary, Session, Workout, WorkoutExercise } from "./types";
 
@@ -10,17 +13,22 @@ type Density = "week" | "month";
 // instruction instead. Per-set overrides are deliberately not expanded here:
 // the card states the uniform prescription, and the day view is where a coach
 // inspects individual sets.
-function prescriptionSummary(exercise: WorkoutExercise): string {
+//
+// "4 x 8" is notation, not a sentence, so it stays assembled rather than
+// translated; only the bare set count carries a noun and needs a key.
+function prescriptionSummary(t: Translate, exercise: WorkoutExercise): string {
   const { setCount, defaults } = exercise.plan;
   if (defaults.reps !== undefined) return `${setCount} x ${defaults.reps}`;
   if (defaults.prescriptionNote) return `${setCount} x ${defaults.prescriptionNote}`;
-  return `${setCount} set${setCount === 1 ? "" : "s"}`;
+  return setCount === 1
+    ? t("calendar.dayCard.setCountOne")
+    : t("calendar.dayCard.setCountOther", { count: setCount });
 }
 
-function statusLabel(session: Session | null): string {
-  if (session?.status === "COMPLETED") return "Done";
-  if (session?.status === "ACTIVE") return "In progress";
-  return "Not started";
+function statusLabel(t: Translate, session: Session | null): string {
+  if (session?.status === "COMPLETED") return t("calendar.dayCard.statusDone");
+  if (session?.status === "ACTIVE") return t("calendar.dayCard.statusInProgress");
+  return t("calendar.dayCard.statusNotStarted");
 }
 
 function statusClass(session: Session | null): string {
@@ -60,14 +68,20 @@ export default function DayCard({
   onAddWorkout: (date: string) => void;
   onDuplicate?: (date: string) => void;
 }) {
+  const t = useT();
+  const { locale } = useLocale();
   const isToday = date === todayLocalISODate();
   const isSelected = date === selectedDate;
   const outsideMonth = density === "month" && !isSameMonth(date, monthAnchor);
 
-  const dayNumber = Number(date.slice(-2));
-  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${date}T00:00:00`));
-  const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(new Date(`${date}T00:00:00`));
-  const heading = density === "week" ? `${weekday.toUpperCase()} ${dayNumber}` : `${weekday.toUpperCase()}, ${monthShort.toUpperCase()} ${dayNumber}`;
+  // "THU 3" / "THU, SEP 3" in English, "3日 週四" / "9月3日週四" in Chinese —
+  // the word order differs, so the whole heading is built in one place
+  // (lib/i18n/dates.ts) rather than concatenated here.
+  const heading = dayHeading(locale, date, density);
+  // Uppercasing and letter-spacing are Latin typography: `uppercase` does
+  // nothing to CJK, and tracking pushes its glyphs apart into something that
+  // reads as broken rather than emphatic.
+  const headingCase = locale === "zh-TW" ? "" : "uppercase tracking-wide";
 
   const hasTraining = assignments.length > 0;
 
@@ -83,7 +97,7 @@ export default function DayCard({
           onClick={() => onSelect(date)}
           disabled={disabled}
           aria-current={isToday ? "date" : undefined}
-          className={`min-w-0 truncate rounded-lg px-1.5 py-1 text-[11px] font-bold uppercase tracking-wide transition disabled:opacity-50 ${
+          className={`min-w-0 truncate rounded-lg px-1.5 py-1 text-[11px] font-bold transition disabled:opacity-50 ${headingCase} ${
             isToday ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
           }`}
         >
@@ -94,8 +108,8 @@ export default function DayCard({
             type="button"
             onClick={() => onDuplicate(date)}
             disabled={disabled || !hasTraining}
-            aria-label={`Duplicate workouts from ${date}`}
-            title="Duplicate workouts"
+            aria-label={t("calendar.dayCard.duplicateFrom", { date })}
+            title={t("calendar.dayCard.duplicateTitle")}
             className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
           >
             <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
@@ -108,7 +122,7 @@ export default function DayCard({
 
       <div className="min-h-0 flex-1 px-2.5 py-2">
         {!hasTraining ? (
-          <p className="px-1 text-xs font-medium text-slate-400">No training</p>
+          <p className="px-1 text-xs font-medium text-slate-400">{t("calendar.dayCard.noTraining")}</p>
         ) : (
           <ul className="grid gap-2">
             {assignments.map((assignment) => {
@@ -117,16 +131,16 @@ export default function DayCard({
                 <li key={assignment.id}>
                   <div className="flex items-start justify-between gap-2 px-1">
                     <p className="min-w-0 truncate text-xs font-bold text-slate-800">{assignment.workout.name}</p>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide ring-1 ${statusClass(assignment.session)}`}>{statusLabel(assignment.session)}</span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide ring-1 ${statusClass(assignment.session)}`}>{statusLabel(t, assignment.session)}</span>
                   </div>
                   {workout === undefined ? (
-                    <p className="px-1 pt-0.5 text-[11px] font-medium text-slate-400">Prescription unavailable</p>
+                    <p className="px-1 pt-0.5 text-[11px] font-medium text-slate-400">{t("calendar.dayCard.prescriptionUnavailable")}</p>
                   ) : (
                     <ul className="mt-1 grid gap-1">
                       {workout.exercises.map((exercise) => (
                         <li key={exercise.workoutExerciseId} className="border-l-2 border-slate-200 pl-2">
-                          <p className="truncate text-[13px] font-medium leading-tight text-slate-700">{exercise.name}</p>
-                          <p className="text-[11px] leading-tight text-slate-400">{prescriptionSummary(exercise)}</p>
+                          <p className="truncate text-[13px] font-medium leading-tight text-slate-700">{localizeExerciseName(exercise.name, locale)}</p>
+                          <p className="text-[11px] leading-tight text-slate-400">{prescriptionSummary(t, exercise)}</p>
                         </li>
                       ))}
                     </ul>
@@ -145,7 +159,7 @@ export default function DayCard({
         className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-lg px-1 py-1.5 text-left text-xs font-bold text-teal-700 transition hover:bg-teal-50 disabled:opacity-50 disabled:hover:bg-transparent"
       >
         <span aria-hidden="true" className="grid h-5 w-5 place-items-center rounded bg-slate-900 text-sm leading-none text-white">+</span>
-        Add Workout
+        {t("calendar.addWorkout")}
       </button>
 
     </article>

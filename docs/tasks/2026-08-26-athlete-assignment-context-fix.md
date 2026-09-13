@@ -83,10 +83,10 @@
 | `node:test` Cases A–F | Done | 13 new assertions in `workout-draft.test.ts`; 28/28 calendar unit tests pass |
 | `frontend-ui-spec.md` | Done | Source-athlete rule |
 | Verification (lint / test / tsc / build) | Done | lint clean; `node --test` 28 pass; `next build` + `tsc --noEmit` clean |
-| Staging merge / deploy | Not Started | Blocked on founder approval of this implementation report |
+| Staging merge / deploy | Done | Merged via PR #9 (`9fb9f55`) onto `staging`; frontend-only change, no API/migration involved. Manual Calendar acceptance on staging completed. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: implemented on `fix/athlete-assignment-context` from `origin/staging` (`0e1b7cd`). Not committed, not merged, not deployed.
+- Final status: implemented on `fix/athlete-assignment-context` from `origin/staging` (`0e1b7cd`), merged to `staging` via PR #9 (`9fb9f55`), and deployed. Manual acceptance on staging confirmed the source-athlete rule holds across switch/resume/restore.
 - Deviations from plan: none material. v1 later-array entries are ignored rather than requiring the whole array to be strings. No vitest/CI workflow change (staging convention is `node:test`).
-- Follow-ups: founder review of this report; then commit + staging merge. Manual Calendar acceptance on staging after merge.
+- Follow-ups: none outstanding. Carried into the production-promotion checklist as one of the App-Review-adjacent staging fixes that must ship together with the rest of `staging` (no independent production path — it goes out with the whole-branch promotion in `docs/ios-release-runbook.md`).

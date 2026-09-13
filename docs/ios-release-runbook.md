@@ -1,9 +1,24 @@
 # PumpLoop iOS Release Runbook
 
-Canonical operational checklist for producing a TestFlight build. Every item
-below was verified during the 2026-08-26 release session (TestFlight build
-1.0 (3)). If reality drifts from this document, fix the document in the same
-commit as the fix.
+Canonical operational checklist for iOS Release archives. Native Archive
+steps below were verified during the 2026-08-26 release session (TestFlight
+build 1.0 (3)). If reality drifts from this document, fix the document in
+the same commit as the fix.
+
+There are two workflows. Do not mix them:
+
+- **TestFlight-from-staging** — Archive staging as it is. The Capacitor
+  shell's `server.url` currently loads the Vercel staging alias
+  (`https://performance-coach-git-staging-kaohaohans-projects.vercel.app`),
+  which proxies to the staging API and Neon staging branch. That is the
+  intended beta target. Last uploaded store build: **1.0 (4)** (2026-08-27,
+  the production RC — it targets production, not staging; see Public App
+  Store 1.0 below).
+- **Public App Store 1.0** — production web, API, and database must already
+  be live and smoked. Only then retarget `server.url` at production, Archive
+  a new build, TestFlight-RC that binary against production, then submit.
+  Archiving current staging for the public store would ship a binary that
+  talks to staging.
 
 ## Source of truth
 
@@ -16,6 +31,9 @@ commit as the fix.
   exactly `https://dontworkout.vercel.app`. A staging/local URL fails the build.
 - Do **not** infer native Release readiness from an old successful TestFlight
   build (see Critical warning).
+- Do **not** infer production readiness from a successful staging TestFlight
+  build. The WKWebView origin is baked in at Archive time via
+  `apps/web/capacitor.config.ts` `server.url`.
 
 ## Required native Release configuration
 
@@ -117,14 +135,113 @@ branch and had to be forward-ported).
 All native Release fixes must be committed and merged back into staging.
 Do not Archive from an old feature branch.
 
+Archiving staging **without** changing `server.url` produces a binary whose
+WKWebView loads the staging Vercel alias, staging Cloud Run API, and staging
+Neon database. That is correct for TestFlight-from-staging and **incorrect**
+for a public App Store binary.
+
+## TestFlight-from-staging
+
+Use the Before Archive and Archive / TestFlight sections above. Gates:
+
+- Native Release configuration on staging is intact.
+- Staging web + staging API are the intended runtime (current `server.url`).
+- Physical-device smoke of the uploaded TestFlight build passes.
+- Next upload must bump `CURRENT_PROJECT_VERSION` above **3**.
+
+Do not treat this workflow as App Store submission.
+
+## Public App Store 1.0
+
+Do **not** Archive a store RC from current staging. Production is a separate
+runtime (`https://dontworkout.vercel.app` → Cloud Run `performance-coach-api`).
+GitHub Actions deploys the API only on push to `staging`; merging `staging` →
+`main` updates Vercel Production frontend only, unless Cloud Run production
+is updated in a separate manual step.
+
+Required order — do not skip or reorder:
+
+1. Staging final verification of all App Review blockers (see Task Docs under
+   `docs/tasks/`; account deletion is Guideline 5.1.1(v)).
+2. Neon Launch upgrade **before** real athlete/coach data (ADR-002). **Do not
+   remove or weaken this step.** It remains the default required order.
+
+   **Approved exception for the current release (recorded 2026-08-27, see
+   ADR-002's release-scoped exception note):** the founder explicitly
+   deferred this upgrade past App Store submission for this release only.
+   Production's `0004_account_deletion` migration and the rest of this
+   promotion proceed on Neon **Free**. This is **not** a blanket waiver of
+   step 2 for future releases — it is a one-time, informed exception with a
+   mandatory make-good gate:
+
+   - Launch upgrade is a **mandatory gate after App Review approval and
+     before public availability / real-user rollout.** Do not open the app
+     to real users while production is still on Free.
+   - Until that upgrade happens, production data (including anything
+     App Review's reviewer account creates) has only Free's 6-hour/1
+     GB-month PITR window, not Launch's 7-day window.
+   - Re-verify the Neon plan (Free vs. Launch) as part of production
+     Phase 0 preflight on every subsequent release until this gate closes.
+
+3. Production schema migrate, then production Cloud Run API from the verified
+   staging digest (or a new digest built from that SHA).
+4. Vercel **Production** env, not Preview/`staging` only:
+   - `BACKEND_BASE_URL` = production Cloud Run HTTPS URL (no trailing slash)
+   - `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+   - `NEXT_PUBLIC_FIREBASE_API_KEY`
+   - `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+   - `NEXT_PUBLIC_GOOGLE_IOS_CLIENT_ID` (iOS Google Sign-In reads this from
+     the remote JS bundle; staging-only is not enough)
+   - `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST` must be unset
+5. **Add the production host to Firebase Auth's authorized domains.** This
+   lives in Firebase, not in Vercel or GCP, so nothing in steps 3–4 covers
+   it and no deploy surfaces it. Browser Google sign-in uses the popup flow,
+   which Firebase rejects with `auth/unauthorized-domain` from any host not
+   on this list — the frontend then shows the generic "Google sign-in isn't
+   available yet" copy, which reads like an outage rather than a missing
+   setting. Native iOS Apple/Google sign-in goes through
+   `signInWithCredential` and is **not** affected, so an iOS-only smoke will
+   pass while every browser coach is locked out.
+
+   Verify (not just assume) that the production host is present:
+
+   ```bash
+   TOKEN=$(gcloud auth print-access-token)
+   curl -s -H "Authorization: Bearer $TOKEN" \
+     -H "x-goog-user-project: dontworkout" \
+     "https://identitytoolkit.googleapis.com/admin/v2/projects/dontworkout/config" \
+     | python3 -c "import json,sys; [print(' -', d) for d in json.load(sys.stdin)['authorizedDomains']]"
+   ```
+
+   Or Firebase Console → Authentication → Settings → Authorized domains.
+   Add the host if missing; the change takes effect immediately with no
+   redeploy. (Observed 2026-08-27: `dontworkout.vercel.app` was missing
+   while the staging alias was present, so browser Google sign-in failed
+   for coaches after an otherwise-green promotion.)
+6. Promote staging frontend to Vercel Production. Smoke
+   `https://dontworkout.vercel.app` (PumpLoop branding; `/backend` hits the
+   production API, not staging). Include **browser** Google sign-in in this
+   smoke, not only the iOS app — that is the path step 5 protects.
+7. Only after that smoke: change `apps/web/capacitor.config.ts` `server.url`
+   to the production Vercel host, merge, `npx cap sync ios`, re-check native
+   Release wiring. **Do not merge a production `server.url` onto staging
+   until production is smoked** — every subsequent TestFlight/Debug build
+   would flip to production.
+8. Bump `CURRENT_PROJECT_VERSION` above any build already in App Store
+   Connect (last upload is 1.0 (4)).
+9. Follow Before Archive + Archive / TestFlight on that SHA.
+10. TestFlight RC on a physical device: confirm the WKWebView origin is
+    production, not the staging alias. Repeat Apple / Google / email, core
+    loop, and App Review items.
+11. App Store submission (reviewer demo account, privacy / account-deletion
+    URL as Apple requires) only after that RC.
+
 ## App Store 1.0 gate
 
 Distinguish two readiness levels:
 
-- **TestFlight-ready** — everything above passes; the build installs and the
-  core loop works on device.
-- **App-Review-ready** — additionally, all App Review blockers are closed.
-
-The current blocker list is deliberately not hardcoded here. Check the active
-Task Docs under `docs/tasks/` and the current staging state for what remains
-before submission.
+- **TestFlight-ready** — TestFlight-from-staging above passes; the build
+  installs and the core loop works on device against **staging**.
+- **App-Review-ready** — Public App Store 1.0 steps 1–10 pass; the binary
+  talks to **production**; all App Review blockers in active Task Docs are
+  closed.

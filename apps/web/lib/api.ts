@@ -16,6 +16,9 @@ export class ApiError extends Error {
 type ApiFetchOptions = {
   method?: string;
   body?: unknown;
+  // After a sensitive re-auth (account deletion), mint a token with a
+  // refreshed auth_time instead of the SDK's possibly-cached ID token.
+  freshToken?: boolean;
 };
 
 // A Firebase ID token expires one hour after it is minted. Callers hold the
@@ -116,7 +119,7 @@ export async function apiFetch<T>(
 
   let token: string;
   try {
-    token = await provider();
+    token = await provider(options?.freshToken === true);
   } catch {
     token = idToken;
   }

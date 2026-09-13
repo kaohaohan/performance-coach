@@ -11,9 +11,17 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError, apiFetch, publicApiFetch } from "@/lib/api";
-import { AuthDivider, GoogleSignInButton, googleAuthErrorMessage } from "@/components/google-sign-in-button";
+import { AuthDivider, GoogleSignInButton } from "@/components/google-sign-in-button";
 import { BRAND_NAME } from "@/lib/brand";
-import { AppleSignInButton, appleAuthErrorMessage } from "@/components/apple-sign-in-button";
+import { AppleSignInButton } from "@/components/apple-sign-in-button";
+import { useT } from "@/lib/i18n";
+import {
+  APPLE_AUTH_POLICY,
+  GOOGLE_AUTH_POLICY,
+  PASSWORD_AUTH_CODES,
+  errorMessage,
+  type ErrorPolicy,
+} from "@/lib/i18n/errors";
 
 type Preview = { code: string; coachName: string; description: string | null };
 type Redeemed = { user: { id: string; name: string; role: "ATHLETE" }; coach: { name: string } };
@@ -28,35 +36,37 @@ type Step =
   | "redeeming"
   | "onboarded";
 
-function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
-}
+// Redeem and the /me role check are the API's to explain: it is the
+// authority on why it rejected a request, so its own sentence is passed
+// through rather than replaced with a generic one.
+const REDEEM_POLICY: ErrorPolicy = { serverMessage: true };
+
+// The email/password tabs create accounts as well as sign in, so this form
+// opts into the whole PASSWORD_AUTH_CODES table. It is opt-in rather than
+// global precisely so that auth/invalid-credential keeps reading as
+// "Incorrect email or password" here without putting that sentence on a
+// provider popup, where it would be nonsense (lib/i18n/errors.ts).
+const JOIN_AUTH_POLICY: ErrorPolicy = {
+  codes: { ...PASSWORD_AUTH_CODES },
+  serverMessage: true,
+};
+
+// The provider policies plus serverMessage: a social join can fail at the
+// provider (a code the policy maps, or a dismissal it silences) or at the
+// API afterwards, and one policy now covers both — replacing the
+// `err instanceof ApiError ? … : …` fork the two handlers used to carry.
+const GOOGLE_JOIN_POLICY: ErrorPolicy = { ...GOOGLE_AUTH_POLICY, serverMessage: true };
+const APPLE_JOIN_POLICY: ErrorPolicy = { ...APPLE_AUTH_POLICY, serverMessage: true };
 
 function initials(name: string): string {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
-}
-
-// firebaseAuthErrorMessage maps Firebase Auth's error codes to copy — same
-// pattern as app/login/page.tsx's loginErrorMessage, extended with the
-// signup-specific codes this flow can also hit.
-function firebaseAuthErrorMessage(err: unknown): string {
-  const code = (err as { code?: string })?.code;
-  switch (code) {
-    case "auth/email-already-in-use": return "An account with that email already exists. Try signing in instead.";
-    case "auth/invalid-email": return "Enter a valid email address.";
-    case "auth/weak-password": return "Password must be at least 8 characters.";
-    case "auth/invalid-credential":
-    case "auth/user-not-found":
-    case "auth/wrong-password": return "Incorrect email or password.";
-    case "auth/too-many-requests": return "Too many attempts. Try again later.";
-    default: return "Something went wrong. Please try again.";
-  }
 }
 
 export default function JoinCodePage() {
   const params = useParams<{ code: string }>();
   const code = params.code;
   const router = useRouter();
+  const t = useT();
   const { user, loading: authLoading, signIn, signUp, signInWithGoogle, signInWithApple, signOut } = useAuth();
 
   const [step, setStep] = useState<Step>("loading");
@@ -117,7 +127,7 @@ export default function JoinCodePage() {
         setStep("coachSignedIn");
         return;
       }
-      setRedeemError(errorMessage(error));
+      setRedeemError(errorMessage(t, error, REDEEM_POLICY));
       setStep("authenticating");
     }
   }
@@ -167,7 +177,7 @@ export default function JoinCodePage() {
     try {
       await continueWithToken(token, name.trim());
     } catch (error) {
-      setRedeemError(errorMessage(error));
+      setRedeemError(errorMessage(t, error, REDEEM_POLICY));
       setStep("confirming");
     }
   }
@@ -194,9 +204,10 @@ export default function JoinCodePage() {
       const token = authMode === "create" ? await signUp(email, password) : await signIn(email, password);
       await continueWithToken(token, name.trim());
     } catch (err) {
-      // An ApiError here came from the /me role check, not from Firebase —
-      // don't describe it with the Firebase-auth-code mapper.
-      setAuthError(err instanceof ApiError ? errorMessage(err) : firebaseAuthErrorMessage(err));
+      // One policy covers both origins: an ApiError here came from the /me
+      // role check and carries the server's own sentence, while a Firebase
+      // rejection carries a code the password table maps.
+      setAuthError(errorMessage(t, err, JOIN_AUTH_POLICY));
       setStep("authenticating");
     } finally {
       setAuthSubmitting(false);
@@ -215,12 +226,9 @@ export default function JoinCodePage() {
       const athleteName = name.trim() || googleUser.displayName?.trim() || "";
       await continueWithToken(idToken, athleteName);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setAuthError(errorMessage(err));
-      } else {
-        const message = googleAuthErrorMessage(err);
-        if (message) setAuthError(message);
-      }
+      // null means the person dismissed the Google chooser — not a failure.
+      const message = errorMessage(t, err, GOOGLE_JOIN_POLICY);
+      if (message) setAuthError(message);
       setStep("authenticating");
     } finally {
       setGooglePending(false);
@@ -242,12 +250,9 @@ export default function JoinCodePage() {
       const athleteName = name.trim() || appleUser.displayName?.trim() || "";
       await continueWithToken(idToken, athleteName);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setAuthError(errorMessage(err));
-      } else {
-        const message = appleAuthErrorMessage(err);
-        if (message) setAuthError(message);
-      }
+      // null means the person dismissed the Apple sheet — not a failure.
+      const message = errorMessage(t, err, APPLE_JOIN_POLICY);
+      if (message) setAuthError(message);
       setStep("authenticating");
     } finally {
       setApplePending(false);
@@ -273,7 +278,7 @@ export default function JoinCodePage() {
   if (step === "loading") {
     return (
       <JoinShell>
-        <p className="text-sm font-medium text-slate-500">Checking your invite…</p>
+        <p className="text-sm font-medium text-slate-500">{t("auth.joinCode.checkingInvite")}</p>
       </JoinShell>
     );
   }
@@ -281,9 +286,9 @@ export default function JoinCodePage() {
   if (step === "invalid") {
     return (
       <JoinShell>
-        <h2 className="text-xl font-semibold tracking-tight">This code isn&apos;t valid.</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">It may have expired or been revoked. Ask your coach for a new link.</p>
-        <button type="button" onClick={() => router.push("/join")} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">Enter another code</button>
+        <h2 className="text-xl font-semibold tracking-tight">{t("auth.joinCode.invalidHeading")}</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">{t("auth.joinCode.invalidBody")}</p>
+        <button type="button" onClick={() => router.push("/join")} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{t("auth.joinCode.enterAnotherCode")}</button>
       </JoinShell>
     );
   }
@@ -295,7 +300,7 @@ export default function JoinCodePage() {
       <div className="flex items-center gap-3">
         <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-100 text-base font-bold text-slate-600">{initials(preview.coachName)}</span>
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">You&apos;re joining</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t("auth.joinCode.joining")}</p>
           <p className="truncate text-lg font-semibold text-slate-900">{preview.coachName}</p>
         </div>
       </div>
@@ -305,26 +310,31 @@ export default function JoinCodePage() {
         <>
           {redeemError && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{redeemError}</p>}
           <div className="mt-6 flex gap-3">
-            <button type="button" onClick={() => router.push("/join")} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">Use another code</button>
-            <button type="button" onClick={handleContinue} disabled={authLoading} className="min-h-14 flex-1 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">Continue</button>
+            <button type="button" onClick={() => router.push("/join")} className="min-h-14 flex-1 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 transition hover:bg-stone-50">{t("auth.joinCode.useAnotherCode")}</button>
+            <button type="button" onClick={handleContinue} disabled={authLoading} className="min-h-14 flex-1 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{t("auth.continue")}</button>
           </div>
         </>
       )}
 
       {step === "checkingSession" && (
-        <p className="mt-6 text-sm font-medium text-slate-500">Checking your account…</p>
+        <p className="mt-6 text-sm font-medium text-slate-500">{t("auth.joinCode.checkingAccount")}</p>
       )}
 
       {step === "coachSignedIn" && (
         <div className="mt-6">
           <p className="text-base font-semibold text-slate-900">
-            You&apos;re currently signed in as a Coach{signedInCoachName ? ` (${signedInCoachName})` : ""}.
+            {/* Two whole sentences rather than one with an appended
+                parenthetical: /me does not always carry a name, and the
+                parenthesis sits differently in Chinese. */}
+            {signedInCoachName
+              ? t("auth.joinCode.coachSignedInNamed", { name: signedInCoachName })
+              : t("auth.joinCode.coachSignedIn")}
           </p>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Sign out to join {preview.coachName} with an Athlete account. Your Coach account isn&apos;t changed by this.
+            {t("auth.joinCode.coachSignedInBody", { coach: preview.coachName })}
           </p>
-          <button type="button" onClick={handleSignOutAndContinue} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">Sign out and continue</button>
-          <button type="button" onClick={() => router.push("/coach/calendar")} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900">Stay signed in as a Coach</button>
+          <button type="button" onClick={handleSignOutAndContinue} className="mt-6 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700">{t("auth.joinCode.signOutAndContinue")}</button>
+          <button type="button" onClick={() => router.push("/coach/calendar")} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900">{t("auth.joinCode.stayAsCoach")}</button>
         </div>
       )}
 
@@ -338,31 +348,31 @@ export default function JoinCodePage() {
           </div>
           <AuthDivider />
 
-          <div className="flex gap-2" role="tablist" aria-label="Sign in or create account">
-            <button type="button" role="tab" aria-selected={authMode === "create"} onClick={() => { setAuthMode("create"); setAuthError(null); }} className={`min-h-11 flex-1 rounded-xl text-sm font-bold transition ${authMode === "create" ? "bg-slate-950 text-white" : "bg-stone-100 text-slate-600 hover:bg-stone-200"}`}>Create account</button>
-            <button type="button" role="tab" aria-selected={authMode === "signin"} onClick={() => { setAuthMode("signin"); setAuthError(null); }} className={`min-h-11 flex-1 rounded-xl text-sm font-bold transition ${authMode === "signin" ? "bg-slate-950 text-white" : "bg-stone-100 text-slate-600 hover:bg-stone-200"}`}>Sign in</button>
+          <div className="flex gap-2" role="tablist" aria-label={t("auth.joinCode.authTabsLabel")}>
+            <button type="button" role="tab" aria-selected={authMode === "create"} onClick={() => { setAuthMode("create"); setAuthError(null); }} className={`min-h-11 flex-1 rounded-xl text-sm font-bold transition ${authMode === "create" ? "bg-slate-950 text-white" : "bg-stone-100 text-slate-600 hover:bg-stone-200"}`}>{t("auth.createAccount")}</button>
+            <button type="button" role="tab" aria-selected={authMode === "signin"} onClick={() => { setAuthMode("signin"); setAuthError(null); }} className={`min-h-11 flex-1 rounded-xl text-sm font-bold transition ${authMode === "signin" ? "bg-slate-950 text-white" : "bg-stone-100 text-slate-600 hover:bg-stone-200"}`}>{t("auth.signIn")}</button>
           </div>
 
           <form onSubmit={handleAuthSubmit} className="mt-4 grid gap-4">
             {authMode === "create" && (
               <label>
-                <span className="mb-1.5 block text-sm font-semibold text-slate-700">Name</span>
+                <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.name")}</span>
                 <input type="text" required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
               </label>
             )}
             <label>
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Email</span>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.email")}</span>
               <input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
             </label>
             <label>
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">Password</span>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.password")}</span>
               <input type="password" required minLength={authMode === "create" ? 8 : undefined} autoComplete={authMode === "create" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
             </label>
 
             {(authError || redeemError) && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{authError ?? redeemError}</p>}
 
             <button type="submit" disabled={authSubmitting || googlePending || applePending || step === "redeeming"} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
-              {step === "redeeming" ? "Connecting…" : redeemError ? "Try again" : authSubmitting ? (authMode === "create" ? "Creating account…" : "Signing in…") : authMode === "create" ? "Create account" : "Sign in"}
+              {step === "redeeming" ? t("auth.joinCode.connecting") : redeemError ? t("auth.joinCode.tryAgain") : authSubmitting ? (authMode === "create" ? t("auth.creatingAccount") : t("auth.signingIn")) : authMode === "create" ? t("auth.createAccount") : t("auth.signIn")}
             </button>
           </form>
         </div>
@@ -370,8 +380,8 @@ export default function JoinCodePage() {
 
       {step === "onboarded" && redeemed && (
         <div className="mt-6">
-          <p className="text-base font-semibold text-slate-900">You&apos;re connected to {redeemed.coach.name}.</p>
-          <p className="mt-1 text-sm text-slate-500">Taking you to your training…</p>
+          <p className="text-base font-semibold text-slate-900">{t("auth.joinCode.connected", { coach: redeemed.coach.name })}</p>
+          <p className="mt-1 text-sm text-slate-500">{t("auth.joinCode.redirecting")}</p>
           <RedirectToToday />
         </div>
       )}

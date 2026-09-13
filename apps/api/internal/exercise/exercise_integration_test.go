@@ -293,6 +293,42 @@ func indexOfName(exercises []exercise.Exercise, name string) int {
 	return -1
 }
 
+func TestExerciseLibraryListReturnsOptionalMediaAttributes(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coach := createUser(t, "COACH")
+	name := testPrefix + " Media Squat"
+	description := "Brace and sit between the hips."
+	youtubeURL := "https://www.youtube.com/watch?v=example-media"
+	imageKey := "exercises/media-squat.jpg"
+
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO exercises (id, name, owner_coach_id, created_at, description, youtube_url, image_object_key)
+		 VALUES ($1, $2, NULL, now(), $3, $4, $5)`,
+		uuid.NewString(), name, description, youtubeURL, imageKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := exercise.ListForCoach(ctx, testPool, coach, "Media Squat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed = %#v, want one media exercise", listed)
+	}
+	item := listed[0]
+	if item.Description == nil || *item.Description != description {
+		t.Fatalf("description = %#v, want %q", item.Description, description)
+	}
+	if item.YoutubeURL == nil || *item.YoutubeURL != youtubeURL {
+		t.Fatalf("youtubeUrl = %#v, want %q", item.YoutubeURL, youtubeURL)
+	}
+	if item.ImageObjectKey == nil || *item.ImageObjectKey != imageKey {
+		t.Fatalf("imageObjectKey = %#v, want %q", item.ImageObjectKey, imageKey)
+	}
+}
+
 // TestExerciseLibrarySearchRanksEarlierMatchAboveLaterMatch verifies that,
 // under a search query, a name where the query appears earlier ranks above
 // one where it appears later — relevance, not just alphabetical order.
