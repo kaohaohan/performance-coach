@@ -108,6 +108,7 @@ type ExerciseFieldErrors = Partial<Record<ExerciseFieldName, string>> & {
 };
 
 type ExerciseDropTarget = { id: string; placement: "before" | "after" };
+type ExerciseDragMetrics = { x: number; y: number; offsetX: number; offsetY: number; width: number; height: number };
 
 type BuildFieldErrors = {
   date?: string;
@@ -560,6 +561,7 @@ export default function CoachCalendarPage() {
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null);
   const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null);
   const [exerciseDropTarget, setExerciseDropTarget] = useState<ExerciseDropTarget | null>(null);
+  const [exerciseDragMetrics, setExerciseDragMetrics] = useState<ExerciseDragMetrics | null>(null);
   const [buildFieldErrors, setBuildFieldErrors] = useState<BuildFieldErrors>(initialBuildErrors);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
@@ -1254,16 +1256,21 @@ export default function CoachCalendarPage() {
     });
   }
 
-  function startExerciseDrag(exerciseId: string) {
+  function startExerciseDrag(exerciseId: string, event: ReactPointerEvent<HTMLButtonElement>) {
     if (buildStatus !== "idle") return;
+    const card = event.currentTarget.closest<HTMLElement>("[data-exercise-card-id]");
+    const rect = card?.getBoundingClientRect();
+    if (rect === undefined) return;
     setDraggedExerciseId(exerciseId);
     setExerciseDropTarget(null);
+    setExerciseDragMetrics({ x: event.clientX, y: event.clientY, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, width: rect.width, height: rect.height });
   }
 
   useEffect(() => {
     if (draggedExerciseId === null) return;
 
     function handlePointerMove(event: PointerEvent) {
+      setExerciseDragMetrics((previous) => previous === null ? previous : { ...previous, x: event.clientX, y: event.clientY });
       const element = document.elementFromPoint(event.clientX, event.clientY);
       const card = element?.closest<HTMLElement>("[data-exercise-card-id]");
       const id = card?.dataset.exerciseCardId;
@@ -1290,6 +1297,7 @@ export default function CoachCalendarPage() {
       });
       setDraggedExerciseId(null);
       setExerciseDropTarget(null);
+      setExerciseDragMetrics(null);
     }
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -1932,7 +1940,10 @@ export default function CoachCalendarPage() {
                     </div>
                     {buildFieldErrors.exercises && <FieldError>{buildFieldErrors.exercises}</FieldError>}
                     <div className="mt-3 grid gap-4">
-                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} dragging={draggedExerciseId === item.exercise.id} dropTarget={exerciseDropTarget?.id === item.exercise.id} onDragStart={() => startExerciseDrag(item.exercise.id)} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
+                      {draftExercises.map((item, index) => <Fragment key={item.exercise.id}>
+                        {draggedExerciseId === item.exercise.id && exerciseDragMetrics !== null && <div aria-hidden="true" className="rounded-2xl border-2 border-dashed border-teal-300 bg-teal-50/40" style={{ height: exerciseDragMetrics.height }} />}
+                        <DraftExerciseCard item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} dragging={draggedExerciseId === item.exercise.id} dragMetrics={draggedExerciseId === item.exercise.id ? exerciseDragMetrics : null} dropPlacement={exerciseDropTarget?.id === item.exercise.id ? exerciseDropTarget.placement : null} onDragStart={(event) => startExerciseDrag(item.exercise.id, event)} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />
+                      </Fragment>)}
                     </div>
                   </div>
 
@@ -2240,7 +2251,7 @@ function ProgrammingModeButton({ active, children, ...props }: { active: boolean
   return <button type="button" {...props} className={`min-h-12 rounded-xl border px-4 text-sm font-bold transition ${active ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:opacity-50`}>{active ? "● " : "○ "}{children}</button>;
 }
 
-function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dragging, dropTarget, onDragStart, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; dragging: boolean; dropTarget: boolean; onDragStart: () => void; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
+function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dragging, dragMetrics, dropPlacement, onDragStart, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; dragging: boolean; dragMetrics: ExerciseDragMetrics | null; dropPlacement: "before" | "after" | null; onDragStart: (event: ReactPointerEvent<HTMLButtonElement>) => void; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
   const t = useT();
   const { locale } = useLocale();
   const setsInputRef = useRef<HTMLInputElement>(null);
@@ -2264,10 +2275,12 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
   const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRpe === "" ? "" : `RPE ${item.defaultRpe}`].filter(Boolean).join(" · ");
-  const cardClass = `rounded-2xl border bg-white ${dropTarget ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragging ? "opacity-60 shadow-lg" : ""}`;
-  if (!expanded) return <article data-exercise-card-id={item.exercise.id} className={cardClass}><div className="flex items-center gap-2 p-4"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span><span className="mt-2 block text-sm font-semibold text-teal-700">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></span></button><ExerciseDragHandle label={t("calendar.exercise.dragHandle")} disabled={disabled} onPointerDown={onDragStart} /></div></article>;
+  const cardClass = `relative rounded-2xl border bg-white ${dropPlacement !== null ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragging ? "z-50 scale-[1.02] rotate-[0.3deg] border-teal-500 opacity-95 shadow-2xl ring-4 ring-teal-500/20" : ""}`;
+  const dragStyle = dragging && dragMetrics !== null ? { position: "fixed" as const, left: dragMetrics.x - dragMetrics.offsetX, top: dragMetrics.y - dragMetrics.offsetY, width: dragMetrics.width, pointerEvents: "none" as const, transition: "none", willChange: "left, top, transform" } : undefined;
+  const dropIndicator = dropPlacement !== null && <div aria-hidden="true" className={`pointer-events-none absolute left-4 right-4 z-10 h-1 rounded-full bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,0.15)] ${dropPlacement === "before" ? "-top-2" : "-bottom-2"}`} />;
+  if (!expanded) return <article data-exercise-card-id={item.exercise.id} className={cardClass} style={dragStyle}>{dropIndicator}<div className="flex items-center gap-2 p-4"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span><span className="mt-2 block text-sm font-semibold text-teal-700">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></span></button><ExerciseDragHandle label={t("calendar.exercise.dragHandle")} disabled={disabled} onPointerDown={onDragStart} /></div></article>;
 
-  return <article data-exercise-card-id={item.exercise.id} className={`${cardClass} p-4`}><div id={`${baseId}-details`}>
+  return <article data-exercise-card-id={item.exercise.id} className={`${cardClass} p-4`} style={dragStyle}>{dropIndicator}<div id={`${baseId}-details`}>
     <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex min-w-0 flex-1 items-start gap-2"><ExerciseDragHandle label={t("calendar.exercise.dragHandle")} disabled={disabled} onPointerDown={onDragStart} /><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></button></div><div className="flex items-center gap-2"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.collapse")} <span aria-hidden="true">▴</span></button>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div></div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.sets")}</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
@@ -2314,11 +2327,11 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
   </div></article>;
 }
 
-function ExerciseDragHandle({ label, disabled, onPointerDown }: { label: string; disabled: boolean; onPointerDown: () => void }) {
+function ExerciseDragHandle({ label, disabled, onPointerDown }: { label: string; disabled: boolean; onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void }) {
   function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (disabled) return;
     event.preventDefault();
-    onPointerDown();
+    onPointerDown(event);
   }
 
   return <button type="button" aria-label={label} title={label} onPointerDown={handlePointerDown} disabled={disabled} className="min-h-11 min-w-11 shrink-0 touch-none cursor-grab rounded-xl border border-slate-200 px-2 text-lg leading-none text-slate-500 transition hover:border-teal-600 hover:bg-teal-50 hover:text-teal-700 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40">⠿</button>;
