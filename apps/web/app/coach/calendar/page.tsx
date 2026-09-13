@@ -1267,7 +1267,7 @@ export default function CoachCalendarPage() {
       const element = document.elementFromPoint(event.clientX, event.clientY);
       const card = element?.closest<HTMLElement>("[data-exercise-card-id]");
       const id = card?.dataset.exerciseCardId;
-      if (id === undefined || id === draggedExerciseId) {
+      if (card === null || id === undefined || id === draggedExerciseId) {
         setExerciseDropTarget(null);
         return;
       }
