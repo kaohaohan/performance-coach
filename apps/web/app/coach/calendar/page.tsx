@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useId, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -2294,7 +2294,13 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
 
   const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRpe === "" ? "" : `RPE ${item.defaultRpe}`].filter(Boolean).join(" · ");
   const cardClass = `relative rounded-2xl border bg-white ${disabled ? "" : "cursor-grab active:cursor-grabbing"} ${dropPlacement !== null ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragging ? "z-50 scale-[1.02] rotate-[0.3deg] border-teal-500 opacity-95 shadow-2xl ring-4 ring-teal-500/20" : ""}`;
-  const dragStyle = dragging && dragMetrics !== null ? { position: "fixed" as const, left: dragMetrics.x - dragMetrics.offsetX, top: dragMetrics.y - dragMetrics.offsetY, width: dragMetrics.width, pointerEvents: "none" as const, touchAction: "none" as const, userSelect: "none" as const, transition: "none", willChange: "left, top, transform" } : undefined;
+  // iOS treats a long press on the card as text selection unless the drag
+  // surface explicitly opts out. Keep form controls usable while preventing
+  // the copy/selection callout from appearing on the draggable card itself.
+  const dragStyle: CSSProperties = {
+    ...(disabled ? {} : { userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }),
+    ...(dragging && dragMetrics !== null ? { position: "fixed", left: dragMetrics.x - dragMetrics.offsetX, top: dragMetrics.y - dragMetrics.offsetY, width: dragMetrics.width, pointerEvents: "none", touchAction: "none", transition: "none", willChange: "left, top, transform" } : {}),
+  };
   const dropIndicator = dropPlacement !== null && <div aria-hidden="true" className={`pointer-events-none absolute left-4 right-4 z-10 h-1 rounded-full bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,0.15)] ${dropPlacement === "before" ? "-top-2" : "-bottom-2"}`} />;
   if (!expanded) return <article data-exercise-card-id={item.exercise.id} onPointerDown={onDragStart} className={cardClass} style={dragStyle}>{dropIndicator}<div className="p-4"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span><span className="mt-2 block text-sm font-semibold text-teal-700">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></span></button></div></article>;
 
