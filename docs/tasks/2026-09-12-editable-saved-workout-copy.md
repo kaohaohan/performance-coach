@@ -36,7 +36,7 @@
   - `apps/web/lib/i18n/messages/zh-TW/calendar.ts`
 - Data flow:
   1. Coach selects date, Athlete(s), and a saved Workout in Calendar → From saved.
-  2. `Copy & edit` maps the selected Workout name and ordered exercises into the existing local draft representation.
+  2. The coach-facing `Edit workout` action maps the selected Workout name and ordered exercises into the existing local draft representation.
   3. The mapper preserves each exercise's set count, exercise-level defaults, unit, prescription mode, and sparse per-position overrides.
   4. Calendar switches to the existing Build editor and shows that the Coach is editing a copy; the source Workout remains untouched.
   5. Coach edits any exercise. Uniform defaults continue to flow to planned positions that do not have explicit overrides.
@@ -48,7 +48,7 @@
   - `From saved + Assign as saved` → existing saved Workout scheduled directly.
   - At no point does either transition update the source Workout or a previously scheduled prescription.
 - Frontend state/UI impact:
-  - From saved presents `Copy & edit` as the primary action and `Assign as saved` as the secondary action.
+  - From saved presents `Edit workout` as the primary action and `Assign as saved` as the secondary action. Internally it creates an independent copy only when the Coach builds and assigns it.
   - Copying switches into the current Build editor with all authoring fields prefilled and an explicit source-copy notice.
   - Editing remains exercise-scoped: changing an exercise default updates its inheriting set positions; changing one planned position creates or updates only that override.
   - Workout-wide percentage progression, automatic load recommendations, and bulk cross-exercise changes are not added.
@@ -71,5 +71,5 @@
 ## 5. Outcome (filled at completion)
 
 - Final status: Completed
-- Deviations from plan: The feature branch was merged onto newer staging i18n work, so the two Calendar message catalogs also gained the copy-action labels and notice. The full Next production build could not complete because the local environment could not resolve `fonts.googleapis.com`; this occurred before application compilation and is unrelated to the changed Calendar modules.
+- Deviations from plan: The feature branch was merged onto newer staging i18n work, so the two Calendar message catalogs also gained the copy-action labels and notice. The coach-facing label was subsequently refined to `Edit workout` / `編輯課表`; creating an independent copy remains an implementation detail. The full Next production build could not complete because the local environment could not resolve `fonts.googleapis.com`; this occurred before application compilation and is unrelated to the changed Calendar modules.
 - Follow-ups: Evaluate a separate, evidence-driven bulk progression workflow after Coaches use editable copies in production.

@@ -29,7 +29,7 @@ The web app is deployed by the Vercel Git integration, not by opening Xcode.
   production deployment. Never tell a tester that production changed merely
   because a Preview build passed.
 
-For a web-only change such as Calendar `Edit a copy`, the test path is:
+For a web-only change such as Calendar `Edit workout`, the test path is:
 
 ```text
 commit locally

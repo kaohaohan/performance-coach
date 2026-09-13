@@ -138,10 +138,10 @@ export const calendar = {
   // empty selection keeps producing the same (disabled) label it does today.
   "calendar.assign.buttonOne": "Assign to {count} athlete",
   "calendar.assign.buttonOther": "Assign to {count} athletes",
-  "calendar.assign.editCopy": "Edit a copy",
+  "calendar.assign.editCopy": "Edit workout",
   "calendar.assign.savedOne": "Assign as saved to {count} athlete",
   "calendar.assign.savedOther": "Assign as saved to {count} athletes",
-  "calendar.assign.copyNotice": "Editing a copy of {name}. The original workout and earlier assignments will not change.",
+  "calendar.assign.copyNotice": "Editing {name}. Building and assigning creates a new workout; the original workout and earlier assignments will not change.",
   "calendar.workoutNameLabel": "Add Workout Name",
   "calendar.workoutNamePlaceholder": "Add Workout Name",
   "calendar.optional": "optional",
