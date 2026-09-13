@@ -149,6 +149,7 @@ export const calendar: CalendarMessages = {
   "calendar.exercise.number": "動作 {number}",
   "calendar.exercise.expand": "展開編輯",
   "calendar.exercise.collapse": "收起編輯",
+  "calendar.exercise.dragHandle": "拖曳以重新排序",
   "calendar.exercise.mine": "自建",
   "calendar.field.sets": "組數",
   "calendar.field.prescription": "訓練目標",

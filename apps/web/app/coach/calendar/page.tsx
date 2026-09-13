@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -106,6 +106,8 @@ const EXERCISE_FIELDS: readonly ExerciseFieldName[] = ["sets", "reps", "note", "
 type ExerciseFieldErrors = Partial<Record<ExerciseFieldName, string>> & {
   overrides?: Record<number, string>;
 };
+
+type ExerciseDropTarget = { id: string; placement: "before" | "after" };
 
 type BuildFieldErrors = {
   date?: string;
@@ -556,6 +558,8 @@ export default function CoachCalendarPage() {
   const [draftName, setDraftName] = useState("");
   const [draftExercises, setDraftExercises] = useState<DraftExercise[]>([]);
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null);
+  const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null);
+  const [exerciseDropTarget, setExerciseDropTarget] = useState<ExerciseDropTarget | null>(null);
   const [buildFieldErrors, setBuildFieldErrors] = useState<BuildFieldErrors>(initialBuildErrors);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
@@ -1250,6 +1254,54 @@ export default function CoachCalendarPage() {
     });
   }
 
+  function startExerciseDrag(exerciseId: string) {
+    if (buildStatus !== "idle") return;
+    setDraggedExerciseId(exerciseId);
+    setExerciseDropTarget(null);
+  }
+
+  useEffect(() => {
+    if (draggedExerciseId === null) return;
+
+    function handlePointerMove(event: PointerEvent) {
+      const element = document.elementFromPoint(event.clientX, event.clientY);
+      const card = element?.closest<HTMLElement>("[data-exercise-card-id]");
+      const id = card?.dataset.exerciseCardId;
+      if (id === undefined || id === draggedExerciseId) {
+        setExerciseDropTarget(null);
+        return;
+      }
+      const rect = card.getBoundingClientRect();
+      const placement = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      setExerciseDropTarget((previous) => previous?.id === id && previous.placement === placement ? previous : { id, placement });
+    }
+
+    function finishExerciseDrag() {
+      setDraftExercises((previous) => {
+        if (exerciseDropTarget === null || draggedExerciseId === null) return previous;
+        const fromIndex = previous.findIndex((item) => item.exercise.id === draggedExerciseId);
+        if (fromIndex < 0) return previous;
+        const next = [...previous];
+        const [dragged] = next.splice(fromIndex, 1);
+        const targetIndex = next.findIndex((item) => item.exercise.id === exerciseDropTarget.id);
+        if (targetIndex < 0 || dragged === undefined) return previous;
+        next.splice(exerciseDropTarget.placement === "after" ? targetIndex + 1 : targetIndex, 0, dragged);
+        return next;
+      });
+      setDraggedExerciseId(null);
+      setExerciseDropTarget(null);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishExerciseDrag);
+    window.addEventListener("pointercancel", finishExerciseDrag);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishExerciseDrag);
+      window.removeEventListener("pointercancel", finishExerciseDrag);
+    };
+  }, [draggedExerciseId, exerciseDropTarget]);
+
   // validateExercisesDraft checks only the exercise/prescription authoring
   // state — no date, no athletes. Save Workout and Save Changes both submit
   // a prescription with no notion of a scheduled date or assignee, so they
@@ -1880,7 +1932,7 @@ export default function CoachCalendarPage() {
                     </div>
                     {buildFieldErrors.exercises && <FieldError>{buildFieldErrors.exercises}</FieldError>}
                     <div className="mt-3 grid gap-4">
-                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
+                      {draftExercises.map((item, index) => <DraftExerciseCard key={item.exercise.id} item={item} index={index} total={draftExercises.length} errors={buildFieldErrors.items[item.exercise.id]} disabled={programmingControlsDisabled} expanded={expandedExerciseId === item.exercise.id} dragging={draggedExerciseId === item.exercise.id} dropTarget={exerciseDropTarget?.id === item.exercise.id} onDragStart={() => startExerciseDrag(item.exercise.id)} onToggle={() => setExpandedExerciseId((current) => current === item.exercise.id ? null : item.exercise.id)} focusSets={pendingSetsFocusId === item.exercise.id} onSetsFocused={() => setPendingSetsFocusId(null)} onChange={(update) => updateExercise(index, update)} onSetCountChange={(value) => updateSetCount(index, value)} onMove={moveExercise} onRemove={removeExercise} onValidateField={(field) => validateFieldOnBlur(item.exercise.id, field)} onValidateOverrides={() => validateOverridesOnBlur(item.exercise.id)} />)}
                     </div>
                   </div>
 
@@ -2188,7 +2240,7 @@ function ProgrammingModeButton({ active, children, ...props }: { active: boolean
   return <button type="button" {...props} className={`min-h-12 rounded-xl border px-4 text-sm font-bold transition ${active ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:opacity-50`}>{active ? "● " : "○ "}{children}</button>;
 }
 
-function DraftExerciseCard({ item, index, total, errors, disabled, expanded, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
+function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dragging, dropTarget, onDragStart, onToggle, focusSets, onSetsFocused, onChange, onSetCountChange, onMove, onRemove, onValidateField, onValidateOverrides }: { item: DraftExercise; index: number; total: number; errors?: ExerciseFieldErrors; disabled: boolean; expanded: boolean; dragging: boolean; dropTarget: boolean; onDragStart: () => void; onToggle: () => void; focusSets: boolean; onSetsFocused: () => void; onChange: (update: Partial<DraftExercise>) => void; onSetCountChange: (value: string) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (index: number) => void; onValidateField: (field: ExerciseFieldName) => void; onValidateOverrides: () => void }) {
   const t = useT();
   const { locale } = useLocale();
   const setsInputRef = useRef<HTMLInputElement>(null);
@@ -2212,10 +2264,11 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, onT
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
   const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRpe === "" ? "" : `RPE ${item.defaultRpe}`].filter(Boolean).join(" · ");
-  if (!expanded) return <article className="rounded-2xl border border-slate-200 bg-white"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="flex w-full items-center justify-between gap-3 p-4 text-left"><span><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span><span className="mt-2 block text-sm font-semibold text-teal-700">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></span></span></button></article>;
+  const cardClass = `rounded-2xl border bg-white ${dropTarget ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragging ? "opacity-60 shadow-lg" : ""}`;
+  if (!expanded) return <article data-exercise-card-id={item.exercise.id} className={cardClass}><div className="flex items-center gap-2 p-4"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><span className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block text-sm text-slate-600">{summary}</span><span className="mt-2 block text-sm font-semibold text-teal-700">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></span></button><ExerciseDragHandle label={t("calendar.exercise.dragHandle")} disabled={disabled} onPointerDown={onDragStart} /></div></article>;
 
-  return <article className="rounded-2xl border border-slate-200 bg-white p-4"><div id={`${baseId}-details`}>
-    <div className="flex flex-wrap items-start justify-between gap-4"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></button><div className="flex items-center gap-2"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.collapse")} <span aria-hidden="true">▴</span></button>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div></div>
+  return <article data-exercise-card-id={item.exercise.id} className={`${cardClass} p-4`}><div id={`${baseId}-details`}>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex min-w-0 flex-1 items-start gap-2"><ExerciseDragHandle label={t("calendar.exercise.dragHandle")} disabled={disabled} onPointerDown={onDragStart} /><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="min-w-0 flex-1 text-left"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></button></div><div className="flex items-center gap-2"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.collapse")} <span aria-hidden="true">▴</span></button>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div></div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.sets")}</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
@@ -2259,6 +2312,16 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, onT
       {Object.entries(errors?.overrides ?? {}).filter(([position]) => Number(position) > setCount).map(([position, message]) => <FieldError key={position}>{message}</FieldError>)}</div>
     <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4"><button type="button" onClick={() => onMove(index, -1)} disabled={disabled || index === 0} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">{t("calendar.moveUp")}</button><button type="button" onClick={() => onMove(index, 1)} disabled={disabled || index === total - 1} className="min-h-11 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">{t("calendar.moveDown")}</button><button type="button" onClick={() => onRemove(index)} disabled={disabled} className="min-h-11 rounded-xl border border-red-200 px-3 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">{t("common.remove")}</button></div>
   </div></article>;
+}
+
+function ExerciseDragHandle({ label, disabled, onPointerDown }: { label: string; disabled: boolean; onPointerDown: () => void }) {
+  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (disabled) return;
+    event.preventDefault();
+    onPointerDown();
+  }
+
+  return <button type="button" aria-label={label} title={label} onPointerDown={handlePointerDown} disabled={disabled} className="min-h-11 min-w-11 shrink-0 touch-none cursor-grab rounded-xl border border-slate-200 px-2 text-lg leading-none text-slate-500 transition hover:border-teal-600 hover:bg-teal-50 hover:text-teal-700 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40">⠿</button>;
 }
 
 function PrescriptionModeButton({ active, children, ...props }: { active: boolean; children: string; onClick: () => void; disabled: boolean }) {

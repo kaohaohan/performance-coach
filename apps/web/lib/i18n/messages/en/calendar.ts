@@ -159,6 +159,7 @@ export const calendar = {
   "calendar.exercise.number": "Exercise {number}",
   "calendar.exercise.expand": "Expand to edit",
   "calendar.exercise.collapse": "Collapse editor",
+  "calendar.exercise.dragHandle": "Drag to reorder",
   "calendar.exercise.mine": "Mine",
   "calendar.field.sets": "Sets",
   // "RPE" itself is not a key: Taiwan coaches say "RPE", so a zh-TW value
