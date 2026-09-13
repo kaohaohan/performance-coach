@@ -20,7 +20,7 @@
 
 - Affected files/components: Calendar Builder's `DraftExerciseCard` and pointer-drag state in `apps/web/app/coach/calendar/page.tsx`.
 - Data flow: Dragging still reorders the in-memory `draftExercises` array by stable exercise ID. The existing save/build payload remains unchanged.
-- State transitions: Idle → touch pending (200ms) or mouse pending → active drag → committed on pointer-up or reset on pointer-cancel. A touch move of at least 8px while pending returns to Idle without reordering.
+- State transitions: Idle → touch pending (200ms) or mouse pending → active drag → committed on pointer-up or reset on pointer-cancel. A touch move of at least 8px while pending becomes an app-managed page-scroll gesture without reordering, preventing iOS from cancelling a vertical drag after activation.
 - Frontend state/UI impact: Active drag snapshots card rectangles, locks document scroll, places an input-blocking dim overlay over the page, keeps the lifted source card above it, and leaves dimmed cards plus insertion indicators visible as non-interactive references. From touch pending through drop/cancel, document-level selection and long-press callouts are suppressed so Safari cannot extend a selection beyond the source card. The collapsed card separates its explicit Expand button from the drag surface and uses a compact number/name/summary layout. Expanded editing remains unchanged.
 - Backward compatibility / data backfill: None. Existing drafts and saved Workouts preserve their order and shapes.
 

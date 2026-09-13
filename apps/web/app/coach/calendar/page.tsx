@@ -111,6 +111,7 @@ type ExerciseDropTarget = { id: string; placement: "before" | "after" };
 type ExerciseDragMetrics = { x: number; y: number; offsetX: number; offsetY: number; width: number; height: number };
 type PendingExerciseDrag = ExerciseDragMetrics & { id: string; pointerId: number; startX: number; startY: number; pointerType: string; card: HTMLElement };
 type ExerciseCardRect = { id: string; left: number; right: number; top: number; height: number };
+type TouchScrollGesture = { pointerId: number; lastY: number };
 const EXERCISE_DRAG_THRESHOLD_PX = 8;
 const EXERCISE_TOUCH_LONG_PRESS_MS = 200;
 const INTERACTIVE_EXERCISE_SELECTOR = "button, input, textarea, select, [contenteditable=\"true\"]";
@@ -568,6 +569,7 @@ export default function CoachCalendarPage() {
   const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null);
   const [exerciseDropTarget, setExerciseDropTarget] = useState<ExerciseDropTarget | null>(null);
   const [exerciseDragMetrics, setExerciseDragMetrics] = useState<ExerciseDragMetrics | null>(null);
+  const [touchScrollGesture, setTouchScrollGesture] = useState<TouchScrollGesture | null>(null);
   // Refs keep the pointer lifecycle synchronous. A fast move-and-release can
   // happen before React renders the state update that paints the lifted card.
   const pendingExerciseDragRef = useRef<PendingExerciseDrag | null>(null);
@@ -575,6 +577,7 @@ export default function CoachCalendarPage() {
   const exerciseDropTargetRef = useRef<ExerciseDropTarget | null>(null);
   const exerciseCardRectsRef = useRef<ExerciseCardRect[]>([]);
   const exerciseLongPressTimer = useRef<number | null>(null);
+  const touchScrollGestureRef = useRef<TouchScrollGesture | null>(null);
   const [buildFieldErrors, setBuildFieldErrors] = useState<BuildFieldErrors>(initialBuildErrors);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
@@ -1281,6 +1284,22 @@ export default function CoachCalendarPage() {
     setPendingExerciseDrag(null);
   }
 
+  function clearTouchScrollGesture() {
+    touchScrollGestureRef.current = null;
+    setTouchScrollGesture(null);
+  }
+
+  function startTouchScrollGesture(pending: PendingExerciseDrag, event: PointerEvent) {
+    clearPendingExerciseDrag();
+    const gesture = { pointerId: pending.pointerId, lastY: event.clientY };
+    touchScrollGestureRef.current = gesture;
+    setTouchScrollGesture(gesture);
+    // The drag surface owns touch gestures so iOS cannot cancel a vertical
+    // reorder midway. Before the long press completes, reproduce the user's
+    // ordinary vertical swipe as page scrolling instead.
+    window.scrollBy({ top: pending.startY - event.clientY });
+  }
+
   function setCurrentExerciseDropTarget(next: ExerciseDropTarget | null) {
     const current = exerciseDropTargetRef.current;
     if (current?.id === next?.id && current?.placement === next?.placement) return;
@@ -1309,6 +1328,7 @@ export default function CoachCalendarPage() {
 
   function resetExerciseDrag() {
     clearPendingExerciseDrag();
+    clearTouchScrollGesture();
     draggedExerciseIdRef.current = null;
     exerciseCardRectsRef.current = [];
     setDraggedExerciseId(null);
@@ -1358,16 +1378,24 @@ export default function CoachCalendarPage() {
   }
 
   useEffect(() => {
-    if (draggedExerciseId === null && pendingExerciseDrag === null) return;
+    if (draggedExerciseId === null && pendingExerciseDrag === null && touchScrollGesture === null) return;
 
     function handlePointerMove(event: PointerEvent) {
+      const touchScroll = touchScrollGestureRef.current;
+      if (touchScroll !== null) {
+        if (event.pointerId !== touchScroll.pointerId) return;
+        event.preventDefault();
+        window.scrollBy({ top: touchScroll.lastY - event.clientY });
+        touchScroll.lastY = event.clientY;
+        return;
+      }
       const pending = pendingExerciseDragRef.current;
       let activeExerciseId = draggedExerciseIdRef.current;
       if (activeExerciseId === null && pending !== null) {
         if (event.pointerId !== pending.pointerId) return;
         const moved = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
         if (pending.pointerType === "touch") {
-          if (moved >= EXERCISE_DRAG_THRESHOLD_PX) clearPendingExerciseDrag();
+          if (moved >= EXERCISE_DRAG_THRESHOLD_PX) startTouchScrollGesture(pending, event);
           return;
         }
         if (moved < EXERCISE_DRAG_THRESHOLD_PX) return;
@@ -1386,6 +1414,10 @@ export default function CoachCalendarPage() {
     }
 
     function finishExerciseDrag(cancelled = false) {
+      if (touchScrollGestureRef.current !== null) {
+        clearTouchScrollGesture();
+        return;
+      }
       const activeExerciseId = draggedExerciseIdRef.current;
       if (activeExerciseId === null) {
         clearPendingExerciseDrag();
@@ -1420,7 +1452,7 @@ export default function CoachCalendarPage() {
   // Pointer listeners intentionally read the latest values from refs so a
   // pointer-up cannot commit a stale React render between move frames.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draggedExerciseId, pendingExerciseDrag]);
+  }, [draggedExerciseId, pendingExerciseDrag, touchScrollGesture]);
 
   useEffect(() => () => clearExerciseLongPressTimer(), []);
 
@@ -2444,7 +2476,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
     : undefined;
   // The touch surface disables iOS's selection/callout before a long press
   // completes. Controls sit outside it, so text inputs remain selectable.
-  const dragSurfaceStyle: CSSProperties = disabled ? {} : { touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" };
+  const dragSurfaceStyle: CSSProperties = disabled ? {} : { touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" };
   const dropIndicator = dropPlacement !== null && <div aria-hidden="true" className={`pointer-events-none absolute left-4 right-4 z-10 h-1 rounded-full bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,0.15)] ${dropPlacement === "before" ? "-top-2" : "-bottom-2"}`} />;
   if (!expanded) return <article data-exercise-card-id={item.exercise.id} className={cardClass} style={dragStyle}>{dropIndicator}<div onPointerDown={onDragStart} onSelect={onSuppressDragSelection} onContextMenu={onSuppressDragSelection} className="min-w-0 p-3" style={dragSurfaceStyle}><span className="block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</span><span className="mt-1 block line-clamp-2 text-base font-semibold leading-snug tracking-tight sm:text-lg">{localizeExerciseName(item.exercise.name, locale)}</span><span className="mt-1 block truncate text-sm text-slate-600">{summary}</span></div><div className="flex justify-end border-t border-slate-100 px-3 py-2"><button type="button" onClick={onToggle} aria-expanded="false" aria-controls={`${baseId}-details`} className="min-h-9 rounded-lg px-2 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.expand")} <span aria-hidden="true">▾</span></button></div></article>;
 
