@@ -147,6 +147,8 @@ export const calendar: CalendarMessages = {
 
   // ── Exercise card ────────────────────────────────────────────────────────
   "calendar.exercise.number": "動作 {number}",
+  "calendar.exercise.expand": "展開編輯",
+  "calendar.exercise.collapse": "收起編輯",
   "calendar.exercise.mine": "自建",
   "calendar.field.sets": "組數",
   "calendar.field.prescription": "訓練目標",
@@ -168,8 +170,8 @@ export const calendar: CalendarMessages = {
   "calendar.useDefault": "使用預設值",
   "calendar.useDefaultLoad": "使用預設重量",
   "calendar.useDefaultRpe": "使用預設 RPE",
-  "calendar.moveUp": "上移",
-  "calendar.moveDown": "下移",
+  "calendar.moveUp": "往前移動",
+  "calendar.moveDown": "往後移動",
 
   // ── Exercise picker ──────────────────────────────────────────────────────
   "calendar.picker.title": "新增動作",

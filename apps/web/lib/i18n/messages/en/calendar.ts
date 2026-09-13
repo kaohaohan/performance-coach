@@ -157,6 +157,8 @@ export const calendar = {
 
   // ── Exercise card ────────────────────────────────────────────────────────
   "calendar.exercise.number": "Exercise {number}",
+  "calendar.exercise.expand": "Expand to edit",
+  "calendar.exercise.collapse": "Collapse editor",
   "calendar.exercise.mine": "Mine",
   "calendar.field.sets": "Sets",
   // "RPE" itself is not a key: Taiwan coaches say "RPE", so a zh-TW value
@@ -181,8 +183,8 @@ export const calendar = {
   "calendar.useDefault": "Use default",
   "calendar.useDefaultLoad": "Use default load",
   "calendar.useDefaultRpe": "Use default RPE",
-  "calendar.moveUp": "Move Up",
-  "calendar.moveDown": "Move Down",
+  "calendar.moveUp": "Move earlier",
+  "calendar.moveDown": "Move later",
 
   // ── Exercise picker ──────────────────────────────────────────────────────
   "calendar.picker.title": "Add Exercise",
