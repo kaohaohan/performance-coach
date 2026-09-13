@@ -10,6 +10,10 @@
     "staging": {
       "url": "https://performance-coach-git-staging-kaohaohans-projects.vercel.app",
       "note": "Vercel alias for the staging git branch. This is the committed default, so a plain Xcode Run is always staging."
+    },
+    "production": {
+      "url": "https://dontworkout.vercel.app",
+      "note": "Public production runtime. Release builds only; Debug builds must remain on staging or local."
     }
   }
 }
