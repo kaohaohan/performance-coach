@@ -55,10 +55,10 @@
 | Phase 1 — task doc and canonical documentation | Done | Product, UI, API, and schema docs record Coach-cue snapshot semantics. |
 | Phase 2 — migration and backend contract implementation | Done | Additive 0005 migration, trim/500-character validation, template/snapshot/read plumbing completed. |
 | Phase 3 — Calendar, Today, Session UI and tests | Done | Draft/copy persistence, accessible single-open cards, labels, and Athlete rendering completed. |
-| Phase 4 — verification and staging-only rollout | In Progress | Local migration, Go vet/test, TypeScript, lint, and web tests pass; staging rollout remains. |
+| Phase 4 — verification and staging-only rollout | Done | Local migration, Go vet/test, TypeScript, lint, and web tests pass; staging migration completed, API deployed, and `/health` plus `/ready` checks pass. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress — staging rollout pending
-- Deviations from plan: None yet.
-- Follow-ups: None yet.
+- Final status: Complete — staging-only rollout
+- Deviations from plan: The staging migration credential was provisioned in a dedicated staging Secret Manager secret and executed by a dedicated staging Cloud Run Job before the API rollout. Production was not read or modified.
+- Follow-ups: Validate the compact Builder and Coach cues in the staging UI at `https://performance-coach-git-staging-kaohaohans-projects.vercel.app`.
