@@ -1439,6 +1439,38 @@ export default function CoachCalendarPage() {
     };
   }, [draggedExerciseId]);
 
+  useEffect(() => {
+    // Safari can extend a long-press selection beyond the source card after
+    // the finger moves. Suppress selection at the document level from the
+    // first drag candidate through drop/cancel; form controls never enter
+    // this state, so their normal text-selection behaviour stays intact.
+    if (pendingExerciseDrag === null && draggedExerciseId === null) return;
+    const root = document.documentElement;
+    const previousUserSelect = root.style.userSelect;
+    const previousWebkitUserSelect = root.style.getPropertyValue("-webkit-user-select");
+    const previousWebkitTouchCallout = root.style.getPropertyValue("-webkit-touch-callout");
+    root.style.userSelect = "none";
+    root.style.setProperty("-webkit-user-select", "none");
+    root.style.setProperty("-webkit-touch-callout", "none");
+    const clearSelection = () => window.getSelection()?.removeAllRanges();
+    const blockSelection = (event: Event) => {
+      event.preventDefault();
+      clearSelection();
+    };
+    clearSelection();
+    document.addEventListener("selectstart", blockSelection);
+    document.addEventListener("selectionchange", clearSelection);
+    document.addEventListener("contextmenu", blockSelection);
+    return () => {
+      document.removeEventListener("selectstart", blockSelection);
+      document.removeEventListener("selectionchange", clearSelection);
+      document.removeEventListener("contextmenu", blockSelection);
+      root.style.userSelect = previousUserSelect;
+      root.style.setProperty("-webkit-user-select", previousWebkitUserSelect);
+      root.style.setProperty("-webkit-touch-callout", previousWebkitTouchCallout);
+    };
+  }, [draggedExerciseId, pendingExerciseDrag]);
+
   // validateExercisesDraft checks only the exercise/prescription authoring
   // state — no date, no athletes. Save Workout and Save Changes both submit
   // a prescription with no notion of a scheduled date or assignee, so they
