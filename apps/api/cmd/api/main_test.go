@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
@@ -54,6 +55,30 @@ func TestCreateSetLogRequestDecodesExtraWithoutPlannedAssociation(t *testing.T) 
 	}
 	if req.Kind != "EXTRA" || req.ScheduledWorkoutPlannedSetID != nil {
 		t.Fatalf("decoded request = %#v", req)
+	}
+}
+
+func TestUpdateSetLogRequestPreservesOmittedAndNullFields(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/set-logs/id", strings.NewReader(`{"reps":9,"load":null,"rpe":null}`))
+	in, err := decodeUpdateSetLogRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !in.RepsPresent || in.Reps == nil || *in.Reps != 9 {
+		t.Fatalf("reps = %#v", in)
+	}
+	if !in.LoadPresent || in.Load != nil || !in.RPEPresent || in.RPE != nil {
+		t.Fatalf("null fields = %#v", in)
+	}
+	if in.UnitPresent {
+		t.Fatal("omitted unit marked present")
+	}
+}
+
+func TestUpdateSetLogRequestRejectsMalformedSupportedField(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/set-logs/id", strings.NewReader(`{"reps":"nine"}`))
+	if _, err := decodeUpdateSetLogRequest(req); err == nil {
+		t.Fatal("malformed reps unexpectedly decoded")
 	}
 }
 

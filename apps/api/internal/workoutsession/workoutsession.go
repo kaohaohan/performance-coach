@@ -17,7 +17,7 @@
 // Complete implements POST /sessions/{id}/complete (§3.7): the ACTIVE ->
 // COMPLETED transition that makes a session permanently read-only.
 //
-// CreateSetLog implements POST /sessions/{id}/set-logs (§3.8) — the sole
+// CreateSetLog implements POST /sessions/{id}/set-logs (§3.8).
 // SetLog write entry point in V0.1 (Story 4). Manual UI, voice, and future
 // AI commands all converge here.
 package workoutsession
@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -625,6 +626,130 @@ type CreateSetLogInput struct {
 	Unit                         *string
 	Reps                         *int
 	RPE                          *float64
+}
+
+// UpdateSetLogInput preserves omitted-versus-null semantics for PATCH. A
+// Present field with a nil value means explicit SQL NULL (where allowed).
+type UpdateSetLogInput struct {
+	Load        *float64
+	LoadPresent bool
+	Unit        *string
+	UnitPresent bool
+	Reps        *int
+	RepsPresent bool
+	RPE         *float64
+	RPEPresent  bool
+}
+
+func (in UpdateSetLogInput) validate(load *float64, unit *string, reps *int, rpe *float64) error {
+	if !in.LoadPresent && !in.UnitPresent && !in.RepsPresent && !in.RPEPresent {
+		return &ValidationError{Message: "at least one supported field is required"}
+	}
+	if in.RepsPresent && reps == nil {
+		return &ValidationError{Message: "reps cannot be null"}
+	}
+	if reps == nil || *reps < 1 {
+		return &ValidationError{Message: "reps must be >= 1"}
+	}
+	if load == nil {
+		if unit != nil {
+			return &ValidationError{Message: "unit must be omitted when load is omitted"}
+		}
+	} else {
+		if *load < 0 {
+			return &ValidationError{Message: "load must be >= 0"}
+		}
+		if unit == nil {
+			return &ValidationError{Message: "unit is required when load is present"}
+		}
+		if *unit != "kg" && *unit != "lb" {
+			return &ValidationError{Message: "unit must be 'kg' or 'lb'"}
+		}
+	}
+	if rpe != nil && (*rpe < 1 || *rpe > 10) {
+		return &ValidationError{Message: "rpe must be between 1 and 10"}
+	}
+	return nil
+}
+
+// UpdateSetLog updates only actual fields of an existing log. The owning
+// session remains in its current state; both ACTIVE and COMPLETED are valid.
+func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, setLogID string, input UpdateSetLogInput) (SetLog, error) {
+	if _, err := uuid.Parse(setLogID); err != nil {
+		return SetLog{}, &ValidationError{Message: "setLogId must be a valid UUID"}
+	}
+
+	const lookup = `
+		SELECT sl.id, sl.session_id, sl.kind, sl.scheduled_workout_planned_set_id,
+		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rpe, sl.logged_by_user_id
+		FROM set_logs sl WHERE sl.id = $1`
+	var s SetLog
+	var sessionID string
+	if err := pool.QueryRow(ctx, lookup, setLogID).Scan(&s.ID, &sessionID, &s.Kind, &s.ScheduledWorkoutPlannedSetID,
+		&s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SetLog{}, ErrNotFound
+		}
+		return SetLog{}, fmt.Errorf("workoutsession: lookup set log: %w", err)
+	}
+	header, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return SetLog{}, err
+	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, header.athleteID); err != nil {
+		return SetLog{}, err
+	}
+
+	load, unit, reps, rpe := s.Load, s.Unit, &s.Reps, s.RPE
+	if input.LoadPresent {
+		load = input.Load
+	}
+	if input.UnitPresent {
+		unit = input.Unit
+	}
+	if input.RepsPresent {
+		reps = input.Reps
+	}
+	if input.RPEPresent {
+		rpe = input.RPE
+	}
+	if err := input.validate(load, unit, reps, rpe); err != nil {
+		return SetLog{}, err
+	}
+
+	sets := make([]string, 0, 4)
+	args := []any{setLogID}
+	add := func(column string, value any) {
+		args = append(args, value)
+		sets = append(sets, fmt.Sprintf("%s = $%d", column, len(args)))
+	}
+	if input.LoadPresent {
+		add("load", input.Load)
+	}
+	if input.UnitPresent {
+		add("unit", input.Unit)
+	}
+	if input.RepsPresent {
+		add("reps", input.Reps)
+	}
+	if input.RPEPresent {
+		add("rpe", input.RPE)
+	}
+	query := fmt.Sprintf(`UPDATE set_logs SET %s WHERE id = $1
+		RETURNING id, kind, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id`, strings.Join(sets, ", "))
+	if err := pool.QueryRow(ctx, query, args...).Scan(&s.ID, &s.Kind, &s.ScheduledWorkoutPlannedSetID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SetLog{}, ErrNotFound
+		}
+		return SetLog{}, fmt.Errorf("workoutsession: update set log: %w", err)
+	}
+	if s.ScheduledWorkoutPlannedSetID != nil {
+		const positionQuery = `SELECT planned_position FROM scheduled_workout_planned_sets WHERE id = $1`
+		if err := pool.QueryRow(ctx, positionQuery, *s.ScheduledWorkoutPlannedSetID).Scan(&s.PlannedPosition); err != nil {
+			return SetLog{}, fmt.Errorf("workoutsession: lookup planned position: %w", err)
+		}
+	}
+	return s, nil
 }
 
 // validate applies §3.8's request and actual-field rules, independent of DB
