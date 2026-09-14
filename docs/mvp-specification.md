@@ -405,6 +405,8 @@ The Coach can log SetLogs on the Athlete's behalf for the duration of the sessio
 - Each SetLog records which user logged it (`loggedByUserId`) — Coach or Athlete.
 - Coach and Athlete see the same session state if both are viewing it.
 - Once the session is `COMPLETED`, its status and `completedAt` remain unchanged and its SetLog associations and metadata remain immutable. Existing SetLogs may still be corrected through edit only; adding or deleting SetLogs remains prohibited for both Coach and Athlete.
+- While a session is `ACTIVE`, a connected Coach may add an Exercise or withdraw/replace any active Exercise; the Athlete may add an Exercise and withdraw/replace only Exercises they added. Added Exercises carry `COACH_ADDED` or `ATHLETE_ADDED` provenance and a complete planned-set prescription. Existing targets are not edited in place after session start: a changed prescription is a replacement with new snapshot IDs.
+- Withdrawing or replacing an Exercise after session start is a soft removal. The original ScheduledWorkoutExercise, its planned sets, and every SetLog remain historical facts even when all planned work was already completed. Review shows the removed item and any explicit replacement relationship. Once the whole WorkoutSession is `COMPLETED`, structural changes are prohibited.
 - **No new backend endpoint is required.** This story exercises existing session/set-log authorization: a connected Coach has the same access as the Athlete themself (see the API contract's authorization matrix, §4).
 
 ---

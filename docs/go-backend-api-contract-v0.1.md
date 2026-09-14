@@ -828,6 +828,18 @@ Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含
 - ACTIVE → COMPLETED 成功 → HTTP `200`
 - 已 COMPLETED → 不重複轉換、不修改 `completed_at` → `409 CONFLICT`
 
+### ACTIVE session Exercise adjustments
+
+The pre-start `PUT /scheduled-workouts/{id}` remains a whole-snapshot edit and still rejects any ScheduledWorkout with a session. Once a session is ACTIVE, structural changes use incremental endpoints so existing snapshot and SetLog identities are never replaced.
+
+- `GET /sessions/{sessionId}/exercise-options?q=` returns SYSTEM Exercises plus private Exercises owned by the ScheduledWorkout's Coach. Access requires the session Athlete or an active-relationship Coach. Athletes cannot create Exercise identities.
+- `POST /sessions/{sessionId}/exercises` accepts `{ exerciseId, plan, coachCue?, replacesScheduledWorkoutExerciseId? }`. The plan uses the existing complete defaults/overrides shape. The server derives `COACH_ADDED` or `ATHLETE_ADDED` and `addedByUserId`. A replacement soft-removes the predecessor and inserts the new row at its active position in one transaction.
+- `DELETE /sessions/{sessionId}/exercises/{scheduledWorkoutExerciseId}` performs a soft removal and returns updated Exercise metadata. It never deletes planned rows or SetLogs.
+
+Only ACTIVE sessions accept these operations. An active-relationship Coach may adjust any active Exercise; the Athlete may remove or replace only their own `ATHLETE_ADDED` Exercise. Existing planned targets are not edited in place. COMPLETED sessions, repeated removal/replacement, stale SetLog writes to removed Exercises, and invalid replacement associations return `409 CONFLICT`; inaccessible sessions retain existing `404 NOT_FOUND` resource scoping.
+
+Session and ScheduledWorkout detail Exercise objects additionally expose `origin`, optional `addedByUserId`, optional `removedAt`/`removedByUserId`, and optional predecessor/successor replacement IDs. Active items remain in the normal exercise list; removed items remain readable for adjustment history and review.
+
 ### GET /sessions/{sessionId}
 
 回傳 plan vs actual（Story 7 的畫面直接用這支）：
