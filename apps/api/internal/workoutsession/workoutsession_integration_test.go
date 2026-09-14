@@ -195,6 +195,58 @@ func TestCreateSetLogValidationClaimsAuthorizationAndCompletion(t *testing.T) {
 	}
 }
 
+func TestUpdateSetLogCompletedSessionAuthorizationAndMergedValidation(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	reps, load, rpe, unit := 5, 80.0, 7.0, "kg"
+	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " patch", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe}}}})
+	exercise := setup.created.Exercises[0]
+	plannedID := exercise.Plan.Sets[0].ScheduledWorkoutPlannedSetID
+	logged, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedID, &load, &unit, &reps, &rpe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := workoutsession.Complete(ctx, integrationPool, setup.athlete, setup.session.ID)
+	if err != nil || completed.Status != "COMPLETED" {
+		t.Fatalf("complete = %#v, err=%v", completed, err)
+	}
+	var beforeCompletedAt time.Time
+	if err := integrationPool.QueryRow(ctx, `SELECT completed_at FROM workout_sessions WHERE id = $1`, setup.session.ID).Scan(&beforeCompletedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	newReps, newRPE := 6, 8.0
+	updated, err := workoutsession.UpdateSetLog(ctx, integrationPool, setup.athlete, logged.ID, workoutsession.UpdateSetLogInput{Reps: &newReps, RepsPresent: true, RPE: &newRPE, RPEPresent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Reps != newReps || updated.RPE == nil || *updated.RPE != newRPE || updated.Kind != logged.Kind || updated.SetNumber != logged.SetNumber || updated.LoggedByUserID != logged.LoggedByUserID || updated.ScheduledWorkoutPlannedSetID == nil || *updated.ScheduledWorkoutPlannedSetID != plannedID {
+		t.Fatalf("updated log changed unexpected fields: %#v", updated)
+	}
+	var status string
+	var afterCompletedAt time.Time
+	if err := integrationPool.QueryRow(ctx, `SELECT status, completed_at FROM workout_sessions WHERE id = $1`, setup.session.ID).Scan(&status, &afterCompletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "COMPLETED" || !afterCompletedAt.Equal(beforeCompletedAt) {
+		t.Fatalf("session mutated: status=%q completed_at=%v before=%v", status, afterCompletedAt, beforeCompletedAt)
+	}
+
+	coachUpdatedLoad := 82.5
+	updated, err = workoutsession.UpdateSetLog(ctx, integrationPool, setup.coach, logged.ID, workoutsession.UpdateSetLogInput{Load: &coachUpdatedLoad, LoadPresent: true, Unit: &unit, UnitPresent: true})
+	if err != nil || updated.Load == nil || *updated.Load != coachUpdatedLoad {
+		t.Fatalf("coach update = %#v, err=%v", updated, err)
+	}
+
+	historicalCoach := integrationUser(t, "COACH")
+	if _, err := workoutsession.UpdateSetLog(ctx, integrationPool, historicalCoach, logged.ID, workoutsession.UpdateSetLogInput{Reps: &newReps, RepsPresent: true}); !errors.Is(err, workoutsession.ErrNotFound) {
+		t.Fatalf("historical/disconnected coach error = %v, want ErrNotFound", err)
+	}
+	if _, err := workoutsession.UpdateSetLog(ctx, integrationPool, setup.athlete, logged.ID, workoutsession.UpdateSetLogInput{Load: nil, LoadPresent: true}); !isValidationError(err) {
+		t.Fatalf("clearing load with retained unit error = %v, want validation error", err)
+	}
+}
+
 func TestCreateSetLogConcurrency(t *testing.T) {
 	requireIntegrationDB(t)
 	reps := 5
