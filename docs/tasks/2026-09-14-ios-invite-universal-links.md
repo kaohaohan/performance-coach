@@ -65,7 +65,7 @@ Each implementation sub-task runs in a separate `gpt-5.6-luna` session with `low
 | Task Doc approval | Done | User approved the proposed plan and Luna/low implementation-session split. |
 | Web association + contract docs | Done | Added the production AASA endpoint and documented installed/uninstalled behavior. |
 | iOS capability + signing | Done | Added the production Associated Domains entitlement locally; Apple Developer App ID/profile capability and signed Release verification remain external follow-ups. |
-| Capacitor App dependency | Not Started | High-effort re-plan selected published stable 8.1.1 after confirming its `@capacitor/core >=8.0.0` peer contract; install and sync remain. |
+| Capacitor App dependency | Done | Installed exact `@capacitor/app@8.1.1`; `npx cap sync ios` registered the plugin in the generated Swift package. Existing Xcode project diff was preserved and excluded. |
 | Incoming-link router + tests | Not Started | Cold/warm links, strict validation, duplicate suppression. |
 | Deployment + physical-device verification | Not Started | Production AASA, Release/TestFlight, Safari/Messages/Mail/LINE. |
 
