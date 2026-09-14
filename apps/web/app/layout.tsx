@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { LocaleProvider } from "@/lib/i18n";
 import { localeBootstrapScript } from "@/lib/i18n/locale";
+import { InviteUniversalLinkRouter } from "@/components/invite-universal-link-router";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -54,7 +55,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full flex flex-col">
         <LocaleProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <InviteUniversalLinkRouter />
+            {children}
+          </AuthProvider>
         </LocaleProvider>
       </body>
     </html>
