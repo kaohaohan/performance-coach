@@ -680,12 +680,12 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 	}
 
 	const lookup = `
-		SELECT sl.id, sl.session_id, sl.kind, sl.scheduled_workout_planned_set_id,
+		SELECT sl.id, sl.session_id, sl.scheduled_workout_planned_set_id,
 		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rpe, sl.logged_by_user_id
 		FROM set_logs sl WHERE sl.id = $1`
 	var s SetLog
 	var sessionID string
-	if err := pool.QueryRow(ctx, lookup, setLogID).Scan(&s.ID, &sessionID, &s.Kind, &s.ScheduledWorkoutPlannedSetID,
+	if err := pool.QueryRow(ctx, lookup, setLogID).Scan(&s.ID, &sessionID, &s.ScheduledWorkoutPlannedSetID,
 		&s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SetLog{}, ErrNotFound
@@ -736,12 +736,17 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 		add("rpe", input.RPE)
 	}
 	query := fmt.Sprintf(`UPDATE set_logs SET %s WHERE id = $1
-		RETURNING id, kind, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id`, strings.Join(sets, ", "))
-	if err := pool.QueryRow(ctx, query, args...).Scan(&s.ID, &s.Kind, &s.ScheduledWorkoutPlannedSetID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
+		RETURNING id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id`, strings.Join(sets, ", "))
+	if err := pool.QueryRow(ctx, query, args...).Scan(&s.ID, &s.ScheduledWorkoutPlannedSetID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SetLog{}, ErrNotFound
 		}
 		return SetLog{}, fmt.Errorf("workoutsession: update set log: %w", err)
+	}
+	if s.ScheduledWorkoutPlannedSetID == nil {
+		s.Kind = "EXTRA"
+	} else {
+		s.Kind = "PLANNED"
 	}
 	if s.ScheduledWorkoutPlannedSetID != nil {
 		const positionQuery = `SELECT planned_position FROM scheduled_workout_planned_sets WHERE id = $1`
