@@ -30,7 +30,7 @@
 - Affected files/components:
   - Web association endpoint under the Next.js `/.well-known/apple-app-site-association` route.
   - `apps/web/ios/App/App/App.entitlements` for `applinks:dontworkout.vercel.app`.
-  - `@capacitor/app` dependency and Capacitor-generated iOS Swift Package registration.
+  - `@capacitor/app@8.1.1` dependency and Capacitor-generated iOS Swift Package registration. The plugin uses its own release cadence; npm marks 8.1.1 as the current stable release and its peer contract accepts `@capacitor/core >=8.0.0`, including this repository's 8.5.0 core.
   - A root client-side Universal Link handler mounted by `apps/web/app/layout.tsx`.
   - Product/UI documentation and focused unit tests.
 - Data flow:
@@ -51,7 +51,7 @@
 - Sub-task breakdown (required for L/XL, per AGENTS.md §7):
   1. Web association endpoint plus product/UI contract updates.
   2. iOS Associated Domains entitlement and signing verification.
-  3. Install/sync `@capacitor/app@8.5.0`.
+  3. Install/sync stable `@capacitor/app@8.1.1`.
   4. Add the validated cold/warm Universal Link router and unit tests.
   5. Build, deploy, and perform physical-device/TestFlight verification.
 
@@ -65,12 +65,12 @@ Each implementation sub-task runs in a separate `gpt-5.6-luna` session with `low
 | Task Doc approval | Done | User approved the proposed plan and Luna/low implementation-session split. |
 | Web association + contract docs | Done | Added the production AASA endpoint and documented installed/uninstalled behavior. |
 | iOS capability + signing | Done | Added the production Associated Domains entitlement locally; Apple Developer App ID/profile capability and signed Release verification remain external follow-ups. |
-| Capacitor App dependency | Not Started | Install version 8.5.0 and sync iOS without overwriting unrelated Xcode changes. |
+| Capacitor App dependency | Not Started | High-effort re-plan selected published stable 8.1.1 after confirming its `@capacitor/core >=8.0.0` peer contract; install and sync remain. |
 | Incoming-link router + tests | Not Started | Cold/warm links, strict validation, duplicate suppression. |
 | Deployment + physical-device verification | Not Started | Production AASA, Release/TestFlight, Safari/Messages/Mail/LINE. |
 
 ## 5. Outcome (filled at completion)
 
 - Final status: In progress
-- Deviations from plan: None.
+- Deviations from plan: The initially specified `@capacitor/app@8.5.0` does not exist. After the low-effort implementation session stopped without substituting a version, high-effort planning selected npm's stable 8.1.1, whose peer contract explicitly supports the repository's Capacitor core 8.5.0.
 - Follow-ups: Enable Associated Domains for App ID `com.pumpslate.app` and regenerate/use a provisioning profile containing the entitlement; verify a signed Release archive. Android App Links remain deferred until an Android target exists.
