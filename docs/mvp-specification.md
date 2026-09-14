@@ -132,6 +132,10 @@ A later sign-up with a new Firebase user creates a new empty account. It never r
 - Deleting an Athlete does not mark their ACTIVE sessions COMPLETED.
 - A tombstoned Firebase identity cannot recreate the old backend user via coach-signup or invite redeem (`409 ACCOUNT_DELETED`).
 
+### **Invite links on iOS**
+
+The production invite URL (`https://dontworkout.vercel.app/join/{code}`) is also an Apple Universal Link. On an installed, correctly signed PumpLoop iOS build, opening it launches the app into the existing invite preview and redemption flow; without the app, the same URL remains the Web onboarding flow. Only the production hostname is associated, so local and staging invite links remain Web-only.
+
 ### **Not in V0.1**
 
 - ~~Google / Apple sign-in~~ — Google sign-in is implemented (web popup + native iOS), and Sign in with Apple is implemented on iOS for App Review Guideline 4.8 (see `docs/tasks/2026-08-25-ios-apple-signin.md`). No other social providers.

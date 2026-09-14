@@ -63,7 +63,7 @@ Each implementation sub-task runs in a separate `gpt-5.6-luna` session with `low
 | --- | --- | --- |
 | Phase 0 inspection and design | Done | Existing Web join flow is reusable; iOS lacks AASA, Associated Domains, and URL routing. |
 | Task Doc approval | Done | User approved the proposed plan and Luna/low implementation-session split. |
-| Web association + contract docs | Not Started | Serve production AASA and document installed/uninstalled behavior. |
+| Web association + contract docs | Done | Added the production AASA endpoint and documented installed/uninstalled behavior. |
 | iOS capability + signing | Not Started | Add entitlement, enable App ID capability, verify signed Release output. |
 | Capacitor App dependency | Not Started | Install version 8.5.0 and sync iOS without overwriting unrelated Xcode changes. |
 | Incoming-link router + tests | Not Started | Cold/warm links, strict validation, duplicate suppression. |
