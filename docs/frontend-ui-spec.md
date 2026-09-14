@@ -53,6 +53,8 @@ This is a frontend information-architecture decision. It introduces no new backe
 | `/join` | Unauthenticated | none | Manual invite-code entry. Normalizes input and routes to `/join/[code]`. |
 | `/join/[code]` | Unauthenticated | `GET /invite-codes/{code}/preview`, `POST /invite-codes/{code}/redeem` | Preview → confirm → auth (embedded, no redirect to `/login`) → redeem → `/today`. Product behavior is defined in `docs/mvp-specification.md`, "Coach & Athlete Onboarding — Implemented (V0.1)". |
 
+The production `/join/{code}` URL is an Apple Universal Link. When PumpLoop is installed on iOS, the link opens this existing route inside the app; otherwise it opens the same Web route in the browser. No alternate invite route or screen is introduced.
+
 ---
 
 ## 3. Product Rules
