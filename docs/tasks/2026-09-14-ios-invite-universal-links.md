@@ -64,7 +64,7 @@ Each implementation sub-task runs in a separate `gpt-5.6-luna` session with `low
 | Phase 0 inspection and design | Done | Existing Web join flow is reusable; iOS lacks AASA, Associated Domains, and URL routing. |
 | Task Doc approval | Done | User approved the proposed plan and Luna/low implementation-session split. |
 | Web association + contract docs | Done | Added the production AASA endpoint and documented installed/uninstalled behavior. |
-| iOS capability + signing | Not Started | Add entitlement, enable App ID capability, verify signed Release output. |
+| iOS capability + signing | Done | Added the production Associated Domains entitlement locally; Apple Developer App ID/profile capability and signed Release verification remain external follow-ups. |
 | Capacitor App dependency | Not Started | Install version 8.5.0 and sync iOS without overwriting unrelated Xcode changes. |
 | Incoming-link router + tests | Not Started | Cold/warm links, strict validation, duplicate suppression. |
 | Deployment + physical-device verification | Not Started | Production AASA, Release/TestFlight, Safari/Messages/Mail/LINE. |
@@ -73,4 +73,4 @@ Each implementation sub-task runs in a separate `gpt-5.6-luna` session with `low
 
 - Final status: In progress
 - Deviations from plan: None.
-- Follow-ups: Android App Links remain deferred until an Android target exists.
+- Follow-ups: Enable Associated Domains for App ID `com.pumpslate.app` and regenerate/use a provisioning profile containing the entitlement; verify a signed Release archive. Android App Links remain deferred until an Android target exists.
