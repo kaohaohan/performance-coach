@@ -50,7 +50,7 @@
 | --- | --- | --- |
 | Phase 0 — read-only inspection and approval | Done | Current UI, contract, backend gap, authorization, and working tree inspected; user approved the proposed plan. |
 | Planning — Task Doc | Done | Authored in the high-reasoning planning session before implementation sessions. |
-| Contract/specification updates | Not Started | Assigned to a separate GPT-5.6 Luna low-effort session. |
+| Contract/specification updates | Done | Updated MVP, API, and frontend canonical specifications for PATCH-only edits in ACTIVE/COMPLETED sessions; POST/DELETE remain ACTIVE-only. |
 | Backend implementation | Not Started | Assigned to a separate GPT-5.6 Luna medium-effort session after contracts. |
 | Frontend implementation | Not Started | Assigned to a separate GPT-5.6 Luna low-effort session after backend. |
 | Full verification and completion review | Not Started | Assigned to a separate GPT-5.6 Luna low-effort session. |

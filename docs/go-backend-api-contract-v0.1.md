@@ -817,7 +817,7 @@ Response body 固定為（不含 `athleteId`、`scheduledWorkoutId`、`startedAt
 
 ### POST /sessions/{sessionId}/complete
 
-結束訓練。授權同 start（athlete 本人或 **active relationship** coach）。COMPLETED 後 session 唯讀（SetLog 不可再增刪改），且不可再轉回 ACTIVE。Athlete 帳號刪除 **不會**把 ACTIVE session 改成 COMPLETED；該 session 維持 `ACTIVE` 且對 coach/athlete mutation 皆拒絕（athlete 已無法通過 application-user middleware）。
+結束訓練。授權同 start（athlete 本人或 **active relationship** coach）。COMPLETED 後 session status 與 `completed_at` 不可改、且不可再轉回 ACTIVE；既有 SetLog 僅可透過 PATCH 更正 actual 欄位，不可 POST 新增或 DELETE 刪除。SetLog 的 session/exercise/planned-set association、kind、set number、logger 等 metadata 不可變。Athlete 帳號刪除 **不會**把 ACTIVE session 改成 COMPLETED；該 session 維持 `ACTIVE` 且對 coach/athlete mutation 皆拒絕（athlete 已無法通過 application-user middleware）。
 
 Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含 `completedAt` — 理由同上，完整 detail 屬於 `GET /sessions/{sessionId}`）：
 
@@ -968,11 +968,11 @@ Normal SetLog insert 另外受 partial unique `(session_id, scheduled_workout_pl
 
 ### PATCH /set-logs/{setLogId}
 
-部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rpe`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上，且 session 必須 ACTIVE。
+部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rpe`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上（athlete 本人或 **active relationship** coach），且 session 必須 `ACTIVE` 或 `COMPLETED`。PATCH 不改 session status/`completed_at`。
 
 ### DELETE /set-logs/{setLogId}
 
-對應「刪掉上一組」。授權同上，session 必須 ACTIVE。刪除 normal log 後該 planned set 可再被 logging；新 SetLog 取得新的 server chronology `setNumber`，不重用被刪除的 number。
+對應「刪掉上一組」。授權同上，session 必須 ACTIVE；COMPLETED session 禁止 DELETE。刪除 normal log 後該 planned set 可再被 logging；新 SetLog 取得新的 server chronology `setNumber`，不重用被刪除的 number。
 
 ---
 
@@ -1038,7 +1038,8 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
 | `POST /sessions/{id}/set-logs` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 併發 claim 同一 planned set → `409`，見 §3.8 |
-| `PATCH/DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | — |
+| `PATCH /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | ACTIVE 或 COMPLETED 均可更正既有 log；不改 session status/`completed_at` 或 associations |
+| `DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE；COMPLETED → `409 CONFLICT` |
 
 矩陣即 service 層的測試清單：每列至少三個 test case（允許、拒絕、404 隱藏）。
 

@@ -401,10 +401,10 @@ The Coach can log SetLogs on the Athlete's behalf for the duration of the sessio
 ## **Acceptance Criteria**
 
 - A connected Coach can start a WorkoutSession for an Athlete's ScheduledWorkout; reopening an already-`ACTIVE` session resumes it rather than erroring (idempotent, matching the backend contract).
-- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf.
+- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf. The Athlete themself or a Coach with an active relationship may also edit an existing SetLog in an `ACTIVE` or `COMPLETED` session; completed sessions still prohibit adding or deleting SetLogs.
 - Each SetLog records which user logged it (`loggedByUserId`) — Coach or Athlete.
 - Coach and Athlete see the same session state if both are viewing it.
-- Once the session is `COMPLETED`, it is read-only for both Coach and Athlete.
+- Once the session is `COMPLETED`, its status and `completedAt` remain unchanged and its SetLog associations and metadata remain immutable. Existing SetLogs may still be corrected through edit only; adding or deleting SetLogs remains prohibited for both Coach and Athlete.
 - **No new backend endpoint is required.** This story exercises existing session/set-log authorization: a connected Coach has the same access as the Athlete themself (see the API contract's authorization matrix, §4).
 
 ---
@@ -520,6 +520,8 @@ Example:
 - `setNumber` is server-assigned actual chronology, not the planned-set association.
 - `loggedByUserId` is recorded.
 - Set persists after refresh.
+- Athlete self or a Coach with an active relationship can edit an existing SetLog in an `ACTIVE` or `COMPLETED` session; edits change only actual mutable fields and preserve session status/`completedAt` and all SetLog associations and metadata.
+- Completed sessions prohibit POST (add) and DELETE (remove) SetLog actions.
 - Invalid values are rejected.
 - Unrelated users cannot modify the session.
 
