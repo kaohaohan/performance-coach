@@ -51,12 +51,12 @@
 | Phase 0 — read-only inspection and approval | Done | Current UI, contract, backend gap, authorization, and working tree inspected; user approved the proposed plan. |
 | Planning — Task Doc | Done | Authored in the high-reasoning planning session before implementation sessions. |
 | Contract/specification updates | Done | Updated MVP, API, and frontend canonical specifications for PATCH-only edits in ACTIVE/COMPLETED sessions; POST/DELETE remain ACTIVE-only. |
-| Backend implementation | Done | Added PATCH service, route, omitted/null decoding, merged validation, authorization, and focused handler-shape tests. |
-| Frontend implementation | Not Started | Assigned to a separate GPT-5.6 Luna low-effort session after backend. |
-| Full verification and completion review | Not Started | Assigned to a separate GPT-5.6 Luna low-effort session. |
+| Backend implementation | Done | Added PATCH service, route, omitted/null decoding, merged validation, authorization, and completed-session integration coverage. |
+| Frontend implementation | Done | Inline completed-set editor, translations, and focused tests implemented. |
+| Full verification and completion review | Done | Web tests, task-scoped lint, webpack production build, all Go tests/vet, and local-DB workoutsession integration pass. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: In progress.
-- Deviations from plan: None.
-- Follow-ups: None currently.
+- Final status: Complete.
+- Deviations from plan: The default Turbopack build cannot bind its internal sandbox port, so the production compile was verified successfully with `npm run build -- --webpack`. Full-repository lint is currently polluted by an unrelated iOS task's generated `apps/web/ios/DerivedData`; linting all five task frontend files passes. `git diff --check` passes, and existing unrelated iOS and untracked files remain untouched.
+- Follow-ups: Exclude generated iOS DerivedData from repository-wide ESLint traversal in its owning task.
