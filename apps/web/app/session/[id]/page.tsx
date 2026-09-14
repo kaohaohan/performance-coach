@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 import { useLocale, useT, type Translate } from "@/lib/i18n";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
+import { editPayload, editValuesForLog } from "./set-log-edit";
 
 type PlannedSet = { scheduledWorkoutPlannedSetId: string; position: number; reps?: number; prescriptionNote?: string; load?: number; unit?: "kg" | "lb"; rpe?: number };
 type Plan = { sets: PlannedSet[] };
@@ -15,6 +16,7 @@ type SessionExercise = { scheduledWorkoutExerciseId: string; name: string; plan:
 type SessionDetail = { id: string; status: "ACTIVE" | "COMPLETED"; athlete: { id: string; name: string }; exercises: SessionExercise[] };
 type SetLogFormState = { load: string; unit: "kg" | "lb"; reps: string; rpe: string; submitting: boolean; error: string | null };
 type SetLogKind = "PLANNED" | "EXTRA";
+type EditFormState = SetLogFormState;
 
 // Loading the session, logging a set and completing the workout all fail
 // through the Go API, which explains its own refusals (a set logged against a
@@ -82,6 +84,7 @@ export default function SessionPage() {
   const [forms, setForms] = useState<Record<string, SetLogFormState>>({});
   const [selectedTargets, setSelectedTargets] = useState<Record<string, string>>({});
   const [extraOpen, setExtraOpen] = useState<Record<string, boolean>>({});
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const submittingFormKeys = useRef(new Set<string>());
   const [completing, setCompleting] = useState(false);
   const [completeError, setCompleteError] = useState<string | null>(null);
@@ -121,6 +124,29 @@ export default function SessionPage() {
       delete rest[key];
       return rest;
     });
+  }
+
+  function editKey(log: SetLog) { return `edit:${log.id}`; }
+  function beginEdit(log: SetLog) {
+    const key = editKey(log);
+    const values = editValuesForLog(log);
+    setEditingLogId(log.id);
+    setForms((previous) => ({ ...previous, [key]: { ...values, submitting: false, error: null } }));
+  }
+  function cancelEdit(log: SetLog) { setEditingLogId((current) => current === log.id ? null : current); clearForm(editKey(log)); }
+  async function handleEdit(log: SetLog, exerciseId: string) {
+    if (!idToken) return;
+    const key = editKey(log); const form = forms[key];
+    if (!form || form.submitting || submittingFormKeys.current.has(key)) return;
+    const payload = editPayload(form);
+    if ("error" in payload) { updateForm(key, form, { error: t(`athlete.session.${payload.error}Invalid` as never) }); return; }
+    submittingFormKeys.current.add(key); updateForm(key, form, { submitting: true, error: null });
+    try {
+      const updated = await apiFetch<SetLog>(idToken, `/api/v1/set-logs/${log.id}`, { method: "PATCH", body: payload });
+      setSession((previous) => previous === null ? previous : { ...previous, exercises: previous.exercises.map((exercise) => exercise.scheduledWorkoutExerciseId !== exerciseId ? exercise : { ...exercise, setLogs: exercise.setLogs.map((item) => item.id === log.id ? updated : item) }) });
+      setEditingLogId(null); clearForm(key);
+    } catch (error) { updateForm(key, form, { submitting: false, error: errorMessage(t, error, API_ERROR_POLICY) }); }
+    finally { submittingFormKeys.current.delete(key); }
   }
 
   function activeTarget(exercise: SessionExercise): PlannedSet | undefined {
@@ -260,7 +286,7 @@ export default function SessionPage() {
                 if (actual !== undefined) return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border border-emerald-200 bg-emerald-50/50 px-4 py-4">
                   <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setCompleted")} statusClass="bg-emerald-100 text-emerald-800" />
                   <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
-                  <Detail label={t("athlete.session.actual")} value={actualSummary(t, actual)} />
+                  {editingLogId === actual.id ? <EditLog form={getForm(editKey(actual), emptyForm())} onChange={(patch) => updateForm(editKey(actual), getForm(editKey(actual), emptyForm()), patch)} onSave={() => handleEdit(actual, exercise.scheduledWorkoutExerciseId)} onCancel={() => cancelEdit(actual)} /> : <button type="button" className="block w-full text-left" onClick={() => beginEdit(actual)}><Detail label={t("athlete.session.actual")} value={actualSummary(t, actual)} /></button>}
                   <p className="mt-2 text-xs font-medium text-emerald-800">{t("athlete.session.loggedNumber", { number: actual.setNumber })}</p>
                 </article>;
 
@@ -282,7 +308,7 @@ export default function SessionPage() {
 
             <div className="border-t border-slate-100 px-5 py-5">
               <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.extraSetsHeading")}</p><span className="text-sm font-semibold text-slate-500">{extras.length}</span></div>
-              {extras.length > 0 && <ul className="mt-3 space-y-2">{extras.map((log) => <li key={log.id} className="rounded-2xl bg-stone-50 px-4 py-3"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold text-slate-800">{actualSummary(t, log)}</p></li>)}</ul>}
+              {extras.length > 0 && <ul className="mt-3 space-y-2">{extras.map((log) => <li key={log.id} className="rounded-2xl bg-stone-50 px-4 py-3">{editingLogId === log.id ? <EditLog form={getForm(editKey(log), emptyForm())} onChange={(patch) => updateForm(editKey(log), getForm(editKey(log), emptyForm()), patch)} onSave={() => handleEdit(log, exercise.scheduledWorkoutExerciseId)} onCancel={() => cancelEdit(log)} /> : <button type="button" className="block w-full text-left" onClick={() => beginEdit(log)}><p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold text-slate-800">{actualSummary(t, log)}</p></button>}</li>)}</ul>}
               {isActive && <div className="mt-4">
                 {!showExtraForm ? <button type="button" onClick={() => setExtraOpen((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: true }))} className={`min-h-12 w-full rounded-2xl px-4 text-sm font-bold ${currentTarget === undefined ? "bg-slate-950 text-white hover:bg-slate-800" : "border border-slate-300 bg-white text-slate-800 hover:bg-slate-50"}`}>{t("athlete.session.addExtraSet")}</button> :
                   <div className="rounded-2xl border border-slate-200 bg-stone-50 p-4">
@@ -313,6 +339,11 @@ function CardHeading({ position, total, status, statusClass }: { position: numbe
 
 function Detail({ label, value }: { label: string; value: string }) {
   return <div className="mt-3"><p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{value}</p></div>;
+}
+
+function EditLog({ form, onChange, onSave, onCancel }: { form: EditFormState; onChange: (patch: Partial<EditFormState>) => void; onSave: () => void; onCancel: () => void }) {
+  const t = useT();
+  return <div><p className="text-sm font-bold text-slate-900">{t("athlete.session.editSet")}</p><SetLogFields form={form} onChange={onChange} /><div className="mt-3 grid grid-cols-2 gap-3"><button type="button" onClick={onCancel} disabled={form.submitting} className="min-h-12 rounded-xl border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 disabled:opacity-50">{t("athlete.session.cancelEdit")}</button><button type="button" onClick={onSave} disabled={form.submitting} className="min-h-12 rounded-xl bg-teal-600 px-3 text-sm font-bold text-white disabled:opacity-50">{form.submitting ? t("athlete.session.savingEdit") : t("athlete.session.saveEdit")}</button></div>{form.error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{form.error}</p>}</div>;
 }
 
 function SetLogFields({ form, onChange, textPrescription = false }: { form: SetLogFormState; onChange: (patch: Partial<SetLogFormState>) => void; textPrescription?: boolean }) {

@@ -88,4 +88,8 @@ export const athlete: AthleteMessages = {
   "athlete.session.repsInvalid": "次數必須是大於或等於 1 的整數。",
   "athlete.session.loadInvalid": "重量必須是大於或等於 0 的數字。",
   "athlete.session.rpeInvalid": "實際 RPE 必須介於 1 到 10 之間。",
+  "athlete.session.editSet": "編輯組數",
+  "athlete.session.cancelEdit": "取消",
+  "athlete.session.saveEdit": "儲存",
+  "athlete.session.savingEdit": "儲存中…",
 };

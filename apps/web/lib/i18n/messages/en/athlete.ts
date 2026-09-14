@@ -98,6 +98,10 @@ export const athlete = {
   "athlete.session.repsInvalid": "Reps must be a whole number ≥ 1.",
   "athlete.session.loadInvalid": "Load must be a number ≥ 0.",
   "athlete.session.rpeInvalid": "Actual RPE must be between 1 and 10.",
+  "athlete.session.editSet": "Edit set",
+  "athlete.session.cancelEdit": "Cancel",
+  "athlete.session.saveEdit": "Save",
+  "athlete.session.savingEdit": "Saving…",
 } as const;
 
 export type AthleteMessages = Record<keyof typeof athlete, string>;
