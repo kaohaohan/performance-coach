@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 )
 
 // Session is the response shape for POST /scheduled-workouts/{id}/session
@@ -58,6 +59,11 @@ var ErrNotFound = errors.New("workoutsession: scheduled workout not found or not
 // Complete was called on a session that is already COMPLETED. Neither
 // case reactivates or mutates it. Handlers should map it to 409 CONFLICT.
 var ErrCompleted = errors.New("workoutsession: session already completed")
+
+// ErrConflict covers stale structural operations: a non-active session,
+// removed predecessor, or an actor attempting to modify somebody else's
+// athlete-added exercise.
+var ErrConflict = errors.New("workoutsession: session exercise adjustment conflicts with current state")
 
 // ValidationError indicates the request failed shape validation before any
 // DB access. Handlers should map it to 400 INVALID_ARGUMENT.
@@ -299,11 +305,32 @@ type SetLog struct {
 // performed against it during this session. SetLogs is never null — an
 // exercise with zero recorded sets still appears with an empty array.
 type Exercise struct {
-	ScheduledWorkoutExerciseID string   `json:"scheduledWorkoutExerciseId"`
-	Name                       string   `json:"name"`
-	Plan                       Plan     `json:"plan"`
-	CoachCue                   *string  `json:"coachCue,omitempty"`
-	SetLogs                    []SetLog `json:"setLogs"`
+	ScheduledWorkoutExerciseID         string   `json:"scheduledWorkoutExerciseId"`
+	ExerciseID                         string   `json:"exerciseId"`
+	Name                               string   `json:"name"`
+	Plan                               Plan     `json:"plan"`
+	CoachCue                           *string  `json:"coachCue,omitempty"`
+	SetLogs                            []SetLog `json:"setLogs"`
+	Origin                             string   `json:"origin"`
+	AddedByUserID                      *string  `json:"addedByUserId,omitempty"`
+	RemovedAt                          *string  `json:"removedAt,omitempty"`
+	RemovedByUserID                    *string  `json:"removedByUserId,omitempty"`
+	ReplacesScheduledWorkoutExerciseID *string  `json:"replacesScheduledWorkoutExerciseId,omitempty"`
+}
+
+// ExerciseOption is a visible Exercise usable in an active-session addition.
+type ExerciseOption struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Scope string `json:"scope"`
+}
+
+// AdjustExerciseInput reuses the canonical complete plan representation.
+type AdjustExerciseInput struct {
+	ExerciseID                         string
+	Plan                               prescription.Plan
+	CoachCue                           *string
+	ReplacesScheduledWorkoutExerciseID *string
 }
 
 // SessionDetail is the response shape for GET /sessions/{sessionId}
@@ -443,6 +470,176 @@ func hasActiveRelationship(ctx context.Context, q querier, coachID, athleteID st
 	return true, nil
 }
 
+// ListExerciseOptions returns only the system catalog and the scheduled
+// workout coach's private catalog. It deliberately does not let an athlete
+// discover or create identities outside that bounded library.
+func ListExerciseOptions(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID, rawQuery string) ([]ExerciseOption, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return nil, &ValidationError{Message: "sessionId must be a valid UUID"}
+	}
+	h, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	q := strings.TrimSpace(rawQuery)
+	rows, err := pool.Query(ctx, `SELECT e.id, e.name, CASE WHEN e.owner_coach_id IS NULL THEN 'SYSTEM' ELSE 'PRIVATE' END
+		FROM exercises e JOIN scheduled_workouts sw ON sw.id = $1
+		WHERE (e.owner_coach_id IS NULL OR e.owner_coach_id = sw.coach_id)
+		AND ($2 = '' OR strpos(lower(e.name), lower($2)) > 0)
+		ORDER BY e.owner_coach_id IS NOT NULL, lower(e.name)`, h.scheduledWorkoutID, q)
+	if err != nil {
+		return nil, fmt.Errorf("workoutsession: list exercise options: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ExerciseOption, 0)
+	for rows.Next() {
+		var item ExerciseOption
+		if err := rows.Scan(&item.ID, &item.Name, &item.Scope); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// AdjustExercise appends a fully-resolved frozen prescription, optionally
+// replacing one active row. The session row lock serializes completion, set
+// logging, and structural changes.
+func AdjustExercise(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID string, input AdjustExerciseInput) (Exercise, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return Exercise{}, &ValidationError{Message: "sessionId must be a valid UUID"}
+	}
+	if _, err := uuid.Parse(input.ExerciseID); err != nil {
+		return Exercise{}, &ValidationError{Message: "exerciseId must be a valid UUID"}
+	}
+	if input.ReplacesScheduledWorkoutExerciseID != nil {
+		if _, err := uuid.Parse(*input.ReplacesScheduledWorkoutExerciseID); err != nil {
+			return Exercise{}, &ValidationError{Message: "replacesScheduledWorkoutExerciseId must be a valid UUID"}
+		}
+	}
+	sets, err := prescription.Resolve(input.Plan)
+	if err != nil {
+		return Exercise{}, &ValidationError{Message: err.Error()}
+	}
+	h, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, h.athleteID); err != nil {
+		return Exercise{}, err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return Exercise{}, fmt.Errorf("workoutsession: begin adjustment: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status FROM workout_sessions WHERE id = $1 FOR UPDATE`, sessionID).Scan(&status); err != nil {
+		return Exercise{}, err
+	}
+	if status != "ACTIVE" {
+		return Exercise{}, ErrConflict
+	}
+	var exerciseName string
+	err = tx.QueryRow(ctx, `SELECT e.name FROM exercises e JOIN scheduled_workouts sw ON sw.id = $1 WHERE e.id = $2 AND (e.owner_coach_id IS NULL OR e.owner_coach_id = sw.coach_id)`, h.scheduledWorkoutID, input.ExerciseID).Scan(&exerciseName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Exercise{}, &ValidationError{Message: "exerciseId is not available for this session"}
+	}
+	if err != nil {
+		return Exercise{}, err
+	}
+	position := 0
+	if input.ReplacesScheduledWorkoutExerciseID != nil {
+		var origin, addedBy string
+		err = tx.QueryRow(ctx, `SELECT position, origin, COALESCE(added_by_user_id::text, '') FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2 AND removed_at IS NULL FOR UPDATE`, *input.ReplacesScheduledWorkoutExerciseID, h.scheduledWorkoutID).Scan(&position, &origin, &addedBy)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Exercise{}, ErrConflict
+		}
+		if err != nil {
+			return Exercise{}, err
+		}
+		if caller.Role == "ATHLETE" && (origin != "ATHLETE_ADDED" || addedBy != caller.ID) {
+			return Exercise{}, ErrConflict
+		}
+		if _, err := tx.Exec(ctx, `UPDATE scheduled_workout_exercises SET removed_at = now(), removed_by_user_id = $1 WHERE id = $2`, caller.ID, *input.ReplacesScheduledWorkoutExerciseID); err != nil {
+			return Exercise{}, err
+		}
+	} else {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(position), 0) + 1 FROM scheduled_workout_exercises WHERE scheduled_workout_id = $1 AND removed_at IS NULL`, h.scheduledWorkoutID).Scan(&position); err != nil {
+			return Exercise{}, err
+		}
+	}
+	origin := "COACH_ADDED"
+	if caller.Role == "ATHLETE" {
+		origin = "ATHLETE_ADDED"
+	}
+	id := uuid.NewString()
+	if _, err := tx.Exec(ctx, `INSERT INTO scheduled_workout_exercises (id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, coach_cue, position, origin, added_by_user_id, replaces_scheduled_workout_exercise_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, id, h.scheduledWorkoutID, input.ExerciseID, exerciseName, input.Plan.Defaults.Unit, input.Plan.SetCount, input.Plan.Defaults.Reps, input.Plan.Defaults.PrescriptionNote, input.Plan.Defaults.RPE, input.CoachCue, position, origin, caller.ID, input.ReplacesScheduledWorkoutExerciseID); err != nil {
+		return Exercise{}, err
+	}
+	plan := make([]PlannedSet, 0, len(sets))
+	for _, set := range sets {
+		setID := uuid.NewString()
+		if _, err := tx.Exec(ctx, `INSERT INTO scheduled_workout_planned_sets (id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rpe) VALUES ($1,$2,$3,$4,$5,$6,$7)`, setID, id, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RPE); err != nil {
+			return Exercise{}, err
+		}
+		plan = append(plan, PlannedSet{ScheduledWorkoutPlannedSetID: setID, Position: set.Position, Reps: set.Reps, PrescriptionNote: set.PrescriptionNote, Load: set.Load, Unit: set.Unit, RPE: set.RPE})
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Exercise{}, err
+	}
+	return Exercise{ScheduledWorkoutExerciseID: id, ExerciseID: input.ExerciseID, Name: exerciseName, Plan: Plan{Sets: plan}, CoachCue: input.CoachCue, SetLogs: []SetLog{}, Origin: origin, AddedByUserID: &caller.ID, ReplacesScheduledWorkoutExerciseID: input.ReplacesScheduledWorkoutExerciseID}, nil
+}
+
+func RemoveExercise(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID, exerciseID string) (Exercise, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return Exercise{}, &ValidationError{Message: "sessionId must be a valid UUID"}
+	}
+	if _, err := uuid.Parse(exerciseID); err != nil {
+		return Exercise{}, &ValidationError{Message: "scheduledWorkoutExerciseId must be a valid UUID"}
+	}
+	h, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, h.athleteID); err != nil {
+		return Exercise{}, err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return Exercise{}, err
+	}
+	defer tx.Rollback(ctx)
+	var status, origin, addedBy string
+	var position int
+	err = tx.QueryRow(ctx, `SELECT ws.status,swe.origin,COALESCE(swe.added_by_user_id::text,''),swe.position FROM workout_sessions ws JOIN scheduled_workout_exercises swe ON swe.scheduled_workout_id=ws.scheduled_workout_id WHERE ws.id=$1 AND swe.id=$2 AND swe.removed_at IS NULL FOR UPDATE OF ws,swe`, sessionID, exerciseID).Scan(&status, &origin, &addedBy, &position)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Exercise{}, ErrConflict
+	}
+	if err != nil {
+		return Exercise{}, err
+	}
+	if status != "ACTIVE" || (caller.Role == "ATHLETE" && (origin != "ATHLETE_ADDED" || addedBy != caller.ID)) {
+		return Exercise{}, ErrConflict
+	}
+	if _, err = tx.Exec(ctx, `UPDATE scheduled_workout_exercises SET removed_at=now(),removed_by_user_id=$1 WHERE id=$2`, caller.ID, exerciseID); err != nil {
+		return Exercise{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Exercise{}, err
+	}
+	detail, err := Get(ctx, pool, caller, sessionID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	for _, ex := range detail.Exercises {
+		if ex.ScheduledWorkoutExerciseID == exerciseID {
+			return ex, nil
+		}
+	}
+	return Exercise{}, ErrConflict
+}
+
 // loadExercisesWithSetLogs returns scheduledWorkoutID's snapshot exercises,
 // canonical planned targets, and actual logs recorded during sessionID.
 // Planned targets and actual logs deliberately use separate queries: joining
@@ -466,14 +663,16 @@ func loadExercisesWithSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID
 // target_* compatibility columns on scheduled_workout_exercises are not read.
 func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWorkoutID string) ([]Exercise, map[string]*Exercise, error) {
 	const query = `
-		SELECT swe.id, swe.exercise_name, swe.coach_cue,
+		SELECT swe.id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.origin,
+		       swe.added_by_user_id::text, swe.removed_at::text, swe.removed_by_user_id::text,
+		       swe.replaces_scheduled_workout_exercise_id::text,
 		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
 		       p.target_rpe
 		FROM scheduled_workout_exercises swe
 		JOIN scheduled_workout_planned_sets p ON p.scheduled_workout_exercise_id = swe.id
 		WHERE swe.scheduled_workout_id = $1
-		ORDER BY swe.position, p.planned_position`
+		ORDER BY swe.removed_at IS NOT NULL, swe.position, p.planned_position`
 
 	rows, err := pool.Query(ctx, query, scheduledWorkoutID)
 	if err != nil {
@@ -485,12 +684,15 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 	byID := make(map[string]*Exercise)
 	for rows.Next() {
 		var (
-			swExerciseID, exerciseName string
-			coachCue                   *string
-			plannedSet                 PlannedSet
+			swExerciseID, exerciseID, exerciseName                string
+			coachCue                                              *string
+			origin                                                string
+			addedByUserID, removedAt, removedByUserID, replacesID *string
+			plannedSet                                            PlannedSet
 		)
 		if err := rows.Scan(
-			&swExerciseID, &exerciseName, &coachCue,
+			&swExerciseID, &exerciseID, &exerciseName, &coachCue, &origin,
+			&addedByUserID, &removedAt, &removedByUserID, &replacesID,
 			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
 		); err != nil {
 			return nil, nil, fmt.Errorf("workoutsession: scan planned exercise row: %w", err)
@@ -499,11 +701,17 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 		ex, ok := byID[swExerciseID]
 		if !ok {
 			ex = &Exercise{
-				ScheduledWorkoutExerciseID: swExerciseID,
-				Name:                       exerciseName,
-				CoachCue:                   coachCue,
-				Plan:                       Plan{Sets: make([]PlannedSet, 0)},
-				SetLogs:                    make([]SetLog, 0),
+				ScheduledWorkoutExerciseID:         swExerciseID,
+				ExerciseID:                         exerciseID,
+				Name:                               exerciseName,
+				CoachCue:                           coachCue,
+				Plan:                               Plan{Sets: make([]PlannedSet, 0)},
+				SetLogs:                            make([]SetLog, 0),
+				Origin:                             origin,
+				AddedByUserID:                      addedByUserID,
+				RemovedAt:                          removedAt,
+				RemovedByUserID:                    removedByUserID,
+				ReplacesScheduledWorkoutExerciseID: replacesID,
 			}
 			byID[swExerciseID] = ex
 			order = append(order, swExerciseID)
@@ -872,7 +1080,7 @@ func CreateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 // scheduled_workout, not some other one (docs/go-backend-api-contract-v0.1.md
 // §3.8 rule 3).
 func scheduledWorkoutExerciseBelongsTo(ctx context.Context, pool *pgxpool.Pool, scheduledWorkoutExerciseID, scheduledWorkoutID string) (bool, error) {
-	const query = `SELECT 1 FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2`
+	const query = `SELECT 1 FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2 AND removed_at IS NULL`
 	var exists int
 	err := pool.QueryRow(ctx, query, scheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&exists)
 	if err != nil {
@@ -893,7 +1101,8 @@ func plannedSetBelongsToSessionExercise(ctx context.Context, pool *pgxpool.Pool,
 		JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
 		WHERE p.id = $1
 		  AND p.scheduled_workout_exercise_id = $2
-		  AND swe.scheduled_workout_id = $3`
+		  AND swe.scheduled_workout_id = $3
+		  AND swe.removed_at IS NULL`
 	var exists int
 	err := pool.QueryRow(ctx, query, plannedSetID, scheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&exists)
 	if err != nil {
@@ -930,6 +1139,10 @@ func plannedSetBelongsToSessionExercise(ctx context.Context, pool *pgxpool.Pool,
 // setNumber race.
 func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID, scheduledWorkoutID string, input CreateSetLogInput) (SetLog, error) {
 	const statusForShare = `SELECT status FROM workout_sessions WHERE id = $1 FOR SHARE`
+	const lockActiveExercise = `
+		SELECT id FROM scheduled_workout_exercises
+		WHERE id = $1 AND scheduled_workout_id = $2 AND removed_at IS NULL
+		FOR SHARE`
 	const lockPlannedSet = `
 		SELECT p.planned_position
 		FROM scheduled_workout_planned_sets p
@@ -967,6 +1180,13 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 			}
 			if status != "ACTIVE" {
 				return SetLog{}, ErrSessionNotActive
+			}
+			var activeExerciseID string
+			if err := tx.QueryRow(ctx, lockActiveExercise, input.ScheduledWorkoutExerciseID, scheduledWorkoutID).Scan(&activeExerciseID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return SetLog{}, ErrExerciseNotInSession
+				}
+				return SetLog{}, fmt.Errorf("workoutsession: lock active exercise: %w", err)
 			}
 
 			var plannedPosition *int

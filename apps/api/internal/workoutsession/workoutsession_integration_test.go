@@ -360,6 +360,40 @@ func TestGetClassifiesLegacyLinkedAndExtraLogs(t *testing.T) {
 	}
 }
 
+func TestAdjustExercisePreservesRemovedHistoryAndRejectsStaleLogs(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	reps := 5
+	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " replace", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}}}})
+	old := setup.created.Exercises[0]
+	if _, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(old.ScheduledWorkoutExerciseID, old.Plan.Sets[0].ScheduledWorkoutPlannedSetID, nil, nil, intPtr(5), nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	added, err := workoutsession.AdjustExercise(ctx, integrationPool, setup.coach, setup.session.ID, workoutsession.AdjustExerciseInput{
+		ExerciseID:                         old.ExerciseID,
+		Plan:                               prescription.Plan{SetCount: 2, Defaults: prescription.Defaults{Reps: intPtr(8)}},
+		ReplacesScheduledWorkoutExerciseID: &old.ScheduledWorkoutExerciseID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.Origin != "COACH_ADDED" || added.ReplacesScheduledWorkoutExerciseID == nil || *added.ReplacesScheduledWorkoutExerciseID != old.ScheduledWorkoutExerciseID {
+		t.Fatalf("added exercise = %#v", added)
+	}
+	if _, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, extraInput(old.ScheduledWorkoutExerciseID, intPtr(5))); !errors.Is(err, workoutsession.ErrExerciseNotInSession) {
+		t.Fatalf("stale removed exercise log error = %v", err)
+	}
+
+	detail, err := workoutsession.Get(ctx, integrationPool, setup.athlete, setup.session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Exercises) != 2 || detail.Exercises[0].RemovedAt != nil || detail.Exercises[1].RemovedAt == nil || len(detail.Exercises[1].SetLogs) != 1 {
+		t.Fatalf("adjusted detail = %#v", detail.Exercises)
+	}
+}
+
 type sessionSetup struct {
 	coach   authn.User
 	athlete authn.User
