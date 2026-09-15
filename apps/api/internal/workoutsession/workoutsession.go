@@ -481,6 +481,12 @@ func ListExerciseOptions(ctx context.Context, pool *pgxpool.Pool, caller authn.U
 	if err != nil {
 		return nil, err
 	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, h.athleteID); err != nil {
+		return nil, err
+	}
+	if h.status != "ACTIVE" {
+		return nil, ErrConflict
+	}
 	q := strings.TrimSpace(rawQuery)
 	rows, err := pool.Query(ctx, `SELECT e.id, e.name, CASE WHEN e.owner_coach_id IS NULL THEN 'SYSTEM' ELSE 'PRIVATE' END
 		FROM exercises e JOIN scheduled_workouts sw ON sw.id = $1
