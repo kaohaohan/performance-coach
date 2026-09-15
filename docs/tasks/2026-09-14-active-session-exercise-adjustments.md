@@ -42,14 +42,14 @@
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | 1. Contracts and Task Doc | Done | Planning approved and canonical contracts updated 2026-09-14. |
-| 2. Migration and read models | Not Started | Use Terra, medium effort. |
-| 3. Session adjustment APIs | Not Started | Use Terra, medium effort. |
-| 4. Coach Calendar UI | Not Started | Use Terra, medium effort. |
-| 5. Athlete Session UI | Not Started | Use Terra, medium effort. |
-| 6. Verification | Not Started | Backend, frontend, migration, and diff checks. |
+| 2. Migration and read models | Done | Added provenance, soft-remove, replacement linkage, and active-position index. |
+| 3. Session adjustment APIs | Done | Added catalog, add/replace, remove, and stale SetLog protection. |
+| 4. Coach Calendar UI | Done | ACTIVE Edit enters the shared Session adjustment UI. |
+| 5. Athlete Session UI | Done | Added self-add, provenance treatment, replacement/removal flow, history, and refresh. |
+| 6. Verification | Done | Go suite, targeted TypeScript/lint, and diff checks passed; full Next build is environment-blocked. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status:
-- Deviations from plan:
-- Follow-ups:
+- Final status: Complete.
+- Deviations from plan: The shared Session adjustment UI uses a compact reps-first form with optional kg load and RPE rather than the Calendar Builder's full per-position override interface. The API accepts the complete prescription shape for future expansion.
+- Follow-ups: Add translated message keys for the compact adjustment controls; configure ESLint to exclude iOS DerivedData; investigate the local Turbopack worker-port restriction before relying on `next build` in this environment.
