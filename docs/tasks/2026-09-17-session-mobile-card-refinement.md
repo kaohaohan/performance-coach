@@ -31,8 +31,8 @@
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | 1. Baseline inspection and Task Doc | Done | Current `origin/staging` inspected; independent branch created. |
-| 2. Compact shared Session UI and translations | In Progress | No API or data-model changes. |
-| 3. Automated and viewport verification | Not Started | Check 375/390/430px and relevant interaction paths. |
+| 2. Compact shared Session UI and translations | Done | Kept existing Session state and set-log APIs intact. |
+| 3. Automated and viewport verification | In Progress | Lint and relevant unit tests pass; staging viewport pass remains. |
 | 4. Staging deployment verification | Not Started | Push only this branch and confirm the deployed commit/CI. |
 
 ## 5. Outcome (filled at completion)

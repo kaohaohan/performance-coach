@@ -389,13 +389,13 @@ export default function SessionPage() {
           // The API remains the authority. This is only an affordance gate
           // derived from the application /me response, never Firebase claims.
           const canRemove = isActive && (me?.role === "COACH" || (me?.role === "ATHLETE" && exercise.origin === "ATHLETE_ADDED" && exercise.addedByUserId === me.id));
-          return <section key={exercise.scheduledWorkoutExerciseId} className={`overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5 ${exercise.origin === "ATHLETE_ADDED" ? "border-2 border-amber-300" : ""}`}>
-            <div className="border-b border-slate-100 px-5 py-4">
-              <div className="flex items-center justify-between gap-3"><button type="button" aria-expanded={expanded} onClick={() => setExpandedExerciseId((current) => current === exercise.scheduledWorkoutExerciseId ? null : exercise.scheduledWorkoutExerciseId)} className="min-h-11 min-w-0 flex-1 text-left"><p className={`text-xs font-semibold uppercase tracking-[0.16em] ${exercise.origin === "ATHLETE_ADDED" ? "text-amber-800" : "text-slate-500"}`}>{exercise.origin === "ATHLETE_ADDED" ? t("athlete.session.athleteAdded") : exercise.origin === "COACH_ADDED" ? t("athlete.session.coachAdded") : t("athlete.session.exerciseEyebrow")}</p><h2 className="mt-1 break-words text-xl font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2><p className="mt-1 text-sm text-slate-500">{t("athlete.session.progressSummary", { completed: targets.filter((target) => actualForTarget(exercise, target) !== undefined).length, total: targets.length })}</p></button>{canRemove && <button type="button" onClick={() => handleRemoveExercise(exercise)} disabled={adjusting} className="min-h-10 rounded-lg border border-red-200 px-2 text-xs font-bold text-red-700 disabled:opacity-50">{t("common.remove")}</button>}</div>
-            </div>
+          return <section key={exercise.scheduledWorkoutExerciseId} className={`overflow-hidden rounded-2xl shadow-sm ring-1 ${exercise.origin === "ATHLETE_ADDED" ? "border-l-4 border-amber-700 bg-amber-50 ring-amber-200" : "bg-white ring-slate-950/5"}`}>
+            <button type="button" aria-expanded={expanded} onClick={() => setExpandedExerciseId((current) => current === exercise.scheduledWorkoutExerciseId ? null : exercise.scheduledWorkoutExerciseId)} className="block min-h-12 w-full px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-600">
+              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="break-words text-lg font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>{exercise.origin === "ATHLETE_ADDED" ? <span className="rounded-full bg-amber-700 px-2 py-0.5 text-[11px] font-bold text-white">{t("athlete.session.athleteAdded")}</span> : <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{exercise.origin === "COACH_ADDED" ? t("athlete.session.coachAdded") : t("athlete.session.exerciseEyebrow")}</span>}</div><p className="mt-1 text-sm text-slate-600">{t("athlete.session.progressSummary", { completed: targets.filter((target) => actualForTarget(exercise, target) !== undefined).length, total: targets.length })}</p></div><span className="mt-0.5 shrink-0 text-sm font-bold text-teal-700">{t(expanded ? "athlete.session.collapseExercise" : "athlete.session.expandExercise")} <span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span></span></div>
+            </button>
             {expanded && <>
-            {exercise.coachCue && <p className="mx-5 mt-4 rounded-xl bg-teal-50 px-3 py-2 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
-            <div className="space-y-3 px-4 py-4">
+            {exercise.coachCue && <p className="mx-4 border-t border-teal-100 pt-3 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
+            <div className="px-4 pb-3 pt-2">
               {targets.map((target) => {
                 const actual = actualForTarget(exercise, target);
                 const isCurrent = currentTarget?.scheduledWorkoutPlannedSetId === target.scheduledWorkoutPlannedSetId;
@@ -403,32 +403,30 @@ export default function SessionPage() {
                 const initial = formForPlannedSet(target);
                 const form = getForm(key, initial);
 
-                if (actual !== undefined) return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border border-emerald-200 bg-emerald-50/50 px-4 py-4">
-                  <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setCompleted")} statusClass="bg-emerald-100 text-emerald-800" />
-                  <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
-                  {editingLogId === actual.id ? <EditLog form={getForm(editKey(actual), emptyForm())} onChange={(patch) => updateForm(editKey(actual), getForm(editKey(actual), emptyForm()), patch)} onSave={() => handleEdit(actual, exercise.scheduledWorkoutExerciseId)} onCancel={() => cancelEdit(actual)} /> : <button type="button" className="block w-full text-left" onClick={() => beginEdit(actual)}><Detail label={t("athlete.session.actual")} value={actualSummary(t, actual)} /></button>}
-                  <p className="mt-2 text-xs font-medium text-emerald-800">{t("athlete.session.loggedNumber", { number: actual.setNumber })}</p>
+                if (actual !== undefined) return <article key={target.scheduledWorkoutPlannedSetId} className="border-b border-emerald-100 py-3 last:border-b-0">
+                  <div className="flex items-start justify-between gap-3"><CardHeading position={target.position} total={targets.length} status={t("athlete.session.setCompleted")} statusClass="bg-emerald-100 text-emerald-800" /><span className="shrink-0 text-xs font-bold text-emerald-800">{t("athlete.session.loggedNumber", { number: actual.setNumber })}</span></div>
+                  <p className="mt-1 text-sm font-medium text-slate-600"><span className="font-semibold text-slate-800">{t("athlete.session.target")}：</span>{targetSummary(t, target)}</p>
+                  {editingLogId === actual.id ? <div className="mt-3"><EditLog form={getForm(editKey(actual), emptyForm())} onChange={(patch) => updateForm(editKey(actual), getForm(editKey(actual), emptyForm()), patch)} onSave={() => handleEdit(actual, exercise.scheduledWorkoutExerciseId)} onCancel={() => cancelEdit(actual)} /></div> : <button type="button" className="mt-1 flex w-full items-center justify-between gap-3 text-left" onClick={() => beginEdit(actual)}><span className="text-sm font-semibold text-slate-800">{actualSummary(t, actual)}</span><span className="shrink-0 text-sm font-bold text-teal-700">{t("athlete.session.editSet")}</span></button>}
                 </article>;
 
-                if (isCurrent) return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border-2 border-teal-600 bg-teal-50/60 px-4 py-4 shadow-sm">
+                if (isCurrent) return <article key={target.scheduledWorkoutPlannedSetId} className="my-2 rounded-xl border-2 border-teal-600 bg-teal-50/60 px-3 py-3">
                   <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setNext")} statusClass="bg-teal-600 text-white" />
-                  <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
+                  <p className="mt-2 text-sm font-medium text-slate-700"><span className="font-semibold text-slate-900">{t("athlete.session.target")}：</span>{targetSummary(t, target)}</p>
                   <SetLogFields form={form} onChange={(patch) => updateForm(key, initial, patch)} textPrescription={target.prescriptionNote !== undefined} />
                   {form.error && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{form.error}</p>}
                   <button type="button" onClick={() => handleLogSet(exercise, "PLANNED", target)} disabled={form.submitting} className="mt-4 min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm hover:bg-teal-700 disabled:opacity-50">{form.submitting ? t("athlete.session.loggingSet") : t("athlete.session.logSet")}</button>
                 </article>;
 
-                return <article key={target.scheduledWorkoutPlannedSetId} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                  <CardHeading position={target.position} total={targets.length} status={t("athlete.session.setNotLogged")} statusClass="bg-slate-100 text-slate-600" />
-                  <Detail label={t("athlete.session.target")} value={targetSummary(t, target)} />
-                  {isActive && <button type="button" onClick={() => setSelectedTargets((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: target.scheduledWorkoutPlannedSetId }))} className="mt-3 min-h-11 rounded-xl px-3 text-sm font-bold text-teal-700 hover:bg-teal-50">{t("athlete.session.logThisSetInstead")}</button>}
+                return <article key={target.scheduledWorkoutPlannedSetId} className="flex items-center justify-between gap-3 border-b border-slate-200 py-3 last:border-b-0">
+                  <div className="min-w-0"><CardHeading position={target.position} total={targets.length} status={t("athlete.session.setNotLogged")} statusClass="bg-slate-100 text-slate-600" /><p className="mt-1 truncate text-sm font-medium text-slate-600">{targetSummary(t, target)}</p></div>
+                  {isActive && <button type="button" onClick={() => setSelectedTargets((previous) => ({ ...previous, [exercise.scheduledWorkoutExerciseId]: target.scheduledWorkoutPlannedSetId }))} className="min-h-11 shrink-0 rounded-lg px-2 text-sm font-bold text-teal-700 hover:bg-teal-50">{t("athlete.session.logThisSetInstead")}</button>}
                 </article>;
               })}
             </div>
 
             {isActive && currentTarget === undefined && nextExercise && <div className="px-4 pb-4"><button type="button" onClick={() => setExpandedExerciseId(nextExercise.scheduledWorkoutExerciseId)} className="min-h-12 w-full rounded-2xl bg-slate-950 px-4 text-sm font-bold text-white">{t("athlete.session.nextExercise")}</button></div>}
 
-            <div className="border-t border-slate-100 px-5 py-5">
+            <div className="border-t border-slate-200 px-4 py-4">
               <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.extraSetsHeading")}</p><span className="text-sm font-semibold text-slate-500">{extras.length}</span></div>
               {extras.length > 0 && <ul className="mt-3 space-y-2">{extras.map((log) => <li key={log.id} className="rounded-2xl bg-stone-50 px-4 py-3">{editingLogId === log.id ? <EditLog form={getForm(editKey(log), emptyForm())} onChange={(patch) => updateForm(editKey(log), getForm(editKey(log), emptyForm()), patch)} onSave={() => handleEdit(log, exercise.scheduledWorkoutExerciseId)} onCancel={() => cancelEdit(log)} /> : <button type="button" className="block w-full text-left" onClick={() => beginEdit(log)}><p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold text-slate-800">{actualSummary(t, log)}</p></button>}</li>)}</ul>}
               {isActive && <div className="mt-4">
@@ -440,6 +438,7 @@ export default function SessionPage() {
                     <button type="button" onClick={() => handleLogSet(exercise, "EXTRA")} disabled={extraForm.submitting} className="mt-4 min-h-14 w-full rounded-2xl bg-slate-950 px-5 text-base font-bold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50">{extraForm.submitting ? t("athlete.session.loggingSet") : t("athlete.session.logExtraSet")}</button>
                   </div>}
               </div>}
+              {canRemove && <button type="button" onClick={() => handleRemoveExercise(exercise)} disabled={adjusting} className="mt-4 min-h-11 w-full rounded-xl border border-red-200 bg-white px-3 text-sm font-bold text-red-700 disabled:opacity-50">{t("common.remove")}</button>}
             </div>
             </>}
           </section>;
@@ -459,10 +458,6 @@ export default function SessionPage() {
 function CardHeading({ position, total, status, statusClass }: { position: number; total: number; status: string; statusClass: string }) {
   const t = useT();
   return <div className="flex items-center justify-between gap-3"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-600">{t("athlete.set.labelOfTotal", { position, total })}</p><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${statusClass}`}>{status}</span></div>;
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return <div className="mt-3"><p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{value}</p></div>;
 }
 
 function EditLog({ form, onChange, onSave, onCancel }: { form: EditFormState; onChange: (patch: Partial<EditFormState>) => void; onSave: () => void; onCancel: () => void }) {
