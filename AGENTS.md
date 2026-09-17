@@ -17,8 +17,9 @@ Before implementing any feature, read only:
 3. docs/go-backend-api-contract-v0.1.md when backend/API work is involved
 4. docs/database-schema-relationships.md when data/schema work is involved
 5. docs/frontend-ui-spec.md when frontend/UX work is involved
-6. The active Task Doc (`docs/tasks/YYYY-MM-DD-<slug>.md`, see §9) once one exists for the task
-7. Files directly related to the task being modified
+6. README.md, "Testing a Deployed (Non-Local) Environment" section, before pointing anyone at any Vercel URL to test against — a per-branch/per-PR preview URL is not on Firebase's Authorized domains list and will fail Google sign-in
+7. The active Task Doc (`docs/tasks/YYYY-MM-DD-<slug>.md`, see §9) once one exists for the task
+8. Files directly related to the task being modified
 
 Do not scan the whole repository unless required.
 
