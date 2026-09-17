@@ -720,6 +720,7 @@ export default function CoachCalendarPage() {
   const [editTarget, setEditTarget] = useState<DraftEditTarget | null>(null);
   const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
   const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [editConflictSessionId, setEditConflictSessionId] = useState<string | null>(null);
   const [saveChangesSuccess, setSaveChangesSuccess] = useState(false);
 
   // Is there authoring worth preserving? Deliberately independent of
@@ -1982,10 +1983,15 @@ export default function CoachCalendarPage() {
   async function openEditWorkout(assignment: ScheduledWorkoutSummary) {
     if (!idToken || programmingControlsDisabled || editLoadingId) return;
     setEditLoadError(null);
+    setEditConflictSessionId(null);
     setEditLoadingId(assignment.id);
     try {
       const detail = await apiFetch<ScheduledWorkoutDetail>(idToken, `/api/v1/scheduled-workouts/${assignment.id}`);
       if (detail.session !== null) {
+        if (detail.session.status === "ACTIVE") {
+          router.push(`/session/${detail.session.id}`);
+          return;
+        }
         setEditLoadError(t("calendar.errors.alreadyStartedEdit"));
         await refetchAssignments();
         return;
@@ -2051,6 +2057,10 @@ export default function CoachCalendarPage() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setBuildError(t("calendar.errors.alreadyStartedEdit"));
+        try {
+          const detail = await apiFetch<ScheduledWorkoutDetail>(idToken, `/api/v1/scheduled-workouts/${editTarget.scheduledWorkoutId}`);
+          setEditConflictSessionId(detail.session?.status === "ACTIVE" ? detail.session.id : null);
+        } catch { setEditConflictSessionId(null); }
         await refetchAssignments();
       } else {
         setBuildError(describeError(t, err));
@@ -2166,7 +2176,7 @@ export default function CoachCalendarPage() {
                   {shouldOfferRetry({ buildStatus, pendingAssignment }) ? <div className="grid gap-3">
                     <Notice tone="error"><span className="font-bold">{t("calendar.build.createdNotAssigned")}</span>{buildError ? ` ${buildError}` : ""}</Notice>
                     <button type="button" onClick={handleRetryAssignment} className="min-h-14 w-full rounded-2xl bg-amber-500 px-5 text-base font-bold text-slate-950 shadow-sm transition hover:bg-amber-400">{t("calendar.build.retryAssignment")}</button>
-                  </div> : buildError ? <Notice tone="error">{buildError}</Notice> : null}
+                  </div> : buildError ? <div className="grid gap-3"><Notice tone="error">{buildError}</Notice>{editConflictSessionId && <button type="button" onClick={() => router.push(`/session/${editConflictSessionId}`)} className="min-h-12 rounded-xl border border-teal-300 px-4 text-sm font-bold text-teal-800">{t("calendar.resume")}</button>}</div> : null}
 
                   <button type="submit" disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                     {editTarget

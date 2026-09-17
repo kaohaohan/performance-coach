@@ -369,6 +369,17 @@ func TestAdjustExercisePreservesRemovedHistoryAndRejectsStaleLogs(t *testing.T) 
 	if _, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(old.ScheduledWorkoutExerciseID, old.Plan.Sets[0].ScheduledWorkoutPlannedSetID, nil, nil, intPtr(5), nil)); err != nil {
 		t.Fatal(err)
 	}
+	// Athletes may append their own exercises, but must never replace even a
+	// row they could otherwise remove. The rejected request is non-mutating.
+	if _, err := workoutsession.AdjustExercise(ctx, integrationPool, setup.athlete, setup.session.ID, workoutsession.AdjustExerciseInput{
+		ExerciseID: old.ExerciseID, Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: intPtr(8)}}, ReplacesScheduledWorkoutExerciseID: &old.ScheduledWorkoutExerciseID,
+	}); !errors.Is(err, workoutsession.ErrConflict) {
+		t.Fatalf("athlete replacement error = %v, want ErrConflict", err)
+	}
+	var activeCount int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM scheduled_workout_exercises WHERE scheduled_workout_id = $1 AND removed_at IS NULL`, setup.created.ID).Scan(&activeCount); err != nil || activeCount != 1 {
+		t.Fatalf("rejected athlete replacement changed rows: count=%d err=%v", activeCount, err)
+	}
 
 	added, err := workoutsession.AdjustExercise(ctx, integrationPool, setup.coach, setup.session.ID, workoutsession.AdjustExerciseInput{
 		ExerciseID:                         old.ExerciseID,

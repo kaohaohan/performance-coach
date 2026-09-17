@@ -14,6 +14,7 @@ type Plan = { sets: PlannedSet[] };
 type SetLog = { id: string; kind: "PLANNED" | "EXTRA"; scheduledWorkoutPlannedSetId?: string; plannedPosition?: number; setNumber: number; load?: number; unit?: "kg" | "lb"; reps: number; rpe?: number; loggedByUserId: string };
 type SessionExercise = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; coachCue?: string; setLogs: SetLog[]; origin: "ASSIGNED" | "COACH_ADDED" | "ATHLETE_ADDED"; addedByUserId?: string; removedAt?: string; removedByUserId?: string; replacesScheduledWorkoutExerciseId?: string };
 type ExerciseOption = { id: string; name: string; scope: "SYSTEM" | "PRIVATE" };
+type Me = { id: string; role: "COACH" | "ATHLETE" };
 type SessionDetail = { id: string; status: "ACTIVE" | "COMPLETED"; athlete: { id: string; name: string }; exercises: SessionExercise[] };
 type SetLogFormState = { load: string; unit: "kg" | "lb"; reps: string; rpe: string; submitting: boolean; error: string | null };
 type SetLogKind = "PLANNED" | "EXTRA";
@@ -81,6 +82,7 @@ export default function SessionPage() {
   const t = useT();
   const { locale } = useLocale();
   const [session, setSession] = useState<SessionDetail | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [forms, setForms] = useState<Record<string, SetLogFormState>>({});
   const [selectedTargets, setSelectedTargets] = useState<Record<string, string>>({});
@@ -99,10 +101,32 @@ export default function SessionPage() {
   const [addedRpe, setAddedRpe] = useState("");
   const [adjusting, setAdjusting] = useState(false);
   const [adjustError, setAdjustError] = useState<string | null>(null);
+  const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null);
+  const initiallyExpanded = useRef(false);
 
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
   }, [authLoading, user, router]);
+
+  // Firebase identifies the browser user, but the API owns application role
+  // and database user identity. Until this succeeds, structural controls stay
+  // absent rather than guessing from the route or Firebase claims.
+  useEffect(() => {
+    if (!idToken) return;
+    let cancelled = false;
+    void apiFetch<Me>(idToken, "/api/v1/me")
+      .then((profile) => { if (!cancelled) setMe(profile); })
+      .catch(() => { if (!cancelled) setMe(null); });
+    return () => { cancelled = true; };
+  }, [idToken]);
+
+  function applySession(next: SessionDetail) {
+    setSession(next);
+    if (!initiallyExpanded.current && next.status === "ACTIVE") {
+      initiallyExpanded.current = true;
+      setExpandedExerciseId(next.exercises.filter((exercise) => exercise.removedAt === undefined).find((exercise) => firstIncompleteTarget(exercise) !== undefined)?.scheduledWorkoutExerciseId ?? null);
+    }
+  }
 
   useEffect(() => {
     if (!idToken) return;
@@ -112,7 +136,7 @@ export default function SessionPage() {
         const response = await apiFetch<SessionDetail>(idToken, `/api/v1/sessions/${sessionId}`);
         if (!cancelled) {
           setLoadError(null);
-          setSession(response);
+          applySession(response);
         }
       } catch (error) {
         if (!cancelled) setLoadError(errorMessage(t, error, API_ERROR_POLICY));
@@ -127,7 +151,7 @@ export default function SessionPage() {
     const refresh = async () => {
       if (refreshing || document.visibilityState !== "visible") return;
       refreshing = true;
-      try { setSession(await apiFetch<SessionDetail>(idToken, `/api/v1/sessions/${sessionId}`)); } catch { /* retain last successful view */ }
+      try { applySession(await apiFetch<SessionDetail>(idToken, `/api/v1/sessions/${sessionId}`)); } catch { /* retain last successful view */ }
       finally { refreshing = false; }
     };
     const interval = window.setInterval(() => { void refresh(); }, 15000);
@@ -275,7 +299,7 @@ export default function SessionPage() {
   async function refreshSession() {
     if (!idToken) return;
     const response = await apiFetch<SessionDetail>(idToken, `/api/v1/sessions/${sessionId}`);
-    setSession(response);
+    applySession(response);
   }
 
   async function handleAddExercise() {
@@ -283,7 +307,7 @@ export default function SessionPage() {
     const setCount = Number(addedSets);
     const reps = Number(addedReps);
     if (!Number.isInteger(setCount) || setCount < 1 || !Number.isInteger(reps) || reps < 1) {
-      setAdjustError("請輸入有效的組數與次數。");
+      setAdjustError(t("athlete.session.adjustSetsRepsInvalid"));
       return;
     }
     setAdjusting(true);
@@ -292,12 +316,13 @@ export default function SessionPage() {
       const defaults: { reps: number; load?: number; unit?: "kg"; rpe?: number } = { reps };
       if (addedLoad.trim() !== "") { defaults.load = Number(addedLoad); defaults.unit = "kg"; }
       if (addedRpe.trim() !== "") defaults.rpe = Number(addedRpe);
-      if ((defaults.load !== undefined && (!Number.isFinite(defaults.load) || defaults.load < 0)) || (defaults.rpe !== undefined && (!Number.isFinite(defaults.rpe) || defaults.rpe < 1 || defaults.rpe > 10))) { setAdjustError("重量或 RPE 格式不正確。"); return; }
-      await apiFetch(idToken, `/api/v1/sessions/${sessionId}/exercises`, {
+      if ((defaults.load !== undefined && (!Number.isFinite(defaults.load) || defaults.load < 0)) || (defaults.rpe !== undefined && (!Number.isFinite(defaults.rpe) || defaults.rpe < 1 || defaults.rpe > 10))) { setAdjustError(t("athlete.session.adjustNumbersInvalid")); return; }
+      const added = await apiFetch<SessionExercise>(idToken, `/api/v1/sessions/${sessionId}/exercises`, {
         method: "POST",
         body: { exerciseId: selectedExerciseId, plan: { setCount, defaults, overrides: [] }, ...(replaceExerciseId ? { replacesScheduledWorkoutExerciseId: replaceExerciseId } : {}) },
       });
       setAdjustOpen(false);
+      setExpandedExerciseId(added.scheduledWorkoutExerciseId);
       await refreshSession();
     } catch (error) {
       setAdjustError(errorMessage(t, error, API_ERROR_POLICY));
@@ -328,6 +353,8 @@ export default function SessionPage() {
   const isActive = session.status === "ACTIVE";
   const activeExercises = session.exercises.filter((exercise) => exercise.removedAt === undefined);
   const removedExercises = session.exercises.filter((exercise) => exercise.removedAt !== undefined);
+  const canManageExercises = isActive && me !== null;
+  const canReplace = me?.role === "COACH";
   return (
     <main className="min-h-screen bg-stone-100 pb-[max(2rem,env(safe-area-inset-bottom))] text-slate-900">
       <header className="bg-slate-950 px-5 pb-8 pt-[max(1.5rem,env(safe-area-inset-top))] text-white">
@@ -344,11 +371,11 @@ export default function SessionPage() {
       </header>
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-4 px-4">
-        {isActive && <section className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-950/5">
-          <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-bold text-slate-900">調整進行中的課表</p><p className="mt-1 text-sm text-slate-500">可新增動作；已存在的處方不會被覆寫。</p></div><button type="button" onClick={() => { setAdjustOpen((open) => !open); setAdjustError(null); }} className="min-h-11 rounded-xl bg-teal-600 px-3 text-sm font-bold text-white">新增動作</button></div>
-          {adjustOpen && <div className="mt-4 grid gap-3 rounded-2xl bg-amber-50 p-3 ring-1 ring-amber-600/15"><label className="grid gap-1 text-sm font-bold text-slate-700">動作<select value={selectedExerciseId} onChange={(event) => setSelectedExerciseId(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 font-semibold">{exerciseOptions.map((option) => <option key={option.id} value={option.id}>{localizeExerciseName(option.name, locale)}{option.scope === "PRIVATE" ? " · 教練" : ""}</option>)}</select></label><label className="grid gap-1 text-sm font-bold text-slate-700">取代現有動作（選填）<select value={replaceExerciseId} onChange={(event) => setReplaceExerciseId(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 font-semibold"><option value="">不取代，直接新增</option>{activeExercises.map((exercise) => <option key={exercise.scheduledWorkoutExerciseId} value={exercise.scheduledWorkoutExerciseId}>{localizeExerciseName(exercise.name, locale)}</option>)}</select></label><div className="grid grid-cols-2 gap-3"><label className="grid gap-1 text-sm font-bold text-slate-700">組數<input type="number" min="1" value={addedSets} onChange={(event) => setAddedSets(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label><label className="grid gap-1 text-sm font-bold text-slate-700">每組次數<input type="number" min="1" value={addedReps} onChange={(event) => setAddedReps(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label><label className="grid gap-1 text-sm font-bold text-slate-700">重量（選填）<input type="number" min="0" value={addedLoad} onChange={(event) => setAddedLoad(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label><label className="grid gap-1 text-sm font-bold text-slate-700">RPE（選填）<input type="number" min="1" max="10" step="0.5" value={addedRpe} onChange={(event) => setAddedRpe(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label></div>{adjustError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{adjustError}</p>}<button type="button" onClick={handleAddExercise} disabled={adjusting || !selectedExerciseId} className="min-h-12 rounded-xl bg-amber-500 px-4 text-sm font-bold text-amber-950 disabled:opacity-50">{adjusting ? "儲存中…" : replaceExerciseId ? "取代並加入" : "加入本次訓練"}</button></div>}
+        {canManageExercises && <section className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-950/5">
+          <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-bold text-slate-900">{t("athlete.session.adjustHeading")}</p><p className="mt-1 text-sm text-slate-500">{t("athlete.session.adjustHint")}</p></div><button type="button" onClick={() => { setAdjustOpen(true); setAdjustError(null); setReplaceExerciseId(""); }} className="min-h-11 rounded-xl bg-teal-600 px-3 text-sm font-bold text-white">{t(me.role === "ATHLETE" ? "athlete.session.addOwnExercise" : "athlete.session.addExercise")}</button></div>
+          {adjustOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center" role="presentation" onClick={() => !adjusting && setAdjustOpen(false)}><div role="dialog" aria-modal="true" aria-label={t("athlete.session.addExercise")} onClick={(event) => event.stopPropagation()} className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl"><div className="flex items-center justify-between gap-3"><h2 className="text-lg font-bold">{t(me.role === "ATHLETE" ? "athlete.session.addOwnExercise" : "athlete.session.addExercise")}</h2><button type="button" onClick={() => setAdjustOpen(false)} disabled={adjusting} className="min-h-11 px-2 font-bold text-slate-600">{t("common.close")}</button></div><div className="mt-4 grid gap-3"><label className="grid gap-1 text-sm font-bold text-slate-700">{t("athlete.session.adjustExercise")}<select value={selectedExerciseId} onChange={(event) => setSelectedExerciseId(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 font-semibold">{exerciseOptions.map((option) => <option key={option.id} value={option.id}>{localizeExerciseName(option.name, locale)}</option>)}</select></label>{canReplace && <label className="grid gap-1 text-sm font-bold text-slate-700">{t("athlete.session.replaceOptional")}<select value={replaceExerciseId} onChange={(event) => setReplaceExerciseId(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 font-semibold"><option value="">{t("athlete.session.addWithoutReplacing")}</option>{activeExercises.map((exercise) => <option key={exercise.scheduledWorkoutExerciseId} value={exercise.scheduledWorkoutExerciseId}>{localizeExerciseName(exercise.name, locale)}</option>)}</select></label>}<div className="grid grid-cols-2 gap-3"><label className="grid gap-1 text-sm font-bold text-slate-700">{t("athlete.session.adjustSets")}<input type="number" min="1" value={addedSets} onChange={(event) => setAddedSets(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label><label className="grid gap-1 text-sm font-bold text-slate-700">{t("athlete.session.adjustReps")}<input type="number" min="1" value={addedReps} onChange={(event) => setAddedReps(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label><label className="grid gap-1 text-sm font-bold text-slate-700">{t("athlete.session.adjustLoad")}<input type="number" min="0" value={addedLoad} onChange={(event) => setAddedLoad(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label><label className="grid gap-1 text-sm font-bold text-slate-700">{t("athlete.session.adjustRpe")}<input type="number" min="1" max="10" step="0.5" value={addedRpe} onChange={(event) => setAddedRpe(event.target.value)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-3" /></label></div>{adjustError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{adjustError}</p>}<button type="button" onClick={handleAddExercise} disabled={adjusting || !selectedExerciseId} className="min-h-12 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white disabled:opacity-50">{adjusting ? t("common.saving") : replaceExerciseId ? t("athlete.session.replaceAndAdd") : t("athlete.session.addToWorkout")}</button></div></div></div>}
         </section>}
-        {activeExercises.map((exercise) => {
+        {activeExercises.map((exercise, exerciseIndex) => {
           const targets = orderedTargets(exercise);
           const currentTarget = isActive ? activeTarget(exercise) : undefined;
           const extras = exercise.setLogs.filter((log) => log.kind === "EXTRA").sort((left, right) => left.setNumber - right.setNumber);
@@ -356,20 +383,18 @@ export default function SessionPage() {
           const extraKey = extraFormKey(exercise);
           const extraInitial = emptyForm();
           const extraForm = getForm(extraKey, extraInitial);
+          const expanded = expandedExerciseId === exercise.scheduledWorkoutExerciseId;
+          const nextExercise = activeExercises.slice(exerciseIndex + 1).find((candidate) => firstIncompleteTarget(candidate) !== undefined);
 
-          // The API is the authority for removal: it permits the Coach to
-          // manage every active exercise and an Athlete to manage only their
-          // own addition. Firebase's browser User intentionally has no app
-          // role or database user id, so the UI does not duplicate that rule.
-          const canRemove = isActive;
+          // The API remains the authority. This is only an affordance gate
+          // derived from the application /me response, never Firebase claims.
+          const canRemove = isActive && (me?.role === "COACH" || (me?.role === "ATHLETE" && exercise.origin === "ATHLETE_ADDED" && exercise.addedByUserId === me.id));
           return <section key={exercise.scheduledWorkoutExerciseId} className={`overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5 ${exercise.origin === "ATHLETE_ADDED" ? "border-2 border-amber-300" : ""}`}>
-            <div className="border-b border-slate-100 px-5 py-5">
-              <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{exercise.origin === "ATHLETE_ADDED" ? "學生自主新增" : exercise.origin === "COACH_ADDED" ? "教練臨時新增" : t("athlete.session.exerciseEyebrow")}</p>{canRemove && <button type="button" onClick={() => handleRemoveExercise(exercise)} disabled={adjusting} className="min-h-9 rounded-lg border border-red-200 px-2 text-xs font-bold text-red-700 disabled:opacity-50">移除</button>}</div>
-              <h2 className="mt-2 break-words text-2xl font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>
-              <p className="mt-2 text-sm text-slate-500">{t(targets.length === 1 ? "athlete.session.plannedSetCountOne" : "athlete.session.plannedSetCountOther", { count: targets.length })}</p>
-              {exercise.coachCue && <p className="mt-3 rounded-xl bg-teal-50 px-3 py-2 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
+            <div className="border-b border-slate-100 px-5 py-4">
+              <div className="flex items-center justify-between gap-3"><button type="button" aria-expanded={expanded} onClick={() => setExpandedExerciseId((current) => current === exercise.scheduledWorkoutExerciseId ? null : exercise.scheduledWorkoutExerciseId)} className="min-h-11 min-w-0 flex-1 text-left"><p className={`text-xs font-semibold uppercase tracking-[0.16em] ${exercise.origin === "ATHLETE_ADDED" ? "text-amber-800" : "text-slate-500"}`}>{exercise.origin === "ATHLETE_ADDED" ? t("athlete.session.athleteAdded") : exercise.origin === "COACH_ADDED" ? t("athlete.session.coachAdded") : t("athlete.session.exerciseEyebrow")}</p><h2 className="mt-1 break-words text-xl font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2><p className="mt-1 text-sm text-slate-500">{t("athlete.session.progressSummary", { completed: targets.filter((target) => actualForTarget(exercise, target) !== undefined).length, total: targets.length })}</p></button>{canRemove && <button type="button" onClick={() => handleRemoveExercise(exercise)} disabled={adjusting} className="min-h-10 rounded-lg border border-red-200 px-2 text-xs font-bold text-red-700 disabled:opacity-50">{t("common.remove")}</button>}</div>
             </div>
-
+            {expanded && <>
+            {exercise.coachCue && <p className="mx-5 mt-4 rounded-xl bg-teal-50 px-3 py-2 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
             <div className="space-y-3 px-4 py-4">
               {targets.map((target) => {
                 const actual = actualForTarget(exercise, target);
@@ -401,6 +426,8 @@ export default function SessionPage() {
               })}
             </div>
 
+            {isActive && currentTarget === undefined && nextExercise && <div className="px-4 pb-4"><button type="button" onClick={() => setExpandedExerciseId(nextExercise.scheduledWorkoutExerciseId)} className="min-h-12 w-full rounded-2xl bg-slate-950 px-4 text-sm font-bold text-white">{t("athlete.session.nextExercise")}</button></div>}
+
             <div className="border-t border-slate-100 px-5 py-5">
               <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("athlete.session.extraSetsHeading")}</p><span className="text-sm font-semibold text-slate-500">{extras.length}</span></div>
               {extras.length > 0 && <ul className="mt-3 space-y-2">{extras.map((log) => <li key={log.id} className="rounded-2xl bg-stone-50 px-4 py-3">{editingLogId === log.id ? <EditLog form={getForm(editKey(log), emptyForm())} onChange={(patch) => updateForm(editKey(log), getForm(editKey(log), emptyForm()), patch)} onSave={() => handleEdit(log, exercise.scheduledWorkoutExerciseId)} onCancel={() => cancelEdit(log)} /> : <button type="button" className="block w-full text-left" onClick={() => beginEdit(log)}><p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold text-slate-800">{actualSummary(t, log)}</p></button>}</li>)}</ul>}
@@ -414,6 +441,7 @@ export default function SessionPage() {
                   </div>}
               </div>}
             </div>
+            </>}
           </section>;
         })}
         {removedExercises.length > 0 && <details className="rounded-3xl bg-slate-100 p-4 text-slate-700"><summary className="cursor-pointer font-bold">課表調整紀錄（{removedExercises.length}）</summary><div className="mt-3 grid gap-2">{removedExercises.map((exercise) => <article key={exercise.scheduledWorkoutExerciseId} className="rounded-2xl bg-white px-4 py-3"><p className="font-bold line-through">{localizeExerciseName(exercise.name, locale)}</p><p className="mt-1 text-sm text-slate-500">已由教練/學生從目前流程移除；原始紀錄保留。</p></article>)}</div></details>}

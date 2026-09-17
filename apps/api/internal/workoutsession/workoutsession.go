@@ -534,6 +534,13 @@ func AdjustExercise(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	if err := requireActiveCoachMutation(ctx, pool, caller, h.athleteID); err != nil {
 		return Exercise{}, err
 	}
+	// An athlete can append a personal exercise, but cannot turn that into a
+	// replacement operation.  Keep this after session authorization so an
+	// inaccessible session remains indistinguishable from a nonexistent one,
+	// and after request-shape validation above so malformed IDs retain 400.
+	if caller.Role == "ATHLETE" && input.ReplacesScheduledWorkoutExerciseID != nil {
+		return Exercise{}, ErrConflict
+	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return Exercise{}, fmt.Errorf("workoutsession: begin adjustment: %w", err)
@@ -556,16 +563,12 @@ func AdjustExercise(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	}
 	position := 0
 	if input.ReplacesScheduledWorkoutExerciseID != nil {
-		var origin, addedBy string
-		err = tx.QueryRow(ctx, `SELECT position, origin, COALESCE(added_by_user_id::text, '') FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2 AND removed_at IS NULL FOR UPDATE`, *input.ReplacesScheduledWorkoutExerciseID, h.scheduledWorkoutID).Scan(&position, &origin, &addedBy)
+		err = tx.QueryRow(ctx, `SELECT position FROM scheduled_workout_exercises WHERE id = $1 AND scheduled_workout_id = $2 AND removed_at IS NULL FOR UPDATE`, *input.ReplacesScheduledWorkoutExerciseID, h.scheduledWorkoutID).Scan(&position)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Exercise{}, ErrConflict
 		}
 		if err != nil {
 			return Exercise{}, err
-		}
-		if caller.Role == "ATHLETE" && (origin != "ATHLETE_ADDED" || addedBy != caller.ID) {
-			return Exercise{}, ErrConflict
 		}
 		if _, err := tx.Exec(ctx, `UPDATE scheduled_workout_exercises SET removed_at = now(), removed_by_user_id = $1 WHERE id = $2`, caller.ID, *input.ReplacesScheduledWorkoutExerciseID); err != nil {
 			return Exercise{}, err

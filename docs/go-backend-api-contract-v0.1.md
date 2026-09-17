@@ -833,10 +833,10 @@ Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含
 The pre-start `PUT /scheduled-workouts/{id}` remains a whole-snapshot edit and still rejects any ScheduledWorkout with a session. Once a session is ACTIVE, structural changes use incremental endpoints so existing snapshot and SetLog identities are never replaced.
 
 - `GET /sessions/{sessionId}/exercise-options?q=` returns SYSTEM Exercises plus private Exercises owned by the ScheduledWorkout's Coach. Access requires the session Athlete or an active-relationship Coach. Athletes cannot create Exercise identities.
-- `POST /sessions/{sessionId}/exercises` accepts `{ exerciseId, plan, coachCue?, replacesScheduledWorkoutExerciseId? }`. The plan uses the existing complete defaults/overrides shape. The server derives `COACH_ADDED` or `ATHLETE_ADDED` and `addedByUserId`. A replacement soft-removes the predecessor and inserts the new row at its active position in one transaction.
+- `POST /sessions/{sessionId}/exercises` accepts `{ exerciseId, plan, coachCue?, replacesScheduledWorkoutExerciseId? }`. The plan uses the existing complete defaults/overrides shape. The server derives `COACH_ADDED` or `ATHLETE_ADDED` and `addedByUserId`. A Coach may replace: replacement soft-removes the predecessor and inserts the new row at its active position in one transaction. An Athlete must omit `replacesScheduledWorkoutExerciseId`; supplying it is `409 CONFLICT` even when the target is their own addition.
 - `DELETE /sessions/{sessionId}/exercises/{scheduledWorkoutExerciseId}` performs a soft removal and returns updated Exercise metadata. It never deletes planned rows or SetLogs.
 
-Only ACTIVE sessions accept these operations. An active-relationship Coach may adjust any active Exercise; the Athlete may remove or replace only their own `ATHLETE_ADDED` Exercise. Existing planned targets are not edited in place. COMPLETED sessions, repeated removal/replacement, stale SetLog writes to removed Exercises, and invalid replacement associations return `409 CONFLICT`; inaccessible sessions retain existing `404 NOT_FOUND` resource scoping.
+Only ACTIVE sessions accept these operations. An active-relationship Coach may add, remove, or replace any active Exercise; the Athlete may add and remove only their own `ATHLETE_ADDED` Exercise, and may never replace. Existing planned targets are not edited in place. COMPLETED sessions, repeated removal/replacement, stale SetLog writes to removed Exercises, and invalid replacement associations return `409 CONFLICT`; inaccessible sessions retain existing `404 NOT_FOUND` resource scoping.
 
 Session and ScheduledWorkout detail Exercise objects additionally expose `origin`, optional `addedByUserId`, optional `removedAt`/`removedByUserId`, and optional predecessor/successor replacement IDs. Active items remain in the normal exercise list; removed items remain readable for adjustment history and review.
 
@@ -1049,6 +1049,9 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
+| `GET /sessions/{id}/exercise-options` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE session；SYSTEM + assignment Coach private exercises |
+| `POST /sessions/{id}/exercises` | ❌ 401 | ❌ 401 | ✅ add / remove / replace active exercises | ✅ add only | Athlete request carrying `replacesScheduledWorkoutExerciseId` → `409 CONFLICT` |
+| `DELETE /sessions/{id}/exercises/{exerciseId}` | ❌ 401 | ❌ 401 | ✅ any active exercise | ✅ only own `ATHLETE_ADDED` | soft remove; no plan or SetLog deletion |
 | `POST /sessions/{id}/set-logs` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 併發 claim 同一 planned set → `409`，見 §3.8 |
 | `PATCH /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | ACTIVE 或 COMPLETED 均可更正既有 log；不改 session status/`completed_at` 或 associations |
 | `DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE；COMPLETED → `409 CONFLICT` |

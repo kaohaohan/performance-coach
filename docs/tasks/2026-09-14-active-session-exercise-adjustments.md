@@ -45,8 +45,8 @@
 | 2. Migration and read models | Done | Added provenance, soft-remove, replacement linkage, and active-position index. |
 | 3. Session adjustment APIs | Done | Added catalog, add/replace, remove, and stale SetLog protection. |
 | 4. Coach Calendar UI | Done | ACTIVE Edit enters the shared Session adjustment UI. |
-| 5. Athlete Session UI | Done | Added self-add, provenance treatment, replacement/removal flow, history, and refresh. |
-| 6. Verification | Done | Go suite, targeted TypeScript/lint, diff checks, and clean scratch-DB migration passed; full Next build is environment-blocked. |
+| 5. Athlete Session UI | In Progress | Follow-up: single-open mobile accordion, /me-gated controls, Athlete self-add dialog, and Athlete no-replace rule. |
+| 6. Verification | In Progress | Re-running focused verification and staging rollout for the follow-up. |
 
 ## 5. Outcome (filled at completion)
 
