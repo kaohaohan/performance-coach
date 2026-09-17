@@ -45,11 +45,11 @@
 | 2. Migration and read models | Done | Added provenance, soft-remove, replacement linkage, and active-position index. |
 | 3. Session adjustment APIs | Done | Added catalog, add/replace, remove, and stale SetLog protection. |
 | 4. Coach Calendar UI | Done | ACTIVE Edit enters the shared Session adjustment UI. |
-| 5. Athlete Session UI | In Progress | Follow-up: single-open mobile accordion, /me-gated controls, Athlete self-add dialog, and Athlete no-replace rule. |
-| 6. Verification | In Progress | Re-running focused verification and staging rollout for the follow-up. |
+| 5. Athlete Session UI | Done | Follow-up shipped: single-open mobile accordion, /me-gated controls, Athlete self-add dialog, and Athlete no-replace rule. |
+| 6. Verification | Done | Local Go suite/vet and web lint passed; GitHub Actions web/API checks plus staging candidate smoke test and promotion passed. |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Complete.
+- Final status: Complete (follow-up refinements deployed to staging at `a19928a`).
 - Deviations from plan: The shared Session adjustment UI uses a compact reps-first form with optional kg load and RPE rather than the Calendar Builder's full per-position override interface. The API accepts the complete prescription shape for future expansion.
 - Follow-ups: Add translated message keys for the compact adjustment controls; configure ESLint to exclude iOS DerivedData; investigate the local Turbopack worker-port restriction before relying on `next build` in this environment. The shared `performance_coach_test` ledger is missing 0005 entries although its schema already has `coach_cue`; repair that pre-existing migration baseline before using it for migration validation.
