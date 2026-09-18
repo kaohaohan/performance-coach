@@ -103,6 +103,7 @@ Tombstone 後的 athlete 從名冊與排程 picker 消失，但不能被「解�
 | 400 | INVALID_ARGUMENT | JSON 解析失敗、欄位驗證失敗、`DELETE /me` 的 Apple code 缺失/無效/錯綁 |
 | 401 | UNAUTHENTICATED | token 缺失/無效/過期；application-user route 對 tombstoned `users` row（`DELETE /me` 除外） |
 | 403 | FORBIDDEN | 已登入但無權操作該資源 |
+| 403 | EMAIL_NOT_VERIFIED | `POST /coach-signup` 或 `POST /invite-codes/{code}/redeem`：password 身分尚未驗證信箱 |
 | 403 | RECENT_AUTH_REQUIRED | `DELETE /me`：ID token 的 `auth_time` 早於 5 分鐘 |
 | 404 | NOT_FOUND | 資源不存在（或無權看見 — 見下） |
 | 409 | CONFLICT | 狀態衝突（如重複完成 session） |
@@ -290,6 +291,7 @@ Response `200`：
 | 已存在且 `role = COACH` 且 `deleted_at IS NULL` | 冪等回傳既有 row，**不覆寫 `name`** |
 | 已存在且 `role = ATHLETE` 且 `deleted_at IS NULL` | `409 CONFLICT` |
 | 已存在且 `deleted_at IS NOT NULL` | `409 ACCOUNT_DELETED`（不回 tombstone、不另建 row） |
+| password 身分且 `email_verified == false` | `403 EMAIL_NOT_VERIFIED`（既有 `users` row 不受影響；Google / Apple 不套用） |
 | 建立路徑上 `name` 為空或超過 80 字元 | `400 INVALID_ARGUMENT` |
 
 `name` 僅在建立路徑必填；既有 coach 重複呼叫可省略。
@@ -575,6 +577,7 @@ Response `200`：
 | 已是 Athlete、已連結同一 coach、且 `deleted_at IS NULL` | 冪等成功，不重複建立 |
 | 已存在且 `deleted_at IS NOT NULL` | `409 ACCOUNT_DELETED`（不回 tombstone、不另建 row、不插入 `coach_athletes`） |
 | 已是 Coach（含兌換自己的碼） | `403 FORBIDDEN` |
+| password 身分且 `email_verified == false` | `403 EMAIL_NOT_VERIFIED`（既有 Athlete `users` row 仍可冪等連結；Google / Apple 不套用） |
 | 碼無效（同 preview 的四種情況） | `404 NOT_FOUND` |
 
 一位 Athlete 可連結多位 Coach。既有 row 的 `name` 與 `role` 一律原樣讀回，永不覆寫。
@@ -1030,8 +1033,8 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | Endpoint | Unauthenticated | Firebase, no app account | Coach | Athlete | Constraints / notes |
 | --- | --- | --- | --- | --- | --- |
 | `GET /invite-codes/{code}/preview` | ✅ | ✅ | ✅ | ✅ | 除 health check 外唯一公開的 product endpoint；未知/格式錯/過期/已撤銷一律 `404`；回應不含任何 id |
-| `POST /coach-signup` | ❌ 401 | ✅ 建立 COACH；tombstone ❌ 409 ACCOUNT_DELETED | ✅ 冪等回既有，不覆寫 `name`；tombstone ❌ 409 ACCOUNT_DELETED | ❌ 409 CONFLICT | `name` 僅建立路徑必填（≤ 80）；role 永不變更 |
-| `POST /invite-codes/{code}/redeem` | ❌ 401 | ✅ 建立 ATHLETE 並連結；tombstone ❌ 409 ACCOUNT_DELETED | ❌ 403 FORBIDDEN（含自己的碼） | ✅ 冪等連結；tombstone ❌ 409 ACCOUNT_DELETED | 可連結多位 Coach；既有 row 的 `name`/`role` 不覆寫；無效碼 `404` |
+| `POST /coach-signup` | ❌ 401 | ✅ 建立 COACH；未驗證 password email ❌ 403 EMAIL_NOT_VERIFIED；tombstone ❌ 409 ACCOUNT_DELETED | ✅ 冪等回既有，不覆寫 `name`；tombstone ❌ 409 ACCOUNT_DELETED | ❌ 409 CONFLICT | `name` 僅建立路徑必填（≤ 80）；role 永不變更 |
+| `POST /invite-codes/{code}/redeem` | ❌ 401 | ✅ 建立 ATHLETE 並連結；未驗證 password email ❌ 403 EMAIL_NOT_VERIFIED；tombstone ❌ 409 ACCOUNT_DELETED | ❌ 403 FORBIDDEN（含自己的碼） | ✅ 冪等連結；tombstone ❌ 409 ACCOUNT_DELETED | 可連結多位 Coach；既有 row 的 `name`/`role` 不覆寫；無效碼 `404` |
 | `POST /invite-codes` | ❌ 401 | ❌ 401 | ✅ `201` | ❌ 403 | `expiresInDays` 省略時預設 30 |
 | `GET /invite-codes` | ❌ 401 | ❌ 401 | ✅ 僅自己的 | ❌ 403 | `createdAt` 由新到舊 |
 | `POST /invite-codes/{id}/revoke` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 403 | 冪等；forward-only，不解除已加入者 |

@@ -121,6 +121,7 @@ A later sign-up with a new Firebase user creates a new empty account. It never r
 - A Coach can create, list, and revoke reusable invite codes, and can tell whether each one is active, expired, or revoked.
 - A revoked or expired code stops new Athletes joining and disconnects nobody.
 - An Athlete with no prior account can join from an invite alone and reach Today in one uninterrupted flow.
+- A new email/password Coach or Athlete must verify the mailbox before `coach-signup` or invite redeem. Existing provisioned accounts keep working without re-verification. Google and Apple are not gated this way.
 - An Athlete who is already signed in can join without signing in again.
 - Following the same invite twice connects the Athlete once.
 - An Athlete may join more than one Coach.

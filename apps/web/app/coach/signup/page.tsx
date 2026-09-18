@@ -13,10 +13,13 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { getFirebaseAuth, isAuthEmulator } from "@/lib/firebase";
 import { AuthDivider, GoogleSignInButton } from "@/components/google-sign-in-button";
 import { AuthHero } from "@/components/auth-hero";
 import { AppleSignInButton } from "@/components/apple-sign-in-button";
+import { PasswordField } from "@/components/password-field";
+import { EmailVerificationPrompt } from "@/components/email-verification-prompt";
+import { isValidEmail, isValidNewPassword } from "@/lib/auth-credentials";
 import { useT, type MessageKey } from "@/lib/i18n";
 import {
   APPLE_AUTH_POLICY,
@@ -110,6 +113,7 @@ export default function CoachSignupPage() {
   // kept only so the confirm card's copy is honest.
   const [socialProvider, setSocialProvider] = useState<"google" | "apple" | null>(null);
   const socialConfirm = socialProvider !== null;
+  const [needsVerify, setNeedsVerify] = useState(false);
 
   async function provisionCoach(token: string, coachName: string) {
     const me = await apiFetch<Me>(token, "/api/v1/coach-signup", {
@@ -129,9 +133,22 @@ export default function CoachSignupPage() {
     event.preventDefault();
     setError(null);
     setProvisioningFailed(false);
+    if (!isValidEmail(email)) {
+      setError(t("errors.auth.invalidEmail"));
+      return;
+    }
+    if (!isValidNewPassword(password)) {
+      setError(t("errors.auth.weakPassword"));
+      return;
+    }
     setSubmitting(true);
     try {
       const token = await signUp(email, password);
+      const currentUser = getFirebaseAuth().currentUser;
+      if (currentUser && !isAuthEmulator() && !currentUser.emailVerified) {
+        setNeedsVerify(true);
+        return;
+      }
       try {
         await provisionCoach(token, name.trim());
       } catch (err) {
@@ -278,6 +295,18 @@ export default function CoachSignupPage() {
         <p className="mt-4 max-w-xs text-base leading-7 text-slate-300">{t("auth.coachSignup.heroSubtitle")}</p>
       </AuthHero>
       <div className="mx-auto -mt-8 max-w-sm px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        {needsVerify ? (
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
+            <EmailVerificationPrompt
+              email={email}
+              onVerified={() => {
+                const currentUser = getFirebaseAuth().currentUser;
+                if (!currentUser) return;
+                void currentUser.getIdToken(true).then((token) => provisionCoach(token, name.trim()));
+              }}
+            />
+          </div>
+        ) : (
         <form onSubmit={socialConfirm ? handleSocialConfirm : handleSubmit} className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-950/5">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("auth.eyebrow")}</p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight">{socialConfirm ? t("auth.coachSignup.confirmHeading") : t("auth.createCoachAccount")}</h2>
@@ -319,10 +348,15 @@ export default function CoachSignupPage() {
                   <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.email")}</span>
                   <input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
                 </label>
-                <label>
-                  <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.password")}</span>
-                  <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={provisioningFailed} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:opacity-60" />
-                </label>
+                <PasswordField
+                  label={t("auth.field.password")}
+                  value={password}
+                  onChange={setPassword}
+                  autoComplete="new-password"
+                  required
+                  disabled={provisioningFailed}
+                  hint={t("auth.field.passwordHint")}
+                />
               </>
             )}
           </div>
@@ -339,6 +373,7 @@ export default function CoachSignupPage() {
             <button type="button" onClick={handleUseDifferentAccount} disabled={submitting} className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300">{t("auth.coachSignup.useDifferentAccount")}</button>
           )}
         </form>
+        )}
         <p className="mt-5 text-center text-sm text-slate-600">
           {t("auth.haveAccount")} <Link href="/login" className="font-bold text-teal-700 hover:text-teal-800">{t("auth.signIn")}</Link>
         </p>

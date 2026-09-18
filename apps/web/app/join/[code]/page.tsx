@@ -14,6 +14,10 @@ import { ApiError, apiFetch, publicApiFetch } from "@/lib/api";
 import { AuthDivider, GoogleSignInButton } from "@/components/google-sign-in-button";
 import { BRAND_NAME } from "@/lib/brand";
 import { AppleSignInButton } from "@/components/apple-sign-in-button";
+import { PasswordField } from "@/components/password-field";
+import { EmailVerificationPrompt } from "@/components/email-verification-prompt";
+import { isValidEmail, isValidNewPassword } from "@/lib/auth-credentials";
+import { getFirebaseAuth, isAuthEmulator } from "@/lib/firebase";
 import { useT } from "@/lib/i18n";
 import {
   APPLE_AUTH_POLICY,
@@ -78,6 +82,8 @@ export default function JoinCodePage() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [googlePending, setGooglePending] = useState(false);
   const [applePending, setApplePending] = useState(false);
+  const [socialProvider, setSocialProvider] = useState<"google" | "apple" | null>(null);
+  const [needsVerify, setNeedsVerify] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [redeemed, setRedeemed] = useState<Redeemed | null>(null);
@@ -198,10 +204,27 @@ export default function JoinCodePage() {
       await handleRetryRedeem();
       return;
     }
+    if (authMode === "create") {
+      if (!isValidEmail(email)) {
+        setAuthError(t("errors.auth.invalidEmail"));
+        return;
+      }
+      if (!isValidNewPassword(password)) {
+        setAuthError(t("errors.auth.weakPassword"));
+        return;
+      }
+    }
     setAuthSubmitting(true);
     setAuthError(null);
     try {
       const token = authMode === "create" ? await signUp(email, password) : await signIn(email, password);
+      if (authMode === "create") {
+        const current = getFirebaseAuth().currentUser;
+        if (current && !isAuthEmulator() && !current.emailVerified) {
+          setNeedsVerify(true);
+          return;
+        }
+      }
       await continueWithToken(token, name.trim());
     } catch (err) {
       // One policy covers both origins: an ApiError here came from the /me
@@ -220,10 +243,12 @@ export default function JoinCodePage() {
     setRedeemError(null);
     try {
       const { idToken, user: googleUser } = await signInWithGoogle();
-      // Name is only used when redeem creates a brand-new ATHLETE row; an
-      // athlete who already exists keeps the name they have. Prefer what
-      // they typed, fall back to Google's display name.
       const athleteName = name.trim() || googleUser.displayName?.trim() || "";
+      if (!athleteName) {
+        if (googleUser.displayName) setName(googleUser.displayName);
+        setSocialProvider("google");
+        return;
+      }
       await continueWithToken(idToken, athleteName);
     } catch (err) {
       // null means the person dismissed the Google chooser — not a failure.
@@ -248,6 +273,11 @@ export default function JoinCodePage() {
     try {
       const { idToken, user: appleUser } = await signInWithApple();
       const athleteName = name.trim() || appleUser.displayName?.trim() || "";
+      if (!athleteName) {
+        if (appleUser.displayName) setName(appleUser.displayName);
+        setSocialProvider("apple");
+        return;
+      }
       await continueWithToken(idToken, athleteName);
     } catch (err) {
       // null means the person dismissed the Apple sheet — not a failure.
@@ -273,6 +303,41 @@ export default function JoinCodePage() {
       // scratch either way.
     }
     setStep("authenticating");
+  }
+
+  async function handleSocialConfirm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const athleteName = name.trim();
+    if (!athleteName) {
+      setAuthError(t("auth.joinCode.nameRequired"));
+      return;
+    }
+    const token = await freshToken();
+    if (!token) {
+      setSocialProvider(null);
+      setAuthError(t("auth.coachSignup.error.sessionExpiredSignInAgain"));
+      return;
+    }
+    setAuthSubmitting(true);
+    setAuthError(null);
+    try {
+      await continueWithToken(token, athleteName);
+    } catch (err) {
+      setAuthError(errorMessage(t, err, JOIN_AUTH_POLICY));
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleUseDifferentAccount() {
+    setAuthError(null);
+    setSocialProvider(null);
+    setName("");
+    try {
+      await signOut();
+    } catch {
+      // Next provider click re-prompts.
+    }
   }
 
   if (step === "loading") {
@@ -339,10 +404,37 @@ export default function JoinCodePage() {
       )}
 
       {(step === "authenticating" || step === "redeeming") && (
+        needsVerify ? (
+          <EmailVerificationPrompt
+            email={email}
+            onVerified={() => {
+              const current = getFirebaseAuth().currentUser;
+              if (!current) return;
+              void current.getIdToken(true).then((token) => continueWithToken(token, name.trim()));
+            }}
+          />
+        ) : socialProvider ? (
+          <form onSubmit={handleSocialConfirm} className="mt-6 grid gap-4">
+            <h2 className="text-xl font-semibold tracking-tight">{t("auth.joinCode.confirmHeading")}</h2>
+            <p className="text-sm leading-6 text-slate-600">{t("auth.joinCode.confirmIntro", { provider: socialProvider === "apple" ? "Apple" : "Google" })}</p>
+            <label>
+              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.name")}<span className="text-red-600"> *</span></span>
+              <input type="text" required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
+            </label>
+            {!name.trim() && (
+              <p role="alert" className="-mt-2 text-sm font-medium text-red-600">
+                {socialProvider === "apple" ? t("auth.joinCode.nameMissingApple") : t("auth.joinCode.nameMissingProvider")}
+              </p>
+            )}
+            {(authError || redeemError) && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{authError ?? redeemError}</p>}
+            <button type="submit" disabled={authSubmitting || !name.trim() || step === "redeeming"} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+              {step === "redeeming" ? t("auth.joinCode.connecting") : t("auth.createAccount")}
+            </button>
+            <button type="button" onClick={() => void handleUseDifferentAccount()} disabled={authSubmitting} className="min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300">{t("auth.joinCode.useDifferentAccount")}</button>
+          </form>
+        ) : (
         <div className="mt-6">
           <div className="grid gap-3">
-            {/* Apple first on iOS (Guideline 4.8 equivalent prominence);
-                null on web, where only the Google button renders. */}
             <AppleSignInButton onClick={handleAppleJoin} pending={applePending} disabled={authSubmitting || googlePending || step === "redeeming"} />
             <GoogleSignInButton onClick={handleGoogleJoin} pending={googlePending} disabled={authSubmitting || applePending || step === "redeeming"} />
           </div>
@@ -364,10 +456,14 @@ export default function JoinCodePage() {
               <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.email")}</span>
               <input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
             </label>
-            <label>
-              <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("auth.field.password")}</span>
-              <input type="password" required minLength={authMode === "create" ? 8 : undefined} autoComplete={authMode === "create" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} className="min-h-14 w-full rounded-xl border border-slate-200 bg-stone-50 px-4 text-base outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15" />
-            </label>
+            <PasswordField
+              label={t("auth.field.password")}
+              value={password}
+              onChange={setPassword}
+              autoComplete={authMode === "create" ? "new-password" : "current-password"}
+              required
+              hint={authMode === "create" ? t("auth.field.passwordHint") : undefined}
+            />
 
             {(authError || redeemError) && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{authError ?? redeemError}</p>}
 
@@ -376,6 +472,7 @@ export default function JoinCodePage() {
             </button>
           </form>
         </div>
+        )
       )}
 
       {step === "onboarded" && redeemed && (

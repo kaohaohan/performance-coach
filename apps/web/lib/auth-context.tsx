@@ -24,6 +24,7 @@ import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
   onIdTokenChanged,
+  sendEmailVerification,
   signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -31,7 +32,7 @@ import {
   type User,
 } from "firebase/auth";
 import { Capacitor } from "@capacitor/core";
-import { getFirebaseAuth } from "./firebase";
+import { getFirebaseAuth, isAuthEmulator } from "./firebase";
 import { nativeAppleCredential } from "./native-apple-auth";
 import { nativeGoogleCredential } from "./native-google-auth";
 import { setAuthTokenProvider } from "./api";
@@ -88,7 +89,18 @@ type AuthContextValue = {
   // Automatic provider linking is a separate future feature, not 1.0.
   signInWithApple: () => Promise<SocialSignInResult>;
   signOut: () => Promise<void>;
+  sendVerificationEmail: () => Promise<void>;
+  reloadUser: () => Promise<User | null>;
 };
+
+export function usesPasswordProvider(user: User): boolean {
+  return user.providerData.some((provider) => provider.providerId === "password");
+}
+
+function verificationContinueUrl(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.location.origin;
+}
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -120,6 +132,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let disposed = false;
+    let removeListener: (() => void) | undefined;
+    void import("@capacitor/app")
+      .then(async ({ App }) => {
+        if (disposed) return;
+        const handle = await App.addListener("appStateChange", ({ isActive }) => {
+          if (!isActive) return;
+          const current = getFirebaseAuth().currentUser;
+          if (!current) return;
+          void current.reload();
+        });
+        if (disposed) {
+          await handle.remove();
+          return;
+        }
+        removeListener = () => void handle.remove();
+      })
+      .catch(() => {
+        // Web can still render if the native plugin is unavailable.
+      });
+
+    return () => {
+      disposed = true;
+      removeListener?.();
+    };
   }, []);
 
   // getIdToken is the single source of a *valid* token. currentUser is read
@@ -157,9 +199,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signUp(email: string, password: string): Promise<string> {
     const auth = getFirebaseAuth();
     const credential = await createUserWithEmailAndPassword(auth, email, password);
-    // Same reasoning as signIn: return the token directly rather than
-    // racing the onIdTokenChanged update above.
+    if (!isAuthEmulator()) {
+      const url = verificationContinueUrl();
+      await sendEmailVerification(credential.user, url ? { url } : undefined);
+    }
     return credential.user.getIdToken();
+  }
+
+  async function sendVerificationEmail(): Promise<void> {
+    const currentUser = getFirebaseAuth().currentUser;
+    if (!currentUser) {
+      throw new Error("auth-context: no signed-in user");
+    }
+    const url = verificationContinueUrl();
+    await sendEmailVerification(currentUser, url ? { url } : undefined);
+  }
+
+  async function reloadUser(): Promise<User | null> {
+    const currentUser = getFirebaseAuth().currentUser;
+    if (!currentUser) return null;
+    await currentUser.reload();
+    return getFirebaseAuth().currentUser;
   }
 
   // signInWithPopup, not signInWithRedirect: the redirect flow finishes by
@@ -227,7 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, idToken, getIdToken, loading, signIn, signUp, signInWithGoogle, signInWithApple, signOut }}>
+    <AuthContext.Provider value={{ user, idToken, getIdToken, loading, signIn, signUp, signInWithGoogle, signInWithApple, signOut, sendVerificationEmail, reloadUser }}>
       {children}
     </AuthContext.Provider>
   );

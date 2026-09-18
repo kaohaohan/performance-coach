@@ -304,6 +304,8 @@ func handleCoachSignup(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "firebase account is already registered as an athlete")
 			case errors.Is(err, coachsignup.ErrAccountDeleted):
 				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
+			case errors.Is(err, authn.ErrEmailNotVerified):
+				authn.WriteError(w, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "verify your email before creating an account")
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
@@ -517,6 +519,8 @@ func handleRedeemInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code is not valid")
 			case errors.Is(err, invitecode.ErrCoachCannotRedeem):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "a coach account cannot redeem an invite code")
+			case errors.Is(err, authn.ErrEmailNotVerified):
+				authn.WriteError(w, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "verify your email before creating an account")
 			case errors.Is(err, invitecode.ErrAccountDeleted):
 				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
 			case errors.As(err, &validationErr):

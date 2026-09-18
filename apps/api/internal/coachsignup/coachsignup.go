@@ -100,6 +100,9 @@ func Signup(ctx context.Context, pool *pgxpool.Pool, identity authn.Identity, ra
 
 	switch {
 	case err == nil:
+		if authn.PasswordEmailUnverified(identity) {
+			return User{}, authn.ErrEmailNotVerified
+		}
 		// A brand-new COACH row was created by this call. name is
 		// required only on this path, validated after we know creation
 		// happened (an idempotent re-signup by an existing coach may omit
