@@ -7,16 +7,18 @@ export type PendingEmailVerify =
 export function savePendingEmailVerify(pending: PendingEmailVerify): void {
   if (typeof window === "undefined") return;
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(pending));
+    // localStorage, not sessionStorage: Gmail's verify link opens a new tab,
+    // and sessionStorage does not survive that.
+    window.localStorage.setItem(KEY, JSON.stringify(pending));
   } catch {
-    // sessionStorage unavailable (private mode, quota, etc.)
+    // localStorage unavailable (private mode, quota, etc.)
   }
 }
 
 export function readPendingEmailVerify(): PendingEmailVerify | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem(KEY);
+    const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PendingEmailVerify;
     if (parsed.flow === "join" && parsed.code && parsed.name && parsed.email) {
@@ -31,10 +33,18 @@ export function readPendingEmailVerify(): PendingEmailVerify | null {
   }
 }
 
+export function pendingJoinName(code: string, typedName: string): string {
+  const typed = typedName.trim();
+  if (typed) return typed;
+  const pending = readPendingEmailVerify();
+  if (pending?.flow === "join" && pending.code === code) return pending.name;
+  return "";
+}
+
 export function clearPendingEmailVerify(): void {
   if (typeof window === "undefined") return;
   try {
-    sessionStorage.removeItem(KEY);
+    window.localStorage.removeItem(KEY);
   } catch {
     // ignore
   }

@@ -12,6 +12,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAuth, usesPasswordProvider } from "@/lib/auth-context";
 import {
   clearPendingEmailVerify,
+  pendingJoinName,
   readPendingEmailVerify,
   savePendingEmailVerify,
 } from "@/lib/auth-pending-verify";
@@ -185,9 +186,10 @@ export default function JoinCodePage() {
     const pending = readPendingEmailVerify();
     if (!pending || pending.flow !== "join" || pending.code !== code) return;
 
-    resumeAttempted.current = true;
+    const athleteName = pendingJoinName(code, name);
+    if (!athleteName) return;
 
-    const athleteName = name.trim() || pending.name;
+    resumeAttempted.current = true;
     void user.getIdToken(true).then((token) => continueWithToken(token, athleteName));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot resume after verify redirect
   }, [authLoading, user, code, step, needsVerify, name, email]);
@@ -206,7 +208,13 @@ export default function JoinCodePage() {
     setStep("checkingSession");
     setRedeemError(null);
     try {
-      await continueWithToken(token, name.trim());
+      const athleteName = pendingJoinName(code, name);
+      if (!athleteName) {
+        setStep("authenticating");
+        setAuthError(t("auth.joinCode.nameRequired"));
+        return;
+      }
+      await continueWithToken(token, athleteName);
     } catch (error) {
       setRedeemError(errorMessage(t, error, REDEEM_POLICY));
       setStep("confirming");
@@ -220,7 +228,12 @@ export default function JoinCodePage() {
       setStep("authenticating");
       return;
     }
-    await runRedeem(token, name.trim());
+    const athleteName = pendingJoinName(code, name);
+    if (!athleteName) {
+      setAuthError(t("auth.joinCode.nameRequired"));
+      return;
+    }
+    await runRedeem(token, athleteName);
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
