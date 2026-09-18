@@ -7,12 +7,13 @@ import { useT } from "@/lib/i18n";
 type EmailVerificationPromptProps = {
   email: string;
   onVerified: () => void;
+  onChangeEmail: () => void;
 };
 
-export function EmailVerificationPrompt({ email, onVerified }: EmailVerificationPromptProps) {
+export function EmailVerificationPrompt({ email, onVerified, onChangeEmail }: EmailVerificationPromptProps) {
   const t = useT();
-  const { user, sendVerificationEmail, reloadUser } = useAuth();
-  const [busy, setBusy] = useState<"resend" | "check" | null>(null);
+  const { user, sendVerificationEmail, reloadUser, signOut } = useAuth();
+  const [busy, setBusy] = useState<"resend" | "check" | "sign-out" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
   const continued = useRef(false);
@@ -51,6 +52,19 @@ export function EmailVerificationPrompt({ email, onVerified }: EmailVerification
     }
   }
 
+  async function handleChangeEmail() {
+    setError(null);
+    setBusy("sign-out");
+    try {
+      await signOut();
+    } catch {
+      // Already signed out, or Firebase is unreachable — still return to the form.
+    } finally {
+      setBusy(null);
+      onChangeEmail();
+    }
+  }
+
   return (
     <div className="mt-6">
       <h2 className="text-xl font-semibold tracking-tight">{t("auth.verify.heading")}</h2>
@@ -72,6 +86,14 @@ export function EmailVerificationPrompt({ email, onVerified }: EmailVerification
         className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300"
       >
         {busy === "resend" ? t("auth.verify.resending") : t("auth.verify.resend")}
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleChangeEmail()}
+        disabled={busy !== null}
+        className="mt-3 min-h-11 w-full text-sm font-bold text-slate-600 transition hover:text-slate-900 disabled:text-slate-300"
+      >
+        {t("auth.verify.changeEmail")}
       </button>
     </div>
   );

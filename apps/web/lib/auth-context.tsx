@@ -99,7 +99,7 @@ export function usesPasswordProvider(user: User): boolean {
 
 function verificationContinueUrl(): string | undefined {
   if (typeof window === "undefined") return undefined;
-  return window.location.origin;
+  return window.location.href;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);

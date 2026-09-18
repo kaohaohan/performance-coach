@@ -7,9 +7,14 @@
 // Google sign-in uses a popup for the same reason: the invite code never
 // has to survive a navigation, so it cannot be lost or mixed up with
 // another one.
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, usesPasswordProvider } from "@/lib/auth-context";
+import {
+  clearPendingEmailVerify,
+  readPendingEmailVerify,
+  savePendingEmailVerify,
+} from "@/lib/auth-pending-verify";
 import { ApiError, apiFetch, publicApiFetch } from "@/lib/api";
 import { AuthDivider, GoogleSignInButton } from "@/components/google-sign-in-button";
 import { BRAND_NAME } from "@/lib/brand";
@@ -90,6 +95,7 @@ export default function JoinCodePage() {
   // Display name of the COACH currently signed in, shown on the
   // coachSignedIn step so it is obvious whose session is in the way.
   const [signedInCoachName, setSignedInCoachName] = useState<string | null>(null);
+  const resumeAttempted = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +112,25 @@ export default function JoinCodePage() {
     })();
     return () => { cancelled = true; };
   }, [code]);
+
+  // After the verify link opens this URL in Safari, resume redeem once the
+  // Firebase session is verified and the pending join state is still here.
+  useEffect(() => {
+    if (authLoading || resumeAttempted.current) return;
+    if (!user?.emailVerified || !usesPasswordProvider(user)) return;
+    if (needsVerify) return;
+    if (step !== "confirming" && step !== "authenticating") return;
+
+    const pending = readPendingEmailVerify();
+    if (!pending || pending.flow !== "join" || pending.code !== code) return;
+
+    resumeAttempted.current = true;
+    if (!name.trim() && pending.name) setName(pending.name);
+    if (!email && pending.email) setEmail(pending.email);
+
+    const athleteName = name.trim() || pending.name;
+    void user.getIdToken(true).then((token) => continueWithToken(token, athleteName));
+  }, [authLoading, user, code, step, needsVerify, name, email]);
 
   // freshToken mints a token from the live Firebase user at the moment it
   // is needed, rather than replaying one captured earlier. Retrying redeem
@@ -124,6 +149,7 @@ export default function JoinCodePage() {
         body: { name: athleteName },
       });
       setRedeemed(result);
+      clearPendingEmailVerify();
       setStep("onboarded");
     } catch (error) {
       // 403 is the API's "a coach account cannot redeem an invite code".
@@ -221,6 +247,7 @@ export default function JoinCodePage() {
       if (authMode === "create") {
         const current = getFirebaseAuth().currentUser;
         if (current && !isAuthEmulator() && !current.emailVerified) {
+          savePendingEmailVerify({ flow: "join", code, name: name.trim(), email });
           setNeedsVerify(true);
           return;
         }
@@ -411,6 +438,13 @@ export default function JoinCodePage() {
               const current = getFirebaseAuth().currentUser;
               if (!current) return;
               void current.getIdToken(true).then((token) => continueWithToken(token, name.trim()));
+            }}
+            onChangeEmail={() => {
+              clearPendingEmailVerify();
+              setNeedsVerify(false);
+              setAuthError(null);
+              setEmail("");
+              setPassword("");
             }}
           />
         ) : socialProvider ? (

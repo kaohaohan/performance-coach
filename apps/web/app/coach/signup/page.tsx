@@ -8,10 +8,15 @@
 // app/join). The request body carries a name and nothing else: the Firebase
 // UID comes from the verified token server-side and the role is hard-coded
 // there, so neither is ever sent from here.
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, usesPasswordProvider } from "@/lib/auth-context";
+import {
+  clearPendingEmailVerify,
+  readPendingEmailVerify,
+  savePendingEmailVerify,
+} from "@/lib/auth-pending-verify";
 import { apiFetch } from "@/lib/api";
 import { getFirebaseAuth, isAuthEmulator } from "@/lib/firebase";
 import { AuthDivider, GoogleSignInButton } from "@/components/google-sign-in-button";
@@ -87,7 +92,8 @@ function provisioningMessage(
 export default function CoachSignupPage() {
   const router = useRouter();
   const t = useT();
-  const { signUp, signInWithGoogle, signInWithApple, signOut } = useAuth();
+  const { user, loading: authLoading, signUp, signInWithGoogle, signInWithApple, signOut } = useAuth();
+  const resumeAttempted = useRef(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -115,6 +121,24 @@ export default function CoachSignupPage() {
   const socialConfirm = socialProvider !== null;
   const [needsVerify, setNeedsVerify] = useState(false);
 
+  useEffect(() => {
+    if (authLoading || resumeAttempted.current) return;
+    if (!user?.emailVerified || !usesPasswordProvider(user)) return;
+    if (needsVerify) return;
+
+    const pending = readPendingEmailVerify();
+    if (!pending || pending.flow !== "coachSignup") return;
+
+    const coachName = name.trim() || pending.name;
+    if (!coachName) return;
+
+    resumeAttempted.current = true;
+    if (!name.trim() && pending.name) setName(pending.name);
+    if (!email && pending.email) setEmail(pending.email);
+
+    void user.getIdToken(true).then((token) => provisionCoach(token, coachName));
+  }, [authLoading, user, name, email, needsVerify]);
+
   async function provisionCoach(token: string, coachName: string) {
     const me = await apiFetch<Me>(token, "/api/v1/coach-signup", {
       method: "POST",
@@ -126,6 +150,7 @@ export default function CoachSignupPage() {
       // response.
       throw new Error("unexpected role in coach-signup response");
     }
+    clearPendingEmailVerify();
     router.replace("/coach/calendar");
   }
 
@@ -146,6 +171,7 @@ export default function CoachSignupPage() {
       const token = await signUp(email, password);
       const currentUser = getFirebaseAuth().currentUser;
       if (currentUser && !isAuthEmulator() && !currentUser.emailVerified) {
+        savePendingEmailVerify({ flow: "coachSignup", name: name.trim(), email });
         setNeedsVerify(true);
         return;
       }
@@ -303,6 +329,13 @@ export default function CoachSignupPage() {
                 const currentUser = getFirebaseAuth().currentUser;
                 if (!currentUser) return;
                 void currentUser.getIdToken(true).then((token) => provisionCoach(token, name.trim()));
+              }}
+              onChangeEmail={() => {
+                clearPendingEmailVerify();
+                setNeedsVerify(false);
+                setError(null);
+                setEmail("");
+                setPassword("");
               }}
             />
           </div>

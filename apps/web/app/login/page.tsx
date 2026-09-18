@@ -52,6 +52,7 @@ export default function LoginPage() {
   // reaches it too: a Google identity nobody has onboarded yet is exactly
   // this state, and login is deliberately not allowed to provision it.
   const [noAccount, setNoAccount] = useState(false);
+  const [verifiedNoAccount, setVerifiedNoAccount] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [googlePending, setGooglePending] = useState(false);
   const [applePending, setApplePending] = useState(false);
@@ -76,6 +77,13 @@ export default function LoginPage() {
           usesPasswordProvider(current)
         ) {
           setNeedsVerify(true);
+        } else if (
+          current &&
+          !isAuthEmulator() &&
+          current.emailVerified &&
+          usesPasswordProvider(current)
+        ) {
+          setVerifiedNoAccount(true);
         } else {
           setNoAccount(true);
         }
@@ -93,6 +101,7 @@ export default function LoginPage() {
     event.preventDefault();
     setError(null);
     setNoAccount(false);
+    setVerifiedNoAccount(false);
     setNeedsVerify(false);
     if (!isValidEmail(email)) {
       setError(t("errors.auth.invalidEmail"));
@@ -111,6 +120,7 @@ export default function LoginPage() {
   async function handleGoogleSignIn() {
     setError(null);
     setNoAccount(false);
+    setVerifiedNoAccount(false);
     setGooglePending(true);
     try {
       const { idToken } = await signInWithGoogle();
@@ -132,6 +142,7 @@ export default function LoginPage() {
   async function handleAppleSignIn() {
     setError(null);
     setNoAccount(false);
+    setVerifiedNoAccount(false);
     setApplePending(true);
     try {
       const { idToken } = await signInWithApple();
@@ -164,6 +175,14 @@ export default function LoginPage() {
                 if (!current) return;
                 void current.getIdToken(true).then((token) => routeBySignedInRole(token));
               }}
+              onChangeEmail={() => {
+                setNeedsVerify(false);
+                setError(null);
+                setNoAccount(false);
+                setVerifiedNoAccount(false);
+                setEmail("");
+                setPassword("");
+              }}
             />
           </div>
         ) : (
@@ -185,6 +204,14 @@ export default function LoginPage() {
             <PasswordField label={t("auth.field.password")} value={password} onChange={setPassword} autoComplete="current-password" required />
           </div>
           {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{error}</p>}
+          {verifiedNoAccount && (
+            <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm leading-6 font-medium text-red-700">
+              {t("auth.login.verifiedNoAccount.intro")} {t("auth.login.verifiedNoAccount.joinPrompt")}{" "}
+              <Link href="/join" className="underline">{t("auth.login.verifiedNoAccount.joinLink")}</Link>{" "}
+              {t("auth.login.verifiedNoAccount.coachPrompt")}{" "}
+              <Link href="/coach/signup" className="underline">{t("auth.login.verifiedNoAccount.coachLink")}</Link>
+            </p>
+          )}
           {noAccount && (
             <p role="alert" className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-sm leading-6 font-medium text-red-700">
               {/* Split at the two links rather than interpolated: a <Link>
