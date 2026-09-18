@@ -148,8 +148,6 @@ export default function CoachSignupPage() {
     if (!coachName) return;
 
     resumeAttempted.current = true;
-    if (!name.trim() && pending.name) setName(pending.name);
-    if (!email && pending.email) setEmail(pending.email);
 
     void user.getIdToken(true).then((token) => provisionCoach(token, coachName));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot resume after verify redirect

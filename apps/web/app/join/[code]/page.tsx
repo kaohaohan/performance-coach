@@ -186,8 +186,6 @@ export default function JoinCodePage() {
     if (!pending || pending.flow !== "join" || pending.code !== code) return;
 
     resumeAttempted.current = true;
-    if (!name.trim() && pending.name) setName(pending.name);
-    if (!email && pending.email) setEmail(pending.email);
 
     const athleteName = name.trim() || pending.name;
     void user.getIdToken(true).then((token) => continueWithToken(token, athleteName));
