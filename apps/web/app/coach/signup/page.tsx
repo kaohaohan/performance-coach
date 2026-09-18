@@ -121,6 +121,21 @@ export default function CoachSignupPage() {
   const socialConfirm = socialProvider !== null;
   const [needsVerify, setNeedsVerify] = useState(false);
 
+  async function provisionCoach(token: string, coachName: string) {
+    const me = await apiFetch<Me>(token, "/api/v1/coach-signup", {
+      method: "POST",
+      body: { name: coachName },
+    });
+    if (me.role !== "COACH") {
+      // Should be unreachable — the endpoint hard-codes role server-side
+      // — but never redirect into the Coach dashboard on an unexpected
+      // response.
+      throw new Error("unexpected role in coach-signup response");
+    }
+    clearPendingEmailVerify();
+    router.replace("/coach/calendar");
+  }
+
   useEffect(() => {
     if (authLoading || resumeAttempted.current) return;
     if (!user?.emailVerified || !usesPasswordProvider(user)) return;
@@ -137,22 +152,8 @@ export default function CoachSignupPage() {
     if (!email && pending.email) setEmail(pending.email);
 
     void user.getIdToken(true).then((token) => provisionCoach(token, coachName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot resume after verify redirect
   }, [authLoading, user, name, email, needsVerify]);
-
-  async function provisionCoach(token: string, coachName: string) {
-    const me = await apiFetch<Me>(token, "/api/v1/coach-signup", {
-      method: "POST",
-      body: { name: coachName },
-    });
-    if (me.role !== "COACH") {
-      // Should be unreachable — the endpoint hard-codes role server-side
-      // — but never redirect into the Coach dashboard on an unexpected
-      // response.
-      throw new Error("unexpected role in coach-signup response");
-    }
-    clearPendingEmailVerify();
-    router.replace("/coach/calendar");
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

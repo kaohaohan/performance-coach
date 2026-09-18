@@ -113,25 +113,6 @@ export default function JoinCodePage() {
     return () => { cancelled = true; };
   }, [code]);
 
-  // After the verify link opens this URL in Safari, resume redeem once the
-  // Firebase session is verified and the pending join state is still here.
-  useEffect(() => {
-    if (authLoading || resumeAttempted.current) return;
-    if (!user?.emailVerified || !usesPasswordProvider(user)) return;
-    if (needsVerify) return;
-    if (step !== "confirming" && step !== "authenticating") return;
-
-    const pending = readPendingEmailVerify();
-    if (!pending || pending.flow !== "join" || pending.code !== code) return;
-
-    resumeAttempted.current = true;
-    if (!name.trim() && pending.name) setName(pending.name);
-    if (!email && pending.email) setEmail(pending.email);
-
-    const athleteName = name.trim() || pending.name;
-    void user.getIdToken(true).then((token) => continueWithToken(token, athleteName));
-  }, [authLoading, user, code, step, needsVerify, name, email]);
-
   // freshToken mints a token from the live Firebase user at the moment it
   // is needed, rather than replaying one captured earlier. Retrying redeem
   // with a stored token is what turned a single rejected attempt into an
@@ -192,6 +173,26 @@ export default function JoinCodePage() {
     }
     await runRedeem(token, athleteName);
   }
+
+  // After the verify link opens this URL in Safari, resume redeem once the
+  // Firebase session is verified and the pending join state is still here.
+  useEffect(() => {
+    if (authLoading || resumeAttempted.current) return;
+    if (!user?.emailVerified || !usesPasswordProvider(user)) return;
+    if (needsVerify) return;
+    if (step !== "confirming" && step !== "authenticating") return;
+
+    const pending = readPendingEmailVerify();
+    if (!pending || pending.flow !== "join" || pending.code !== code) return;
+
+    resumeAttempted.current = true;
+    if (!name.trim() && pending.name) setName(pending.name);
+    if (!email && pending.email) setEmail(pending.email);
+
+    const athleteName = name.trim() || pending.name;
+    void user.getIdToken(true).then((token) => continueWithToken(token, athleteName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot resume after verify redirect
+  }, [authLoading, user, code, step, needsVerify, name, email]);
 
   // Already has a live Firebase session (e.g. resuming after abandoning
   // mid-flow, signed in from another tab, or still signed in as a Coach) —
