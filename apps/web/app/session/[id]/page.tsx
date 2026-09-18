@@ -101,6 +101,10 @@ export default function SessionPage() {
   const [addedRpe, setAddedRpe] = useState("");
   const [adjusting, setAdjusting] = useState(false);
   const [adjustError, setAdjustError] = useState<string | null>(null);
+  const [editingCueId, setEditingCueId] = useState<string | null>(null);
+  const [cueDraft, setCueDraft] = useState("");
+  const [savingCue, setSavingCue] = useState(false);
+  const [cueError, setCueError] = useState<string | null>(null);
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null);
   const initiallyExpanded = useRef(false);
 
@@ -306,6 +310,39 @@ export default function SessionPage() {
     applySession(response);
   }
 
+  function beginEditCue(exercise: SessionExercise) {
+    setEditingCueId(exercise.scheduledWorkoutExerciseId);
+    setCueDraft(exercise.coachCue ?? "");
+    setCueError(null);
+  }
+
+  function cancelEditCue() {
+    setEditingCueId(null);
+    setCueDraft("");
+    setCueError(null);
+  }
+
+  async function handleSaveCue(exercise: SessionExercise) {
+    if (!idToken || savingCue) return;
+    setSavingCue(true);
+    setCueError(null);
+    try {
+      const updated = await apiFetch<SessionExercise>(idToken, `/api/v1/sessions/${sessionId}/exercises/${exercise.scheduledWorkoutExerciseId}/coach-cue`, {
+        method: "PATCH",
+        body: { coachCue: cueDraft },
+      });
+      setSession((previous) => previous === null ? previous : {
+        ...previous,
+        exercises: previous.exercises.map((item) => item.scheduledWorkoutExerciseId === exercise.scheduledWorkoutExerciseId ? { ...item, coachCue: updated.coachCue } : item),
+      });
+      cancelEditCue();
+    } catch (error) {
+      setCueError(errorMessage(t, error, API_ERROR_POLICY));
+    } finally {
+      setSavingCue(false);
+    }
+  }
+
   async function handleAddExercise() {
     if (!idToken || !selectedExerciseId || adjusting) return;
     const setCount = Number(addedSets);
@@ -393,12 +430,21 @@ export default function SessionPage() {
           // The API remains the authority. This is only an affordance gate
           // derived from the application /me response, never Firebase claims.
           const canRemove = isActive && (me?.role === "COACH" || (me?.role === "ATHLETE" && exercise.origin === "ATHLETE_ADDED" && exercise.addedByUserId === me.id));
+          const canEditCoachCue = isActive && me?.role === "COACH";
           return <section key={exercise.scheduledWorkoutExerciseId} className={`overflow-hidden rounded-2xl shadow-sm ring-1 ${exercise.origin === "ATHLETE_ADDED" ? "border-l-4 border-amber-700 bg-amber-50 ring-amber-200" : "bg-white ring-slate-950/5"}`}>
             <button type="button" aria-expanded={expanded} onClick={() => setExpandedExerciseId((current) => current === exercise.scheduledWorkoutExerciseId ? null : exercise.scheduledWorkoutExerciseId)} className="block min-h-12 w-full px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-600">
               <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="break-words text-lg font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>{exercise.origin === "ATHLETE_ADDED" ? <span className="rounded-full bg-amber-700 px-2 py-0.5 text-[11px] font-bold text-white">{t("athlete.session.athleteAdded")}</span> : <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{exercise.origin === "COACH_ADDED" ? t("athlete.session.coachAdded") : t("athlete.session.exerciseEyebrow")}</span>}</div><p className="mt-1 text-sm text-slate-600">{t("athlete.session.progressSummary", { completed: targets.filter((target) => actualForTarget(exercise, target) !== undefined).length, total: targets.length })}</p></div><span className="mt-0.5 shrink-0 text-sm font-bold text-teal-700">{t(expanded ? "athlete.session.collapseExercise" : "athlete.session.expandExercise")} <span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span></span></div>
             </button>
             {expanded && <>
-            {exercise.coachCue && <p className="mx-4 border-t border-teal-100 pt-3 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
+            {(exercise.coachCue || canEditCoachCue) && <div className="mx-4 border-t border-teal-100 pt-3">
+              {editingCueId === exercise.scheduledWorkoutExerciseId ? <div className="grid gap-2">
+                <label className="grid gap-1 text-sm font-bold text-teal-900" htmlFor={`coach-cue-${exercise.scheduledWorkoutExerciseId}`}>{t("athlete.session.coachCueLabel")}
+                  <textarea id={`coach-cue-${exercise.scheduledWorkoutExerciseId}`} value={cueDraft} onChange={(event) => setCueDraft(event.target.value)} maxLength={500} rows={3} placeholder={t("athlete.session.coachCuePlaceholder")} className="w-full resize-y rounded-xl border border-teal-200 bg-white px-3 py-2 text-sm font-normal leading-5 text-slate-800 outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15" />
+                </label>
+                <div className="flex items-center justify-between gap-3"><span className="text-xs text-slate-500">{cueDraft.length}/500</span><div className="flex gap-2"><button type="button" onClick={cancelEditCue} disabled={savingCue} className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 disabled:opacity-50">{t("athlete.session.cancelCoachCue")}</button><button type="button" onClick={() => handleSaveCue(exercise)} disabled={savingCue} className="min-h-10 rounded-lg bg-teal-600 px-3 text-sm font-bold text-white disabled:opacity-50">{savingCue ? t("common.saving") : t("athlete.session.saveCoachCue")}</button></div></div>
+                {cueError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{cueError}</p>}
+              </div> : <div className="flex items-start justify-between gap-3 text-sm leading-5 text-teal-900"><p className="min-w-0">{exercise.coachCue ? <><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</> : <span className="text-slate-500">{t("athlete.session.noCoachCue")}</span>}</p>{canEditCoachCue && <button type="button" onClick={() => beginEditCue(exercise)} className="min-h-10 shrink-0 rounded-lg border border-teal-200 bg-white px-3 text-sm font-bold text-teal-700 hover:bg-teal-50">{exercise.coachCue ? t("athlete.session.editCoachCue") : t("athlete.session.addCoachCue")}</button>}</div>}
+            </div>}
             <div className="px-4 pb-3 pt-2">
               {targets.map((target) => {
                 const actual = actualForTarget(exercise, target);

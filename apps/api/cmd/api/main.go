@@ -153,6 +153,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/sessions/{sessionId}/exercise-options", authMiddleware(handleListSessionExerciseOptions(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/exercises", authMiddleware(handleAdjustSessionExercise(pool)))
 	mux.Handle("DELETE /api/v1/sessions/{sessionId}/exercises/{exerciseId}", authMiddleware(handleRemoveSessionExercise(pool)))
+	mux.Handle("PATCH /api/v1/sessions/{sessionId}/exercises/{exerciseId}/coach-cue", authMiddleware(handleUpdateSessionCoachCue(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/complete", authMiddleware(handleCompleteSession(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/set-logs", authMiddleware(handleCreateSetLog(pool)))
 	mux.Handle("PATCH /api/v1/set-logs/{setLogId}", authMiddleware(handleUpdateSetLog(pool)))
@@ -1237,6 +1238,31 @@ func handleRemoveSessionExercise(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(exercise)
+	}
+}
+
+func handleUpdateSessionCoachCue(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		var req struct {
+			CoachCue *string `json:"coachCue"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+		exercise, err := workoutsession.UpdateCoachCue(r.Context(), pool, user, r.PathValue("sessionId"), r.PathValue("exerciseId"), req.CoachCue)
+		if err != nil {
+			writeSessionExerciseError(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(exercise)
 	}
 }

@@ -649,6 +649,82 @@ func RemoveExercise(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	return Exercise{}, ErrConflict
 }
 
+// UpdateCoachCue changes only the frozen coach instruction for one active
+// scheduled exercise. It deliberately leaves exercise identity, planned sets,
+// replacement links, and SetLogs untouched so a coach can repair a missing
+// instruction without rewriting training history.
+func UpdateCoachCue(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID, exerciseID string, cue *string) (Exercise, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return Exercise{}, &ValidationError{Message: "sessionId must be a valid UUID"}
+	}
+	if _, err := uuid.Parse(exerciseID); err != nil {
+		return Exercise{}, &ValidationError{Message: "scheduledWorkoutExerciseId must be a valid UUID"}
+	}
+	if caller.Role != "COACH" {
+		return Exercise{}, ErrConflict
+	}
+
+	var normalized *string
+	if cue != nil {
+		trimmed := strings.TrimSpace(*cue)
+		if len(trimmed) > 500 {
+			return Exercise{}, &ValidationError{Message: "coachCue must be 500 characters or fewer"}
+		}
+		if trimmed != "" {
+			normalized = &trimmed
+		}
+	}
+
+	h, err := lookupAccessibleSession(ctx, pool, caller, sessionID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if err := requireActiveCoachMutation(ctx, pool, caller, h.athleteID); err != nil {
+		return Exercise{}, err
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return Exercise{}, fmt.Errorf("workoutsession: begin coach cue update: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT ws.status
+		FROM workout_sessions ws
+		JOIN scheduled_workout_exercises swe ON swe.scheduled_workout_id = ws.scheduled_workout_id
+		WHERE ws.id = $1 AND swe.id = $2 AND swe.removed_at IS NULL
+		FOR UPDATE OF ws, swe`, sessionID, exerciseID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Exercise{}, ErrConflict
+	}
+	if err != nil {
+		return Exercise{}, err
+	}
+	if status != "ACTIVE" {
+		return Exercise{}, ErrCompleted
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE scheduled_workout_exercises SET coach_cue = $1 WHERE id = $2`, normalized, exerciseID); err != nil {
+		return Exercise{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Exercise{}, fmt.Errorf("workoutsession: commit coach cue update: %w", err)
+	}
+
+	detail, err := Get(ctx, pool, caller, sessionID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	for _, exercise := range detail.Exercises {
+		if exercise.ScheduledWorkoutExerciseID == exerciseID {
+			return exercise, nil
+		}
+	}
+	return Exercise{}, ErrConflict
+}
+
 // loadExercisesWithSetLogs returns scheduledWorkoutID's snapshot exercises,
 // canonical planned targets, and actual logs recorded during sessionID.
 // Planned targets and actual logs deliberately use separate queries: joining
