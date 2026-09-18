@@ -284,6 +284,10 @@ export default function SessionPage() {
 
   async function handleComplete() {
     if (!idToken || completing) return;
+    const confirmed = window.confirm(locale === "zh-TW"
+      ? "確定要完成這次訓練嗎？完成後將無法再新增、移除或取代動作，只能更正已記錄的數據。"
+      : "Complete this workout? After completion, you cannot add, remove, or replace exercises. You can only edit recorded results.");
+    if (!confirmed) return;
     setCompleting(true);
     setCompleteError(null);
     try {
