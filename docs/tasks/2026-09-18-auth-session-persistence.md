@@ -31,10 +31,11 @@
 | --- | --- | --- |
 | IndexedDB initializeAuth | Done | |
 | Foreground reload | Done | Capacitor appStateChange reloads currentUser only |
-| Verification | Done | Unit tests; physical iPhone smoke still needed |
+| Verification | Done | Staging iPhone smoke 2026-09-22: brief background OK; force-kill cold start may still sign out |
+| Staging sign-off | Done | Accepted for MVP with known iOS WKWebView limit |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Implemented.
-- Deviations from plan: None.
-- Follow-ups: If a physical iPhone still drops the session after this ships, add `@capacitor-firebase/authentication`.
+- Final status: Implemented and staging-verified (2026-09-22).
+- Deviations from plan: IndexedDB persistence helps foreground resume; force-kill cold start on a physical iPhone may still require re-login.
+- Follow-ups: If force-kill remains unacceptable after prod smoke, add `@capacitor-firebase/authentication` (Keychain).

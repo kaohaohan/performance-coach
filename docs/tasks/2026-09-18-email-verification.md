@@ -33,10 +33,23 @@
 | --- | --- | --- |
 | Contract + API | Done | 403 EMAIL_NOT_VERIFIED on signup/redeem |
 | Web verify UI | Done | login, coach signup, join; emulator skips send |
-| Verification | Done | go test authn + cmd/api; npm test |
+| Verify redirect resume | Done | `continueUrl` = current href; `auth-pending-verify` in localStorage; auto-resume join/coach signup |
+| Change-email escape hatch | Done | `EmailVerificationPrompt` → signOut + return to form |
+| Login verified-no-profile copy | Done | Distinct from generic noAccount |
+| Verification | Done | go test authn + cmd/api; npm test 162/162 |
+| Staging QA (web) | Done | Join + verify + redeem; change-email; Gmail spam copy workaround documented |
+| Staging QA (App) | Done | Join create → verify screen → Gmail link in Safari → return to App → I've verified → Today |
+| Staging sign-off | Done | 2026-09-22 |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Implemented.
-- Deviations from plan: Local emulator skips sending the verification email and treats the user as ready to provision.
-- Follow-ups: Enable matching password policy in Firebase Console; confirm Action URL domains.
+- Final status: Implemented, follow-up UX fixes shipped, staging-verified (2026-09-22).
+- Deviations from plan:
+  - Local emulator skips sending the verification email.
+  - Post-QA fixes: full-path `continueUrl`, localStorage pending state (sessionStorage lost across Gmail's new tab), change-email button, verified-no-profile login copy.
+  - **Accepted UX:** Firebase verify links open in Safari on iOS; they do not return to the Capacitor app on staging or production. Athletes/coaches complete provisioning by returning to the app and tapping **I've verified** (web-only users can complete in-browser after the link).
+  - Gmail may classify Firebase mail as spam and disable tappable links; users copy the URL to Safari or report not spam.
+- Follow-ups (backlog, not blocking staging):
+  - Optional post-verify landing page: “Email verified — return to PumpLoop and tap I've verified.”
+  - Firebase Console: password policy alignment; monitor deliverability / spam rate for `noreply@dontworkout.firebaseapp.com`.
+  - Production smoke: coach signup verify path; grandfather login with primary Gmail.

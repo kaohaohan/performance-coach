@@ -28,10 +28,11 @@
 | Phase / Sub-task | Status | Notes |
 | --- | --- | --- |
 | Join social-confirm UI | Done | |
-| Verification | Done | |
+| Verification | Done | Code + unit tests; social paths not re-smoked on App during 2026-09-22 auth QA |
+| Staging sign-off | Done | Email/password join path verified on staging web + App; social layout unchanged from design |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Implemented.
+- Final status: Implemented and staging sign-off (2026-09-22) for the email/password join path; Google/Apple confirm card not explicitly re-tested on device in this pass.
 - Deviations from plan: None.
-- Follow-ups: None.
+- Follow-ups: Quick App smoke for Google/Apple join when next touching onboarding.

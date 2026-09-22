@@ -29,10 +29,11 @@
 | --- | --- | --- |
 | Validator + PasswordField | Done | |
 | Wire forms + i18n | Done | login, signup, join, settings |
-| Verification | Done | npm test 162/162 |
+| Verification | Done | npm test 162/162; staging web + App smoke 2026-09-22 |
+| Staging sign-off | Done | Show/hide toggle and 8+letter+number rule confirmed on login, join, coach signup |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Implemented.
+- Final status: Implemented and staging-verified (2026-09-22).
 - Deviations from plan: None.
-- Follow-ups: None.
+- Follow-ups: Optional founder step — align Firebase Console password policy with client rules.
