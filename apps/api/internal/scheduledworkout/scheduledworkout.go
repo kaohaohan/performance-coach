@@ -147,6 +147,7 @@ type ScheduledExercise struct {
 	Name                       string      `json:"name"`
 	Plan                       CreatedPlan `json:"plan"`
 	CoachCue                   *string     `json:"coachCue,omitempty"`
+	YoutubeURL                 *string     `json:"youtubeUrl,omitempty"`
 	Position                   int         `json:"position"`
 }
 
@@ -1277,8 +1278,9 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	}
 
 	const exercisesQuery = `
-		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.position
+		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.position, e.youtube_url
 		FROM scheduled_workout_exercises swe
+		LEFT JOIN exercises e ON e.id = swe.exercise_id
 		WHERE swe.scheduled_workout_id = ANY($1)
 		ORDER BY swe.scheduled_workout_id, swe.position`
 
@@ -1299,8 +1301,9 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 			exerciseID, scheduledWorkoutID, exerciseDefinitionID, exerciseName string
 			coachCue                                                           *string
 			position                                                           int
+			youtubeURL                                                         *string
 		)
-		if err := rows.Scan(&exerciseID, &scheduledWorkoutID, &exerciseDefinitionID, &exerciseName, &coachCue, &position); err != nil {
+		if err := rows.Scan(&exerciseID, &scheduledWorkoutID, &exerciseDefinitionID, &exerciseName, &coachCue, &position, &youtubeURL); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan today snapshot exercise: %w", err)
 		}
 
@@ -1312,6 +1315,7 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 			Name:                       exerciseName,
 			Plan:                       CreatedPlan{Sets: make([]PlannedSet, 0)},
 			CoachCue:                   coachCue,
+			YoutubeURL:                 youtubeURL,
 			Position:                   position,
 		})
 		exerciseByID[exerciseID] = exerciseReference{scheduledWorkoutID: scheduledWorkoutID, index: index}

@@ -310,6 +310,7 @@ type Exercise struct {
 	Name                               string   `json:"name"`
 	Plan                               Plan     `json:"plan"`
 	CoachCue                           *string  `json:"coachCue,omitempty"`
+	YoutubeURL                         *string  `json:"youtubeUrl,omitempty"`
 	SetLogs                            []SetLog `json:"setLogs"`
 	Origin                             string   `json:"origin"`
 	AddedByUserID                      *string  `json:"addedByUserId,omitempty"`
@@ -751,11 +752,13 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 		SELECT swe.id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.origin,
 		       swe.added_by_user_id::text, swe.removed_at::text, swe.removed_by_user_id::text,
 		       swe.replaces_scheduled_workout_exercise_id::text,
+		       e.youtube_url,
 		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
 		       p.target_rpe
 		FROM scheduled_workout_exercises swe
 		JOIN scheduled_workout_planned_sets p ON p.scheduled_workout_exercise_id = swe.id
+		LEFT JOIN exercises e ON e.id = swe.exercise_id
 		WHERE swe.scheduled_workout_id = $1
 		ORDER BY swe.removed_at IS NOT NULL, swe.position, p.planned_position`
 
@@ -773,11 +776,13 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 			coachCue                                              *string
 			origin                                                string
 			addedByUserID, removedAt, removedByUserID, replacesID *string
+			youtubeURL                                            *string
 			plannedSet                                            PlannedSet
 		)
 		if err := rows.Scan(
 			&swExerciseID, &exerciseID, &exerciseName, &coachCue, &origin,
 			&addedByUserID, &removedAt, &removedByUserID, &replacesID,
+			&youtubeURL,
 			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
 		); err != nil {
 			return nil, nil, fmt.Errorf("workoutsession: scan planned exercise row: %w", err)
@@ -790,6 +795,7 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 				ExerciseID:                         exerciseID,
 				Name:                               exerciseName,
 				CoachCue:                           coachCue,
+				YoutubeURL:                         youtubeURL,
 				Plan:                               Plan{Sets: make([]PlannedSet, 0)},
 				SetLogs:                            make([]SetLog, 0),
 				Origin:                             origin,
@@ -966,7 +972,7 @@ func (in UpdateSetLogInput) validate(load *float64, unit *string, reps *int, rpe
 }
 
 // UpdateSetLog updates only actual fields of an existing log. The owning
-// session remains in its current state; both ACTIVE and COMPLETED are valid.
+// session must be ACTIVE; COMPLETED sessions are fully read-only.
 func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, setLogID string, input UpdateSetLogInput) (SetLog, error) {
 	if _, err := uuid.Parse(setLogID); err != nil {
 		return SetLog{}, &ValidationError{Message: "setLogId must be a valid UUID"}
@@ -991,6 +997,9 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 	}
 	if err := requireActiveCoachMutation(ctx, pool, caller, header.athleteID); err != nil {
 		return SetLog{}, err
+	}
+	if header.status != "ACTIVE" {
+		return SetLog{}, ErrSessionNotActive
 	}
 
 	load, unit, reps, rpe := s.Load, s.Unit, &s.Reps, s.RPE

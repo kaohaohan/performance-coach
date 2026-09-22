@@ -1438,6 +1438,8 @@ func handleUpdateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			case errors.Is(err, workoutsession.ErrNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "set log not found")
+			case errors.Is(err, workoutsession.ErrSessionNotActive):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session is not active")
 			default:
 				authn.WriteInternalError(w, r, err)
 			}

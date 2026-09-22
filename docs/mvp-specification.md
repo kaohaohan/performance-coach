@@ -402,10 +402,10 @@ The Coach can log SetLogs on the Athlete's behalf for the duration of the sessio
 ## **Acceptance Criteria**
 
 - A connected Coach can start a WorkoutSession for an Athlete's ScheduledWorkout; reopening an already-`ACTIVE` session resumes it rather than erroring (idempotent, matching the backend contract).
-- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf. The Athlete themself or a Coach with an active relationship may also edit an existing SetLog in an `ACTIVE` or `COMPLETED` session; completed sessions still prohibit adding or deleting SetLogs.
+- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf. The Athlete themself or a Coach with an active relationship may edit an existing SetLog only while the session is `ACTIVE`. A `COMPLETED` session is fully read-only.
 - Each SetLog records which user logged it (`loggedByUserId`) — Coach or Athlete.
 - Coach and Athlete see the same session state if both are viewing it.
-- Once the session is `COMPLETED`, its status and `completedAt` remain unchanged and its SetLog associations and metadata remain immutable. Existing SetLogs may still be corrected through edit only; adding or deleting SetLogs remains prohibited for both Coach and Athlete.
+- Once the session is `COMPLETED`, its status, `completedAt`, SetLogs, and associations are immutable. Coach and Athlete may still `GET` the session; PATCH, POST, and DELETE of SetLogs are prohibited.
 - While a session is `ACTIVE`, a connected Coach may add an Exercise or withdraw/replace any active Exercise; the Athlete may add an Exercise and withdraw/replace only Exercises they added. Added Exercises carry `COACH_ADDED` or `ATHLETE_ADDED` provenance and a complete planned-set prescription. Existing targets are not edited in place after session start: a changed prescription is a replacement with new snapshot IDs.
 - Withdrawing or replacing an Exercise after session start is a soft removal. The original ScheduledWorkoutExercise, its planned sets, and every SetLog remain historical facts even when all planned work was already completed. Review shows the removed item and any explicit replacement relationship. Once the whole WorkoutSession is `COMPLETED`, structural changes are prohibited.
 - **No new backend endpoint is required.** This story exercises existing session/set-log authorization: a connected Coach has the same access as the Athlete themself (see the API contract's authorization matrix, §4).
@@ -434,10 +434,11 @@ Example:
 TODAY
 
 Monday Lower
+3 exercises
 
-Back Squat
-4 × 5
-Target RPE 8
+Back Squat          4 × 5 · 80 kg · RPE 8
+Romanian Deadlift   3 × 8 · 60 kg
+Plank               3 × 30s hold
 
 [Start Workout]
 ```
@@ -454,6 +455,7 @@ Target RPE 8
 - Athlete can open the workout.
 - Athlete can start the workout session.
 - Mobile UI prioritizes today’s training over secondary features.
+- Today lists each exercise as a compact row so the Athlete can see the whole workout without expanding every set.
 - No new backend endpoint or Calendar domain object is introduced for date navigation.
 
 ---
@@ -485,7 +487,7 @@ Reps: 5
 RPE: 7
 ```
 
-and saves the set.
+and saves the set. The Session screen shows a compact overview of every exercise first; the Athlete or Coach opens one exercise to record that set.
 
 ## **Then**
 
@@ -523,8 +525,8 @@ Example:
 - `setNumber` is server-assigned actual chronology, not the planned-set association.
 - `loggedByUserId` is recorded.
 - Set persists after refresh.
-- Athlete self or a Coach with an active relationship can edit an existing SetLog in an `ACTIVE` or `COMPLETED` session; edits change only actual mutable fields and preserve session status/`completedAt` and all SetLog associations and metadata.
-- Completed sessions prohibit POST (add) and DELETE (remove) SetLog actions.
+- Athlete self or a Coach with an active relationship can edit an existing SetLog only while the session is `ACTIVE`; edits change only actual mutable fields and preserve all SetLog associations and metadata.
+- Completed sessions prohibit PATCH, POST, and DELETE of SetLogs.
 - Invalid values are rejected.
 - Unrelated users cannot modify the session.
 

@@ -781,6 +781,8 @@ Response `204 No Content`，無 body。
         "scheduledWorkoutExerciseId": "...",
         "exerciseId": "...",
         "name": "Back Squat",
+        "coachCue": "Sit between the hips.",
+        "youtubeUrl": "https://www.youtube.com/watch?v=example",
         "plan": {
           "sets": [
             { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
@@ -796,7 +798,7 @@ Response `204 No Content`，無 body。
 ]
 ```
 
-`session` 非 null 時代表已開始/完成，前端據此顯示 Start / Resume / Done。
+`session` 非 null 時代表已開始/完成，前端據此顯示 Start / Resume / Done。Optional `coachCue` comes from the snapshot; optional `youtubeUrl` is a live catalog join and is omitted when null.
 
 **注意：**行動端記錄 normal SetLog 同時送 active `scheduledWorkoutExerciseId` 與該 target 的 `scheduledWorkoutPlannedSetId`，不是 `exerciseId`。Extra SetLog 沒有 planned-set ID。
 
@@ -820,7 +822,7 @@ Response body 固定為（不含 `athleteId`、`scheduledWorkoutId`、`startedAt
 
 ### POST /sessions/{sessionId}/complete
 
-結束訓練。授權同 start（athlete 本人或 **active relationship** coach）。COMPLETED 後 session status 與 `completed_at` 不可改、且不可再轉回 ACTIVE；既有 SetLog 僅可透過 PATCH 更正 actual 欄位，不可 POST 新增或 DELETE 刪除。SetLog 的 session/exercise/planned-set association、kind、set number、logger 等 metadata 不可變。Athlete 帳號刪除 **不會**把 ACTIVE session 改成 COMPLETED；該 session 維持 `ACTIVE` 且對 coach/athlete mutation 皆拒絕（athlete 已無法通過 application-user middleware）。
+結束訓練。授權同 start（athlete 本人或 **active relationship** coach）。COMPLETED 後 session 永久唯讀：status 與 `completed_at` 不可改、不可再轉回 ACTIVE，且不可 PATCH / POST / DELETE SetLog。Athlete 帳號刪除 **不會**把 ACTIVE session 改成 COMPLETED；該 session 維持 `ACTIVE` 且對 coach/athlete mutation 皆拒絕（athlete 已無法通過 application-user middleware）。
 
 Response body 固定為（與 `POST .../session` 同一 `Session` shape，不含 `completedAt` — 理由同上，完整 detail 屬於 `GET /sessions/{sessionId}`）：
 
@@ -857,6 +859,8 @@ Session and ScheduledWorkout detail Exercise objects additionally expose `origin
     {
       "scheduledWorkoutExerciseId": "...",
       "name": "Back Squat",
+      "coachCue": "Sit between the hips.",
+      "youtubeUrl": "https://www.youtube.com/watch?v=example",
       "plan": {
         "sets": [
           { "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "position": 1, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 },
@@ -873,7 +877,7 @@ Session and ScheduledWorkout detail Exercise objects additionally expose `origin
 }
 ```
 
-`plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
+`plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Optional `youtubeUrl` is a live catalog join (`exercises.youtube_url`), omitted when null; it is not snapshotted. Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
 
 授權：athlete 本人，或其有 **historical access** 的 coach；其他人 `404`。Tombstoned athlete 的名稱為 `Deleted Athlete`。此為唯讀路徑，不要求 active relationship。
 
@@ -984,7 +988,7 @@ Normal SetLog insert 另外受 partial unique `(session_id, scheduled_workout_pl
 
 ### PATCH /set-logs/{setLogId}
 
-部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rpe`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上（athlete 本人或 **active relationship** coach），且 session 必須 `ACTIVE` 或 `COMPLETED`。PATCH 不改 session status/`completed_at`。
+部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rpe`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上（athlete 本人或 **active relationship** coach），且 session 必須 `ACTIVE`。COMPLETED → `409 CONFLICT`。PATCH 不改 session status/`completed_at`。
 
 ### DELETE /set-logs/{setLogId}
 
@@ -1057,7 +1061,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST /sessions/{id}/exercises` | ❌ 401 | ❌ 401 | ✅ add / remove / replace active exercises | ✅ add only | Athlete request carrying `replacesScheduledWorkoutExerciseId` → `409 CONFLICT` |
 | `DELETE /sessions/{id}/exercises/{exerciseId}` | ❌ 401 | ❌ 401 | ✅ any active exercise | ✅ only own `ATHLETE_ADDED` | soft remove; no plan or SetLog deletion |
 | `POST /sessions/{id}/set-logs` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 併發 claim 同一 planned set → `409`，見 §3.8 |
-| `PATCH /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | ACTIVE 或 COMPLETED 均可更正既有 log；不改 session status/`completed_at` 或 associations |
+| `PATCH /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE；COMPLETED → `409 CONFLICT`；不改 session status/`completed_at` 或 associations |
 | `DELETE /set-logs/{id}` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE；COMPLETED → `409 CONFLICT` |
 
 矩陣即 service 層的測試清單：每列至少三個 test case（允許、拒絕、404 隱藏）。
