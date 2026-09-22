@@ -13,7 +13,8 @@ export const errors: ErrorMessages = {
   "errors.auth.invalidEmail": "請輸入有效的電子郵件地址。",
   "errors.auth.invalidCredentials": "電子郵件或密碼不正確。",
   "errors.auth.emailInUse": "這個電子郵件已經有帳號了，請改用登入。",
-  "errors.auth.weakPassword": "密碼至少需要 8 個字元。",
+  "errors.auth.weakPassword": "密碼至少需要 8 個字元，且需包含英文字母與數字。",
+  "errors.auth.emailNotVerified": "請先到信箱完成驗證，再開啟信件中的連結後再試一次。",
   "errors.auth.tooManyRequests": "嘗試次數過多，請稍後再試。",
   "errors.auth.userDisabled": "這個帳號已被停用。",
 

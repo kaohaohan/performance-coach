@@ -18,6 +18,7 @@ import {
 } from "@/lib/account-deletion";
 import { createBrowserDeletionGateway } from "@/lib/account-deletion-browser";
 import { Capacitor } from "@capacitor/core";
+import { PasswordField } from "@/components/password-field";
 
 type Me = { id: string; name: string; role: "COACH" | "ATHLETE" };
 
@@ -201,16 +202,14 @@ export default function SettingsPage() {
               {t("settings.delete.confirmBody")}
             </p>
             {reauthKind === "password" && (
-              <label className="mt-4 block">
-                <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("settings.delete.passwordLabel")}</span>
-                <input
-                  type="password"
+              <div className="mt-4">
+                <PasswordField
+                  label={t("settings.delete.passwordLabel")}
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  onChange={setPassword}
                   autoComplete="current-password"
-                  className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15"
                 />
-              </label>
+              </div>
             )}
           </>
         }

@@ -720,6 +720,7 @@ export default function CoachCalendarPage() {
   const [editTarget, setEditTarget] = useState<DraftEditTarget | null>(null);
   const [editLoadingId, setEditLoadingId] = useState<string | null>(null);
   const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [editConflictSessionId, setEditConflictSessionId] = useState<string | null>(null);
   const [saveChangesSuccess, setSaveChangesSuccess] = useState(false);
 
   // Is there authoring worth preserving? Deliberately independent of
@@ -1982,10 +1983,15 @@ export default function CoachCalendarPage() {
   async function openEditWorkout(assignment: ScheduledWorkoutSummary) {
     if (!idToken || programmingControlsDisabled || editLoadingId) return;
     setEditLoadError(null);
+    setEditConflictSessionId(null);
     setEditLoadingId(assignment.id);
     try {
       const detail = await apiFetch<ScheduledWorkoutDetail>(idToken, `/api/v1/scheduled-workouts/${assignment.id}`);
       if (detail.session !== null) {
+        if (detail.session.status === "ACTIVE") {
+          router.push(`/session/${detail.session.id}`);
+          return;
+        }
         setEditLoadError(t("calendar.errors.alreadyStartedEdit"));
         await refetchAssignments();
         return;
@@ -2051,6 +2057,10 @@ export default function CoachCalendarPage() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setBuildError(t("calendar.errors.alreadyStartedEdit"));
+        try {
+          const detail = await apiFetch<ScheduledWorkoutDetail>(idToken, `/api/v1/scheduled-workouts/${editTarget.scheduledWorkoutId}`);
+          setEditConflictSessionId(detail.session?.status === "ACTIVE" ? detail.session.id : null);
+        } catch { setEditConflictSessionId(null); }
         await refetchAssignments();
       } else {
         setBuildError(describeError(t, err));
@@ -2166,7 +2176,7 @@ export default function CoachCalendarPage() {
                   {shouldOfferRetry({ buildStatus, pendingAssignment }) ? <div className="grid gap-3">
                     <Notice tone="error"><span className="font-bold">{t("calendar.build.createdNotAssigned")}</span>{buildError ? ` ${buildError}` : ""}</Notice>
                     <button type="button" onClick={handleRetryAssignment} className="min-h-14 w-full rounded-2xl bg-amber-500 px-5 text-base font-bold text-slate-950 shadow-sm transition hover:bg-amber-400">{t("calendar.build.retryAssignment")}</button>
-                  </div> : buildError ? <Notice tone="error">{buildError}</Notice> : null}
+                  </div> : buildError ? <div className="grid gap-3"><Notice tone="error">{buildError}</Notice>{editConflictSessionId && <button type="button" onClick={() => router.push(`/session/${editConflictSessionId}`)} className="min-h-12 rounded-xl border border-teal-300 px-4 text-sm font-bold text-teal-800">{t("calendar.resume")}</button>}</div> : null}
 
                   <button type="submit" disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl bg-teal-600 px-5 text-base font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
                     {editTarget
@@ -2305,6 +2315,7 @@ export default function CoachCalendarPage() {
                     <li key={assignment.id} className="rounded-2xl border border-slate-200 bg-stone-50 p-4">
                       <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-500">{assignment.athlete.name}</p><p className="mt-1 text-lg font-bold">{assignment.workout.name}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ring-1 ${statusClass(assignment.session)}`}>{statusLabel(t, assignment.session)}</span></div>
                       <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
+                        {assignment.session !== null && assignment.session.status === "ACTIVE" && <button type="button" onClick={() => router.push(`/session/${assignment.session!.id}`)} className="min-h-10 rounded-xl border border-teal-300 px-4 text-sm font-bold text-teal-800 transition hover:bg-teal-50">{t("common.edit")}</button>}
                         {assignment.session === null && <button type="button" onClick={() => openEditWorkout(assignment)} disabled={programmingControlsDisabled || editLoadingId === assignment.id} className="min-h-10 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-800 transition hover:bg-slate-100 disabled:opacity-50">{editLoadingId === assignment.id ? t("calendar.opening") : t("common.edit")}</button>}
                         {assignment.session === null && <button type="button" onClick={() => setRemoveTarget(assignment)} disabled={removingId === assignment.id} className="min-h-10 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-50">{removingId === assignment.id ? t("calendar.removing") : t("common.remove")}</button>}
                         {assignment.session === null ? <button type="button" onClick={() => handleStart(assignment.id)} disabled={startingId === assignment.id} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white disabled:opacity-50">{startingId === assignment.id ? t("calendar.starting") : t("calendar.startSession")}</button> : <button type="button" onClick={() => router.push(`/session/${assignment.session!.id}`)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white">{assignment.session.status === "ACTIVE" ? t("calendar.resume") : t("calendar.review")}</button>}

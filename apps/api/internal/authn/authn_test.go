@@ -250,3 +250,23 @@ func TestMiddlewareUnauthenticatedBehaviorUnchanged(t *testing.T) {
 		})
 	}
 }
+
+func TestPasswordEmailUnverified(t *testing.T) {
+	cases := []struct {
+		name     string
+		identity authn.Identity
+		want     bool
+	}{
+		{name: "password unverified", identity: authn.Identity{SignInProvider: "password"}, want: true},
+		{name: "password verified", identity: authn.Identity{SignInProvider: "password", EmailVerified: true}},
+		{name: "google unverified", identity: authn.Identity{SignInProvider: "google.com"}},
+		{name: "empty provider", identity: authn.Identity{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := authn.PasswordEmailUnverified(c.identity); got != c.want {
+				t.Fatalf("PasswordEmailUnverified() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}

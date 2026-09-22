@@ -6,22 +6,13 @@ import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
 import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
-import { useLocale, useT, type Translate } from "@/lib/i18n";
+import { useLocale, useT } from "@/lib/i18n";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { fullDate } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
+import { compactPrescription, type Plan } from "@/lib/prescription-summary";
 
-type PlannedSet = {
-  scheduledWorkoutPlannedSetId: string;
-  position: number;
-  reps?: number;
-  prescriptionNote?: string;
-  load?: number;
-  unit?: "kg" | "lb";
-  rpe?: number;
-};
-type Plan = { sets: PlannedSet[] };
-type ExerciseSummary = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; coachCue?: string; position: number };
+type ExerciseSummary = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; coachCue?: string; youtubeUrl?: string; position: number };
 type Session = { id: string; status: "ACTIVE" | "COMPLETED" };
 type TodayScheduledWorkout = { id: string; scheduledDate: string; workoutName: string; exercises: ExerciseSummary[]; session: Session | null };
 
@@ -43,49 +34,11 @@ function shiftLocalDate(date: string, days: number): string {
   return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, "0")}-${String(shifted.getDate()).padStart(2, "0")}`;
 }
 
-function orderedPlannedSets(plan: Plan): PlannedSet[] {
-  return [...plan.sets].sort((left, right) => left.position - right.position);
-}
-
-// Takes `t` rather than reading a hook: it is called from inside a map and
-// from a component, and a plain function keeps both call sites identical.
-// "RPE" and the kg/lb symbols stay literal — Taiwan coaches use both exactly
-// as written, so there is nothing to translate.
-function plannedSetSummary(t: Translate, target: PlannedSet): string {
-  const parts = [target.reps === undefined ? target.prescriptionNote ?? "" : t("athlete.set.reps", { count: target.reps })];
-  if (target.load !== undefined) parts.push(target.unit === undefined ? `${target.load}` : `${target.load} ${target.unit}`);
-  if (target.rpe !== undefined) parts.push(`RPE ${target.rpe}`);
-  return parts.filter(Boolean).join(" · ");
-}
-
-function samePrescription(left: PlannedSet, right: PlannedSet): boolean {
-  return left.reps === right.reps
-    && left.prescriptionNote === right.prescriptionNote
-    && left.load === right.load
-    && left.unit === right.unit
-    && left.rpe === right.rpe;
-}
-
-function PlannedSetPreview({ plan }: { plan: Plan }) {
+function CoachCue({ cue }: { cue: string }) {
   const t = useT();
-  const targets = orderedPlannedSets(plan);
-  if (targets.length === 0) return <p className="mt-1 text-sm font-medium text-slate-500">{t("athlete.plan.none")}</p>;
-
-  const uniform = targets.every((target) => samePrescription(targets[0], target));
-  if (uniform) return <div className="mt-2">
-    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t(targets.length === 1 ? "athlete.plan.setCountOne" : "athlete.plan.setCountOther", { count: targets.length })}</p>
-    <p className="mt-1 text-base font-medium leading-6 text-slate-600">{plannedSetSummary(t, targets[0])}</p>
-  </div>;
-
-  return <div className="mt-2">
-    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t("athlete.plan.plannedSetCount", { count: targets.length })}</p>
-    <ol className="mt-2 space-y-1.5">
-      {targets.map((target) => <li key={target.scheduledWorkoutPlannedSetId} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-sm leading-5">
-        <span className="font-bold text-slate-700">{t("athlete.set.label", { position: target.position })}</span>
-        <span className="min-w-0 font-medium text-slate-600">{plannedSetSummary(t, target)}</span>
-      </li>)}
-    </ol>
-  </div>;
+  return (
+    <p className="mt-1 text-sm leading-5 text-slate-600"><span className="font-bold text-slate-700">{t("athlete.coachCue")}</span> {cue}</p>
+  );
 }
 
 export default function AthleteTodayPage() {
@@ -189,10 +142,11 @@ export default function AthleteTodayPage() {
                   </div>
                   <ul className="divide-y divide-slate-100 px-5">
                     {workout.exercises.map((exercise) => (
-                      <li key={exercise.scheduledWorkoutExerciseId} className="py-4">
-                        <p className="text-sm font-bold uppercase tracking-wide text-slate-900">{localizeExerciseName(exercise.name, locale)}</p>
-                        <PlannedSetPreview plan={exercise.plan} />
-                        {exercise.coachCue && <p className="mt-3 rounded-xl bg-teal-50 px-3 py-2 text-sm leading-5 text-teal-900"><span className="font-bold">{t("athlete.coachCue")}</span> {exercise.coachCue}</p>}
+                      <li key={exercise.scheduledWorkoutExerciseId} className="py-2.5">
+                        <p className="text-sm font-bold text-slate-900">{localizeExerciseName(exercise.name, locale)}</p>
+                        <p className="mt-0.5 text-sm font-medium text-slate-500">{compactPrescription(t, exercise.plan)}</p>
+                        {exercise.youtubeUrl && <a href={exercise.youtubeUrl} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-xs font-bold text-teal-700">{t("athlete.watchVideo")}</a>}
+                        {exercise.coachCue && <CoachCue cue={exercise.coachCue} />}
                       </li>
                     ))}
                   </ul>

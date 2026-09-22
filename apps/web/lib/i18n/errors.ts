@@ -87,6 +87,7 @@ export const PASSWORD_AUTH_CODES: Readonly<Partial<Record<string, MessageKey | t
   "auth/wrong-password": "errors.auth.invalidCredentials",
   "auth/email-already-in-use": "errors.auth.emailInUse",
   "auth/weak-password": "errors.auth.weakPassword",
+  EMAIL_NOT_VERIFIED: "errors.auth.emailNotVerified",
 };
 
 // The two social-provider policies live here rather than beside their buttons

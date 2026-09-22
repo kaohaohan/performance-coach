@@ -232,9 +232,14 @@ scheduled_workout_exercises(
   scheduled_workout_id uuid not null references scheduled_workouts(id),
   exercise_id uuid not null references exercises(id),
   exercise_name text not null,
+  origin text not null,
+  added_by_user_id uuid null references users(id),
+  removed_at timestamptz null,
+  removed_by_user_id uuid null references users(id),
+  replaces_scheduled_workout_exercise_id uuid null references scheduled_workout_exercises(id),
   target_load_unit text null,
   position integer not null,
-  unique (scheduled_workout_id, position)
+  unique active position per scheduled workout
 )
 
 scheduled_workout_planned_sets(
@@ -359,6 +364,8 @@ SetLog #4: 110 kg × 4 @9
 ```
 
 Historical display reads `exercise_name` and `target_load_unit` from `scheduled_workout_exercises`, and resolved targets from `scheduled_workout_planned_sets`. It never reads the live template for historical display. `exercise_id` remains only for analytics/cross-session exercise history. Renaming an Exercise later must not rewrite historical display.
+
+Existing scheduled Exercises use `origin = ASSIGNED`. Exercises appended during an ACTIVE session use `COACH_ADDED` or `ATHLETE_ADDED` with the authenticated actor in `added_by_user_id`. Removal after start sets `removed_at` and `removed_by_user_id`; it never deletes the exercise, its planned sets, or SetLogs. A replacement is a new row linked through `replaces_scheduled_workout_exercise_id`, and the service verifies both rows belong to the same ScheduledWorkout. Position uniqueness applies only to rows whose `removed_at` is null so the replacement can retain the predecessor's active position.
 
 ### 5.1 Approved hybrid planned-set architecture
 

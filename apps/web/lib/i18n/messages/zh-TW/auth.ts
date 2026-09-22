@@ -11,6 +11,9 @@ export const auth: AuthMessages = {
   "auth.field.name": "姓名",
   "auth.field.email": "電子郵件",
   "auth.field.password": "密碼",
+  "auth.field.showPassword": "顯示",
+  "auth.field.hidePassword": "隱藏",
+  "auth.field.passwordHint": "至少 8 個字元，且需包含英文字母與數字。",
   "auth.continue": "繼續",
   "auth.signIn": "登入",
   "auth.signingIn": "登入中…",
@@ -39,6 +42,11 @@ export const auth: AuthMessages = {
   "auth.login.noAccount.joinLink": "使用你的邀請碼",
   "auth.login.noAccount.coachPrompt": "你是教練嗎？",
   "auth.login.noAccount.coachLink": "建立教練帳號",
+  "auth.login.verifiedNoAccount.intro": "你的電子郵件已驗證，但我們尚未完成你的個人資料設定。",
+  "auth.login.verifiedNoAccount.joinPrompt": "要加入教練嗎？",
+  "auth.login.verifiedNoAccount.joinLink": "使用你的邀請碼",
+  "auth.login.verifiedNoAccount.coachPrompt": "你是教練嗎？",
+  "auth.login.verifiedNoAccount.coachLink": "建立教練帳號",
 
   // --- /coach/signup ---------------------------------------------------
   "auth.coachSignup.heroTitleLine1": "打造你的",
@@ -88,4 +96,24 @@ export const auth: AuthMessages = {
   "auth.joinCode.tryAgain": "再試一次",
   "auth.joinCode.connected": "你已成功連結到 {coach}。",
   "auth.joinCode.redirecting": "正在帶你前往訓練頁面…",
+
+  "auth.joinCode.confirmHeading": "確認你的名稱",
+  "auth.joinCode.confirmIntro": "你已使用 {provider} 登入。這是你的教練會看到的名稱。",
+  "auth.joinCode.nameMissingApple": "Apple 沒有提供你的名稱，請在上方輸入後繼續。",
+  "auth.joinCode.nameMissingProvider": "你的登入方式沒有提供名稱，請在上方輸入後繼續。",
+  "auth.joinCode.useDifferentAccount": "使用其他帳號",
+  "auth.joinCode.nameRequired": "請輸入你的教練會看到的名稱。",
+
+  "auth.verify.heading": "請到信箱確認",
+  "auth.verify.body":
+    "我們已寄出確認信到 {email}。請開啟信件中的連結，回到這裡後點選「我已驗證」。",
+  "auth.verify.continue": "我已驗證",
+  "auth.verify.checking": "確認中…",
+  "auth.verify.resend": "重寄郵件",
+  "auth.verify.resending": "寄送中…",
+  "auth.verify.resent": "已再寄一次，請查看信箱。",
+  "auth.verify.notYet": "信箱尚未驗證。請先開啟信件連結，再試一次。",
+  "auth.verify.resendFailed": "無法寄出郵件，請再試一次。",
+  "auth.verify.checkFailed": "無法確認驗證狀態，請再試一次。",
+  "auth.verify.changeEmail": "改用其他信箱",
 };

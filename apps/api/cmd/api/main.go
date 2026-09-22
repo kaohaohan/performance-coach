@@ -150,8 +150,13 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
+	mux.Handle("GET /api/v1/sessions/{sessionId}/exercise-options", authMiddleware(handleListSessionExerciseOptions(pool)))
+	mux.Handle("POST /api/v1/sessions/{sessionId}/exercises", authMiddleware(handleAdjustSessionExercise(pool)))
+	mux.Handle("DELETE /api/v1/sessions/{sessionId}/exercises/{exerciseId}", authMiddleware(handleRemoveSessionExercise(pool)))
+	mux.Handle("PATCH /api/v1/sessions/{sessionId}/exercises/{exerciseId}/coach-cue", authMiddleware(handleUpdateSessionCoachCue(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/complete", authMiddleware(handleCompleteSession(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/set-logs", authMiddleware(handleCreateSetLog(pool)))
+	mux.Handle("PATCH /api/v1/set-logs/{setLogId}", authMiddleware(handleUpdateSetLog(pool)))
 
 	// requestTimeout bounds the worst case for a single request end to end,
 	// including any in-flight database call. Without this, main.go had no
@@ -299,6 +304,8 @@ func handleCoachSignup(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusConflict, "CONFLICT", "firebase account is already registered as an athlete")
 			case errors.Is(err, coachsignup.ErrAccountDeleted):
 				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
+			case errors.Is(err, authn.ErrEmailNotVerified):
+				authn.WriteError(w, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "verify your email before creating an account")
 			case errors.As(err, &validationErr):
 				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
 			default:
@@ -512,6 +519,8 @@ func handleRedeemInviteCode(pool *pgxpool.Pool) http.HandlerFunc {
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "invite code is not valid")
 			case errors.Is(err, invitecode.ErrCoachCannotRedeem):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "a coach account cannot redeem an invite code")
+			case errors.Is(err, authn.ErrEmailNotVerified):
+				authn.WriteError(w, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "verify your email before creating an account")
 			case errors.Is(err, invitecode.ErrAccountDeleted):
 				authn.WriteError(w, http.StatusConflict, "ACCOUNT_DELETED", "account has been deleted")
 			case errors.As(err, &validationErr):
@@ -1145,6 +1154,123 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+type adjustSessionExerciseRequest struct {
+	ExerciseID                         string                   `json:"exerciseId"`
+	Plan                               createWorkoutPlanRequest `json:"plan"`
+	CoachCue                           *string                  `json:"coachCue"`
+	ReplacesScheduledWorkoutExerciseID *string                  `json:"replacesScheduledWorkoutExerciseId"`
+}
+
+func mapSessionExercisePlan(plan createWorkoutPlanRequest) prescription.Plan {
+	return prescription.Plan{
+		SetCount: plan.SetCount,
+		Defaults: prescription.Defaults{
+			Reps: plan.Defaults.Reps, PrescriptionNote: plan.Defaults.PrescriptionNote,
+			Load: plan.Defaults.Load, Unit: plan.Defaults.Unit, RPE: plan.Defaults.RPE,
+		},
+		Overrides: mapWorkoutOverrides(plan.Overrides),
+	}
+}
+
+func writeSessionExerciseError(w http.ResponseWriter, r *http.Request, err error) {
+	var validationErr *workoutsession.ValidationError
+	switch {
+	case errors.As(err, &validationErr):
+		authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+	case errors.Is(err, workoutsession.ErrNotFound):
+		authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
+	case errors.Is(err, workoutsession.ErrConflict), errors.Is(err, workoutsession.ErrCompleted):
+		authn.WriteError(w, http.StatusConflict, "CONFLICT", "session exercise can no longer be adjusted")
+	default:
+		authn.WriteInternalError(w, r, err)
+	}
+}
+
+func handleListSessionExerciseOptions(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		options, err := workoutsession.ListExerciseOptions(r.Context(), pool, user, r.PathValue("sessionId"), r.URL.Query().Get("q"))
+		if err != nil {
+			writeSessionExerciseError(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(options)
+	}
+}
+
+func handleAdjustSessionExercise(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		var req adjustSessionExerciseRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+		exercise, err := workoutsession.AdjustExercise(r.Context(), pool, user, r.PathValue("sessionId"), workoutsession.AdjustExerciseInput{
+			ExerciseID: req.ExerciseID, Plan: mapSessionExercisePlan(req.Plan), CoachCue: req.CoachCue,
+			ReplacesScheduledWorkoutExerciseID: req.ReplacesScheduledWorkoutExerciseID,
+		})
+		if err != nil {
+			writeSessionExerciseError(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(exercise)
+	}
+}
+
+func handleRemoveSessionExercise(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		exercise, err := workoutsession.RemoveExercise(r.Context(), pool, user, r.PathValue("sessionId"), r.PathValue("exerciseId"))
+		if err != nil {
+			writeSessionExerciseError(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(exercise)
+	}
+}
+
+func handleUpdateSessionCoachCue(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		var req struct {
+			CoachCue *string `json:"coachCue"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+		exercise, err := workoutsession.UpdateCoachCue(r.Context(), pool, user, r.PathValue("sessionId"), r.PathValue("exerciseId"), req.CoachCue)
+		if err != nil {
+			writeSessionExerciseError(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(exercise)
+	}
+}
+
 // handleCompleteSession transitions a WorkoutSession from ACTIVE to
 // COMPLETED, making it permanently read-only (docs/
 // go-backend-api-contract-v0.1.md §3.7). Authorization matches Start/Get:
@@ -1256,6 +1382,71 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(setLog)
+	}
+}
+
+func decodeUpdateSetLogRequest(r *http.Request) (workoutsession.UpdateSetLogInput, error) {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+		return workoutsession.UpdateSetLogInput{}, err
+	}
+	var in workoutsession.UpdateSetLogInput
+	decode := func(name string, dst any, present *bool) error {
+		raw, ok := fields[name]
+		if !ok {
+			return nil
+		}
+		*present = true
+		if string(raw) == "null" {
+			return nil
+		}
+		return json.Unmarshal(raw, dst)
+	}
+	if err := decode("load", &in.Load, &in.LoadPresent); err != nil {
+		return in, err
+	}
+	if err := decode("unit", &in.Unit, &in.UnitPresent); err != nil {
+		return in, err
+	}
+	if err := decode("reps", &in.Reps, &in.RepsPresent); err != nil {
+		return in, err
+	}
+	if err := decode("rpe", &in.RPE, &in.RPEPresent); err != nil {
+		return in, err
+	}
+	return in, nil
+}
+
+func handleUpdateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		input, err := decodeUpdateSetLogRequest(r)
+		if err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+		setLog, err := workoutsession.UpdateSetLog(r.Context(), pool, user, r.PathValue("setLogId"), input)
+		if err != nil {
+			var validationErr *workoutsession.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, workoutsession.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "set log not found")
+			case errors.Is(err, workoutsession.ErrSessionNotActive):
+				authn.WriteError(w, http.StatusConflict, "CONFLICT", "session is not active")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(setLog)
 	}
 }

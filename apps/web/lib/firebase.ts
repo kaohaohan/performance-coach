@@ -6,7 +6,13 @@
 // NEXT_PUBLIC_FIREBASE_PROJECT_ID is not a real Firebase project; the API
 // key is a placeholder the emulator does not validate.
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
-import { getAuth, connectAuthEmulator, type Auth } from "firebase/auth";
+import {
+  connectAuthEmulator,
+  getAuth,
+  indexedDBLocalPersistence,
+  initializeAuth,
+  type Auth,
+} from "firebase/auth";
 
 function requireEnv(value: string | undefined, name: string): string {
   if (!value) {
@@ -53,7 +59,21 @@ export function getFirebaseAuth(): Auth {
     return cachedAuth;
   }
 
-  const auth = getAuth(createApp());
+  const app = createApp();
+  // Explicit IndexedDB persistence: getAuth() can silently fall back to
+  // in-memory in Capacitor WKWebView, which signs people out after a brief
+  // app switch. initializeAuth throws if this app already has an Auth
+  // instance (HMR / Fast Refresh), so fall back to getAuth() then.
+  let auth: Auth;
+  if (typeof window === "undefined") {
+    auth = getAuth(app);
+  } else {
+    try {
+      auth = initializeAuth(app, { persistence: indexedDBLocalPersistence });
+    } catch {
+      auth = getAuth(app);
+    }
+  }
 
   const emulatorHost = process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;
   if (emulatorHost) {
@@ -64,4 +84,8 @@ export function getFirebaseAuth(): Auth {
 
   cachedAuth = auth;
   return auth;
+}
+
+export function isAuthEmulator(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST);
 }

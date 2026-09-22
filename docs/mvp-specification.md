@@ -121,6 +121,7 @@ A later sign-up with a new Firebase user creates a new empty account. It never r
 - A Coach can create, list, and revoke reusable invite codes, and can tell whether each one is active, expired, or revoked.
 - A revoked or expired code stops new Athletes joining and disconnects nobody.
 - An Athlete with no prior account can join from an invite alone and reach Today in one uninterrupted flow.
+- A new email/password Coach or Athlete must verify the mailbox before `coach-signup` or invite redeem. Existing provisioned accounts keep working without re-verification. Google and Apple are not gated this way.
 - An Athlete who is already signed in can join without signing in again.
 - Following the same invite twice connects the Athlete once.
 - An Athlete may join more than one Coach.
@@ -131,6 +132,10 @@ A later sign-up with a new Firebase user creates a new empty account. It never r
 - A Coach or Athlete can delete their own account in-app. After deletion they cannot sign in as that account, their display name is `Deleted Coach` or `Deleted Athlete`, and the counterparty still sees performed training history.
 - Deleting an Athlete does not mark their ACTIVE sessions COMPLETED.
 - A tombstoned Firebase identity cannot recreate the old backend user via coach-signup or invite redeem (`409 ACCOUNT_DELETED`).
+
+### **Invite links on iOS**
+
+The production invite URL (`https://dontworkout.vercel.app/join/{code}`) is also an Apple Universal Link. On an installed, correctly signed PumpLoop iOS build, opening it launches the app into the existing invite preview and redemption flow; without the app, the same URL remains the Web onboarding flow. Only the production hostname is associated, so local and staging invite links remain Web-only.
 
 ### **Not in V0.1**
 
@@ -397,10 +402,12 @@ The Coach can log SetLogs on the Athlete's behalf for the duration of the sessio
 ## **Acceptance Criteria**
 
 - A connected Coach can start a WorkoutSession for an Athlete's ScheduledWorkout; reopening an already-`ACTIVE` session resumes it rather than erroring (idempotent, matching the backend contract).
-- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf.
+- A connected Coach can log, edit, and delete SetLogs for an active session on the Athlete's behalf. The Athlete themself or a Coach with an active relationship may edit an existing SetLog only while the session is `ACTIVE`. A `COMPLETED` session is fully read-only.
 - Each SetLog records which user logged it (`loggedByUserId`) — Coach or Athlete.
 - Coach and Athlete see the same session state if both are viewing it.
-- Once the session is `COMPLETED`, it is read-only for both Coach and Athlete.
+- Once the session is `COMPLETED`, its status, `completedAt`, SetLogs, and associations are immutable. Coach and Athlete may still `GET` the session; PATCH, POST, and DELETE of SetLogs are prohibited.
+- While a session is `ACTIVE`, a connected Coach may add an Exercise or withdraw/replace any active Exercise; the Athlete may add an Exercise and withdraw/replace only Exercises they added. Added Exercises carry `COACH_ADDED` or `ATHLETE_ADDED` provenance and a complete planned-set prescription. Existing targets are not edited in place after session start: a changed prescription is a replacement with new snapshot IDs.
+- Withdrawing or replacing an Exercise after session start is a soft removal. The original ScheduledWorkoutExercise, its planned sets, and every SetLog remain historical facts even when all planned work was already completed. Review shows the removed item and any explicit replacement relationship. Once the whole WorkoutSession is `COMPLETED`, structural changes are prohibited.
 - **No new backend endpoint is required.** This story exercises existing session/set-log authorization: a connected Coach has the same access as the Athlete themself (see the API contract's authorization matrix, §4).
 
 ---
@@ -427,10 +434,11 @@ Example:
 TODAY
 
 Monday Lower
+3 exercises
 
-Back Squat
-4 × 5
-Target RPE 8
+Back Squat          4 × 5 · 80 kg · RPE 8
+Romanian Deadlift   3 × 8 · 60 kg
+Plank               3 × 30s hold
 
 [Start Workout]
 ```
@@ -447,6 +455,7 @@ Target RPE 8
 - Athlete can open the workout.
 - Athlete can start the workout session.
 - Mobile UI prioritizes today’s training over secondary features.
+- Today lists each exercise as a compact row so the Athlete can see the whole workout without expanding every set.
 - No new backend endpoint or Calendar domain object is introduced for date navigation.
 
 ---
@@ -478,7 +487,7 @@ Reps: 5
 RPE: 7
 ```
 
-and saves the set.
+and saves the set. The Session screen shows a compact overview of every exercise first; the Athlete or Coach opens one exercise to record that set.
 
 ## **Then**
 
@@ -516,6 +525,8 @@ Example:
 - `setNumber` is server-assigned actual chronology, not the planned-set association.
 - `loggedByUserId` is recorded.
 - Set persists after refresh.
+- Athlete self or a Coach with an active relationship can edit an existing SetLog only while the session is `ACTIVE`; edits change only actual mutable fields and preserve all SetLog associations and metadata.
+- Completed sessions prohibit PATCH, POST, and DELETE of SetLogs.
 - Invalid values are rejected.
 - Unrelated users cannot modify the session.
 

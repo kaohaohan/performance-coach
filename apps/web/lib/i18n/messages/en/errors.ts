@@ -23,7 +23,8 @@ export const errors = {
   "errors.auth.invalidEmail": "Enter a valid email address.",
   "errors.auth.invalidCredentials": "Incorrect email or password.",
   "errors.auth.emailInUse": "An account with that email already exists. Try signing in instead.",
-  "errors.auth.weakPassword": "Password must be at least 8 characters.",
+  "errors.auth.weakPassword": "Password must be at least 8 characters and include a letter and a number.",
+  "errors.auth.emailNotVerified": "Verify your email to continue. Check your inbox, then try again.",
   "errors.auth.tooManyRequests": "Too many attempts. Try again later.",
   "errors.auth.userDisabled": "This account has been disabled.",
 

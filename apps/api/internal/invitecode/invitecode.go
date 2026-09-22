@@ -420,6 +420,9 @@ func reconcileAthlete(ctx context.Context, tx pgx.Tx, identity authn.Identity, r
 
 	switch {
 	case err == nil:
+		if authn.PasswordEmailUnverified(identity) {
+			return reconciledUser{}, authn.ErrEmailNotVerified
+		}
 		// A brand-new ATHLETE row was created by this call. name is
 		// required only on this path — validated now, after we know
 		// creation happened, rather than unconditionally up front (an

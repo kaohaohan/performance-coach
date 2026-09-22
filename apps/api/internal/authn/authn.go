@@ -46,6 +46,8 @@ type VerifiedToken struct {
 	UID               string
 	AuthTime          time.Time
 	AppleProviderUIDs []string
+	EmailVerified     bool
+	SignInProvider    string
 }
 
 // TokenVerifier verifies a Firebase ID token. Satisfied by the Firebase
@@ -105,10 +107,13 @@ func (v *firebaseVerifier) VerifyIDToken(ctx context.Context, idToken string) (V
 	if err != nil {
 		return VerifiedToken{}, err
 	}
+	emailVerified, _ := token.Claims["email_verified"].(bool)
 	return VerifiedToken{
 		UID:               token.UID,
 		AuthTime:          time.Unix(token.AuthTime, 0).UTC(),
 		AppleProviderUIDs: appleProviderUIDs(token.Firebase.Identities),
+		EmailVerified:     emailVerified,
+		SignInProvider:    token.Firebase.SignInProvider,
 	}, nil
 }
 
@@ -155,9 +160,20 @@ func appleProviderUIDs(identities map[string]any) []string {
 // caller-supplied firebaseUid/role/coachId in a request body must never
 // be trusted in its place.
 type Identity struct {
-	UID   string
-	Email string
+	UID            string
+	Email          string
+	EmailVerified  bool
+	SignInProvider string
 }
+
+// PasswordEmailUnverified is true only for email/password identities that
+// have not confirmed the mailbox. Google and Apple are never gated this way,
+// and an empty provider (tests, older tokens) is not treated as password.
+func PasswordEmailUnverified(identity Identity) bool {
+	return identity.SignInProvider == "password" && !identity.EmailVerified
+}
+
+var ErrEmailNotVerified = errors.New("authn: password email is not verified")
 
 // IdentityVerifier verifies a Firebase ID token and returns its claims as
 // an Identity, without requiring a matching internal user. Satisfied by
@@ -174,7 +190,13 @@ func (v *firebaseVerifier) VerifyIdentity(ctx context.Context, idToken string) (
 		return Identity{}, err
 	}
 	email, _ := token.Claims["email"].(string)
-	return Identity{UID: token.UID, Email: email}, nil
+	emailVerified, _ := token.Claims["email_verified"].(bool)
+	return Identity{
+		UID:            token.UID,
+		Email:          email,
+		EmailVerified:  emailVerified,
+		SignInProvider: token.Firebase.SignInProvider,
+	}, nil
 }
 
 type contextKey int

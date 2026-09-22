@@ -20,6 +20,9 @@ export const auth = {
   "auth.field.name": "Name",
   "auth.field.email": "Email",
   "auth.field.password": "Password",
+  "auth.field.showPassword": "Show",
+  "auth.field.hidePassword": "Hide",
+  "auth.field.passwordHint": "At least 8 characters, with a letter and a number.",
   "auth.continue": "Continue",
   "auth.signIn": "Sign in",
   "auth.signingIn": "Signing in…",
@@ -56,6 +59,12 @@ export const auth = {
   "auth.login.noAccount.joinLink": "Use your invite code",
   "auth.login.noAccount.coachPrompt": "Coaching?",
   "auth.login.noAccount.coachLink": "Create a Coach account",
+  "auth.login.verifiedNoAccount.intro":
+    "Your email is verified, but we haven't finished setting up your profile yet.",
+  "auth.login.verifiedNoAccount.joinPrompt": "Joining a coach?",
+  "auth.login.verifiedNoAccount.joinLink": "Use your invite code",
+  "auth.login.verifiedNoAccount.coachPrompt": "Coaching?",
+  "auth.login.verifiedNoAccount.coachLink": "Create a Coach account",
 
   // --- /coach/signup --------------------------------------------------
   "auth.coachSignup.heroTitleLine1": "Build your",
@@ -121,6 +130,29 @@ export const auth = {
   "auth.joinCode.tryAgain": "Try again",
   "auth.joinCode.connected": "You're connected to {coach}.",
   "auth.joinCode.redirecting": "Taking you to your training…",
+
+  "auth.joinCode.confirmHeading": "Confirm your name",
+  "auth.joinCode.confirmIntro":
+    "You're signed in with {provider}. This is the name your coach will see.",
+  "auth.joinCode.nameMissingApple":
+    "Apple didn't share your name — enter it above to continue.",
+  "auth.joinCode.nameMissingProvider":
+    "Your sign-in didn't include a name — enter it above to continue.",
+  "auth.joinCode.useDifferentAccount": "Use a different account",
+  "auth.joinCode.nameRequired": "Enter the name your coach will see.",
+
+  "auth.verify.heading": "Check your email",
+  "auth.verify.body":
+    "We sent a confirmation link to {email}. Open it, then return here and tap I've verified.",
+  "auth.verify.continue": "I've verified",
+  "auth.verify.checking": "Checking…",
+  "auth.verify.resend": "Resend email",
+  "auth.verify.resending": "Sending…",
+  "auth.verify.resent": "Sent again. Check your inbox.",
+  "auth.verify.notYet": "That email isn't verified yet. Open the link, then try again.",
+  "auth.verify.resendFailed": "Couldn't send the email. Try again.",
+  "auth.verify.checkFailed": "Couldn't check verification. Try again.",
+  "auth.verify.changeEmail": "Use a different email",
 } as const;
 
 export type AuthMessages = Record<keyof typeof auth, string>;
