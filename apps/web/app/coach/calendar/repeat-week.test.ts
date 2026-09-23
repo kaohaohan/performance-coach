@@ -10,7 +10,7 @@ function assignment(id: string, date: string, workoutId: string, name: string): 
     id,
     scheduledDate: date,
     athlete: ATHLETE,
-    workout: { id: workoutId, name, exercises: [] },
+    workout: { id: workoutId, name },
     session: null,
   };
 }

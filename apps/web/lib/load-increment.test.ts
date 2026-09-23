@@ -19,6 +19,8 @@ test("applyLoadIncrementPrefill uses history before template", () => {
     defaultLoad: "80",
     unit: "kg" as const,
     loadIncrement: 2.5,
+    setCount: "3",
+    setIncrement: 0,
     overrides: [{ position: 3, load: "90" }],
   }];
   const got = applyLoadIncrementPrefill(exercises, { "ex-1": 100 });
@@ -32,6 +34,8 @@ test("applyLoadIncrementPrefill falls back to template without history", () => {
     defaultLoad: "80",
     unit: "kg" as const,
     loadIncrement: 5,
+    setCount: "3",
+    setIncrement: 0,
     overrides: [],
   }];
   const got = applyLoadIncrementPrefill(exercises, { "ex-1": null });

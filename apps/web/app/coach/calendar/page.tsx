@@ -1824,10 +1824,11 @@ export default function CoachCalendarPage() {
     setRepeatWeekSuccess(null);
     const workoutsById = new Map((workouts ?? []).map((workout) => [workout.id, workout]));
     const callbacks = {
-      createWorkout: (body: { name: string; exercises: ReturnType<typeof buildExercisesPayload> }) =>
+      createWorkout: async (body: { name: string; exercises: ReturnType<typeof buildExercisesPayload> }) =>
         apiFetch<Workout>(idToken, "/api/v1/workouts", { method: "POST", body }),
-      scheduleWorkout: (body: { workoutId: string; athleteIds: readonly string[]; scheduledDate: string }) =>
-        apiFetch(idToken, "/api/v1/scheduled-workouts", { method: "POST", body }),
+      scheduleWorkout: async (body: { workoutId: string; athleteIds: readonly string[]; scheduledDate: string }) => {
+        await apiFetch(idToken, "/api/v1/scheduled-workouts", { method: "POST", body });
+      },
     };
     try {
       if (repeatWeekFailure?.phase === "schedule" && repeatWeekFailure.workoutId !== null) {
