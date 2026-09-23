@@ -229,6 +229,56 @@ func TestListForAthleteReadsCanonicalFrozenPlannedSets(t *testing.T) {
 	}
 }
 
+func TestListForAthleteRangeReturnsSummaryWithoutExercises(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach, athlete := user(t, "COACH"), user(t, "ATHLETE")
+	connect(t, coach, athlete)
+	reps := 5
+	w := createWorkout(t, coach, []workout.CreateExerciseInput{{
+		Name: prefix + " range", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}},
+	}})
+	if _, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
+		WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-09-10",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
+		WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-09-12",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.September, 30, 0, 0, 0, 0, time.UTC)
+	got, err := scheduledworkout.ListForAthleteRange(ctx, pool, athlete, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("range count = %d, want 2", len(got))
+	}
+	for _, item := range got {
+		if item.WorkoutName == "" || item.ScheduledDate == "" {
+			t.Fatalf("summary item = %#v", item)
+		}
+	}
+
+	emptyFrom := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	emptyTo := time.Date(2026, time.October, 31, 0, 0, 0, 0, time.UTC)
+	empty, err := scheduledworkout.ListForAthleteRange(ctx, pool, athlete, emptyFrom, emptyTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty month = %#v", empty)
+	}
+
+	if _, err := scheduledworkout.ListForAthleteRange(ctx, pool, coach, from, to); !errors.Is(err, scheduledworkout.ErrForbidden) {
+		t.Fatalf("coach range error = %v", err)
+	}
+}
+
 func TestListForAthletePreservesSessionSummary(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()

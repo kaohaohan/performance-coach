@@ -28,6 +28,7 @@
 // draft rather than silently rebinding it to whoever the Calendar loaded.
 "use client";
 
+import { defaultLoadIncrement } from "../../../lib/load-increment.ts";
 import type { Workout } from "./types";
 
 export type ExerciseScope = "SYSTEM" | "PRIVATE";
@@ -52,6 +53,8 @@ export type DraftExercise = {
   defaultPrescriptionNote: string;
   defaultLoad: string;
   unit: PlannedUnit;
+  loadIncrement: number;
+  setIncrement: number;
   defaultRpe: string;
   coachCue: string;
   overrides: DraftSetOverride[];
@@ -88,6 +91,7 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
             return draftOverride;
           });
 
+        const unit = item.plan.defaults.unit === "lb" ? "lb" : "kg";
         return {
           // The saved-workout response does not expose exercise scope. Scope
           // affects only the Builder's cosmetic badge, not persistence.
@@ -97,7 +101,9 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
           defaultReps: defaultMode === "REPS" ? String(item.plan.defaults.reps) : "",
           defaultPrescriptionNote: defaultMode === "TEXT" ? (item.plan.defaults.prescriptionNote ?? "") : "",
           defaultLoad: item.plan.defaults.load !== undefined ? String(item.plan.defaults.load) : "",
-          unit: item.plan.defaults.unit === "lb" ? "lb" : "kg",
+          unit,
+          loadIncrement: item.loadIncrement ?? defaultLoadIncrement(unit),
+          setIncrement: item.setIncrement ?? 0,
           defaultRpe: item.plan.defaults.rpe !== undefined ? String(item.plan.defaults.rpe) : "",
           coachCue: item.coachCue ?? "",
           overrides,

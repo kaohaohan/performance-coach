@@ -237,7 +237,7 @@ Refreshing the page does not remove the workout or the schedule.
 - Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout History.
 - Existing Workout path: Coach can choose a saved Workout and either copy it into an editable draft or assign it as saved to all selected Athletes. Copy & edit is the primary action; Assign as saved is the secondary shortcut.
 - An editable copy preserves the source Workout's ordered Exercises, set counts, reps or text prescription, load/unit, RPE, optional per-exercise Coach cue, and sparse property-specific per-position overrides. The source Workout and previously scheduled prescriptions are never mutated.
-- Editing a copied exercise uses the same uniform-first semantics as any new draft: changing that exercise's set count or default prescription updates its effective planned positions while preserving explicit overrides as defined below. Workout-wide percentage progression, automatic load recommendations, and bulk cross-exercise set/load changes remain deferred.
+- Editing a copied exercise uses the same uniform-first semantics as any new draft: changing that exercise's set count or default prescription updates its effective planned positions while preserving explicit overrides as defined below. Each WorkoutExercise may carry a coach-authored weekly `loadIncrement` applied only on the next copy/build/repeat for a single selected Athlete (last COMPLETED SetLog for that exercise and unit, else template planned load) and optional `setIncrement` (`0` or `1`, default `0`) that adds one set on copy/build/repeat. Multi-Athlete assign keeps template-written loads and set counts. **Repeat this week** (Calendar week view, one Athlete): preview each assignment → date+7 with load/set suggestions, then confirm via sequential `POST /workouts` + `POST /scheduled-workouts`; no new backend route. Programs remain deferred. Workout-wide percentage progression and bulk cross-exercise set/load changes remain deferred.
 - Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`, or create one missing private Exercise through `POST /api/v1/exercises`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
 - Workout persists and remains available in Calendar → From saved after refresh.
@@ -422,7 +422,7 @@ Kevin has a workout scheduled for today.
 
 ## **When**
 
-Kevin opens the mobile/PWA training interface. The view defaults to the Athlete's local current date, which remains the highest-priority view. Kevin may use lightweight previous/next day navigation to inspect a ScheduledWorkout that the Coach has already assigned for another nearby date, especially an upcoming workout scheduled in advance.
+Kevin opens the mobile/PWA training interface. The view defaults to the Athlete's local current date, which remains the highest-priority view. Kevin may use lightweight previous/next day navigation to inspect a ScheduledWorkout that the Coach has already assigned for another nearby date, especially an upcoming workout scheduled in advance. Kevin may also open a compact month-grid toggle on `/today` to see which days have training and jump to a day from that grid; there is no separate Athlete Calendar route.
 
 ## **Then**
 
@@ -447,6 +447,7 @@ Plank               3 × 30s hold
 
 - Athlete lands on the local current date by default.
 - Athlete can move to the previous or next date and return to Today.
+- Athlete can toggle a compact month grid on `/today`, see which days have scheduled workouts, and tap a day to view that date's detail on the same page.
 - If the Coach schedules a workout for tomorrow, the Athlete can navigate to tomorrow and see that exact ScheduledWorkout.
 - Empty-state wording reflects the selected date: Today uses "No Workout Today"; another date uses "No Workout Scheduled".
 - Athlete sees only workouts scheduled to them; date navigation does not change Athlete isolation.

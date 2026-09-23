@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
@@ -8,19 +8,21 @@ import SignOutButton from "@/components/sign-out-button";
 import { AppHeader } from "@/components/app-header";
 import { useLocale, useT } from "@/lib/i18n";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
-import { fullDate } from "@/lib/i18n/dates";
+import { fullDate, monthYear } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { compactPrescription, type Plan } from "@/lib/prescription-summary";
+import {
+  isSameMonth,
+  monthGridDays,
+  shiftMonth,
+  WEEKDAY_NARROW_KEYS,
+} from "@/app/coach/calendar/calendar-date";
 
 type ExerciseSummary = { scheduledWorkoutExerciseId: string; exerciseId: string; name: string; plan: Plan; coachCue?: string; youtubeUrl?: string; position: number };
 type Session = { id: string; status: "ACTIVE" | "COMPLETED" };
 type TodayScheduledWorkout = { id: string; scheduledDate: string; workoutName: string; exercises: ExerciseSummary[]; session: Session | null };
+type MonthScheduledWorkout = { id: string; scheduledDate: string; workoutName: string; session: Session | null };
 
-// Everything this page can fail at is a call to the Go API, which writes its
-// own `{ error: { message } }` copy and is the authority on why it refused.
-// serverMessage passes that through; anything else lands on
-// errors.unexpected, which is the same sentence the page's old local
-// errorMessage() fell back to.
 const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
 function todayLocalISODate(): string {
@@ -45,21 +47,29 @@ export default function AthleteTodayPage() {
   const router = useRouter();
   const { user, idToken, loading: authLoading } = useAuth();
   const t = useT();
-  // The page title is the one date this screen renders. fullDate gives
-  // "Thursday, September 3" in English and "9月3日星期四" in Chinese — decision
-  // D3; the helper lives in lib/i18n/dates.ts so the calendar formats the
-  // same date the same way.
   const { locale } = useLocale();
   const today = todayLocalISODate();
   const [selectedDate, setSelectedDate] = useState(today);
+  const [viewMonth, setViewMonth] = useState(today.slice(0, 7));
+  const [monthGridOpen, setMonthGridOpen] = useState(false);
   const [workouts, setWorkouts] = useState<TodayScheduledWorkout[] | null>(null);
+  const [monthWorkouts, setMonthWorkouts] = useState<MonthScheduledWorkout[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [monthLoadError, setMonthLoadError] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+
+  const gridDays = useMemo(() => monthGridDays(`${viewMonth}-01`), [viewMonth]);
+  const scheduledDates = useMemo(() => new Set((monthWorkouts ?? []).map((item) => item.scheduledDate)), [monthWorkouts]);
 
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
   }, [authLoading, user, router]);
+
+  function selectDate(nextDate: string) {
+    setSelectedDate(nextDate);
+    setViewMonth(nextDate.slice(0, 7));
+  }
 
   useEffect(() => {
     if (!idToken) return;
@@ -76,6 +86,27 @@ export default function AthleteTodayPage() {
       cancelled = true;
     };
   }, [idToken, selectedDate, t]);
+
+  useEffect(() => {
+    if (!idToken || !monthGridOpen) return;
+    let cancelled = false;
+    const from = gridDays[0];
+    const to = gridDays[gridDays.length - 1];
+    (async () => {
+      try {
+        const response = await apiFetch<MonthScheduledWorkout[]>(idToken, `/api/v1/me/scheduled-workouts?from=${from}&to=${to}`);
+        if (!cancelled) {
+          setMonthWorkouts(response);
+          setMonthLoadError(null);
+        }
+      } catch (err) {
+        if (!cancelled) setMonthLoadError(errorMessage(t, err, API_ERROR_POLICY));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [idToken, monthGridOpen, gridDays, t]);
 
   async function handleStart(scheduledWorkoutId: string) {
     if (!idToken || startingId) return;
@@ -106,11 +137,45 @@ export default function AthleteTodayPage() {
       >
         <p className="mt-7 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{selectedDate === today ? t("athlete.today.eyebrowToday") : t("athlete.today.eyebrowTraining")}</p>
         <div className="mt-3 flex items-center justify-between gap-2">
-          <button type="button" aria-label={t("athlete.today.previousDay")} onClick={() => setSelectedDate((current) => shiftLocalDate(current, -1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">‹</button>
+          <button type="button" aria-label={t("athlete.today.previousDay")} onClick={() => selectDate(shiftLocalDate(selectedDate, -1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">‹</button>
           <h1 className="min-w-0 text-center text-xl font-semibold tracking-tight sm:text-2xl">{fullDate(locale, selectedDate)}</h1>
-          <button type="button" aria-label={t("athlete.today.nextDay")} onClick={() => setSelectedDate((current) => shiftLocalDate(current, 1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">›</button>
+          <button type="button" aria-label={t("athlete.today.nextDay")} onClick={() => selectDate(shiftLocalDate(selectedDate, 1))} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl text-white transition hover:bg-white/20">›</button>
         </div>
-        {selectedDate !== today && <button type="button" onClick={() => setSelectedDate(today)} className="mx-auto mt-3 block rounded-full bg-teal-400/15 px-3 py-1 text-xs font-bold text-teal-300 transition hover:bg-teal-400/25">{t("athlete.today.jumpToToday")}</button>}
+        {selectedDate !== today && <button type="button" onClick={() => selectDate(today)} className="mx-auto mt-3 block rounded-full bg-teal-400/15 px-3 py-1 text-xs font-bold text-teal-300 transition hover:bg-teal-400/25">{t("athlete.today.jumpToToday")}</button>}
+        <button type="button" onClick={() => setMonthGridOpen((open) => { if (!open) setViewMonth(selectedDate.slice(0, 7)); return !open; })} aria-expanded={monthGridOpen} className="mx-auto mt-3 block rounded-full border border-white/15 px-3 py-1 text-xs font-bold text-slate-200 transition hover:bg-white/10">{monthGridOpen ? t("athlete.today.hideMonthGrid") : t("athlete.today.showMonthGrid")}</button>
+        {monthGridOpen && (
+          <div className="mx-auto mt-4 max-w-sm rounded-2xl bg-white/10 p-3 ring-1 ring-white/10">
+            <div className="flex items-center justify-between gap-2">
+              <button type="button" aria-label={t("athlete.today.previousMonth")} onClick={() => setViewMonth((current) => shiftMonth(`${current}-01`, -1).slice(0, 7))} className="grid h-9 w-9 place-items-center rounded-lg text-lg font-bold text-white/80 hover:bg-white/10">‹</button>
+              <span className="text-sm font-bold text-white">{monthYear(locale, `${viewMonth}-01`)}</span>
+              <button type="button" aria-label={t("athlete.today.nextMonth")} onClick={() => setViewMonth((current) => shiftMonth(`${current}-01`, 1).slice(0, 7))} className="grid h-9 w-9 place-items-center rounded-lg text-lg font-bold text-white/80 hover:bg-white/10">›</button>
+            </div>
+            <div className="mt-2 grid grid-cols-7 text-center text-[10px] font-bold uppercase text-slate-300" aria-hidden="true">
+              {WEEKDAY_NARROW_KEYS.map((key) => <span key={key}>{t(key)}</span>)}
+            </div>
+            <div className="mt-1 grid grid-cols-7 gap-y-1">
+              {gridDays.map((day) => {
+                const inMonth = isSameMonth(day, `${viewMonth}-01`);
+                const hasWorkout = scheduledDates.has(day);
+                const selected = day === selectedDate;
+                const isToday = day === today;
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => selectDate(day)}
+                    aria-label={fullDate(locale, day)}
+                    className={`relative mx-auto grid aspect-square w-full max-w-10 place-items-center rounded-lg text-sm font-semibold transition ${selected ? "bg-teal-400 text-slate-950" : isToday ? "text-white ring-1 ring-inset ring-white/40" : inMonth ? "text-white hover:bg-white/10" : "text-white/45 hover:bg-white/5"}`}
+                  >
+                    {Number(day.slice(-2))}
+                    {hasWorkout && <span aria-hidden="true" className={`absolute bottom-1 h-1.5 w-1.5 rounded-full ${selected ? "bg-slate-900" : "bg-teal-300"}`} />}
+                  </button>
+                );
+              })}
+            </div>
+            {monthLoadError && <p role="alert" className="mt-3 text-center text-xs font-medium text-red-200">{monthLoadError}</p>}
+          </div>
+        )}
         <p className="mt-2 text-sm text-slate-300">{t("athlete.today.subtitle")}</p>
       </AppHeader>
 

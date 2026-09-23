@@ -162,6 +162,10 @@ export const calendar: CalendarMessages = {
   "calendar.field.repsHint":
     "次數只接受一個整數，並套用到每一組。若要使用 8-12、8+、AMAP 或計時組，請將「指定方式」切換為「文字」；也可以在「各組設定」中編輯單一組別，讓各組次數不同。",
   "calendar.field.load": "重量",
+  "calendar.field.loadIncrement": "週進階",
+  "calendar.field.loadIncrementHint": "僅在為一位運動員複製或重複課表時套用；有完成紀錄時優先使用上次實際重量。",
+  "calendar.field.setIncrement": "每週 +1 組",
+  "calendar.field.setIncrementHint": "為一位運動員複製或重複課表時多加一組。",
   "calendar.field.unit": "單位",
   "calendar.prescription.reps": "次數",
   "calendar.prescription.text": "自訂目標",
@@ -268,6 +272,24 @@ export const calendar: CalendarMessages = {
   "calendar.duplicate.unnamedWorkout": "某份課表",
   "calendar.duplicate.partialFailure":
     "{total} 份中有 {failed} 份無法複製（{names}）。{error} 請按「複製」只重試這些。",
+
+  // ── Repeat week ──────────────────────────────────────────────────────────
+  "calendar.repeatWeek.action": "重複本週",
+  "calendar.repeatWeek.title": "重複本週",
+  "calendar.repeatWeek.body": "依每堂課的已存課表範本，為下週建立進階後的副本。本週範本與指派都不會變更。",
+  "calendar.repeatWeek.confirm": "重複本週",
+  "calendar.repeatWeek.applying": "重複本週中…",
+  "calendar.repeatWeek.dateShift": "{source} → {target}",
+  "calendar.repeatWeek.conflict": "目標日期已有課表",
+  "calendar.repeatWeek.setsPreview": "{name}：{sourceSets} → {suggestedSets} 組",
+  "calendar.repeatWeek.loadPreview": "{load}",
+  "calendar.repeatWeek.noLoad": "無重量",
+  "calendar.repeatWeek.success": "已將 {count} 份課表重複到下週。",
+  "calendar.repeatWeek.partialFailure":
+    "已完成 {completed}/{total} 後停止。{error} {createdNotice}",
+  "calendar.repeatWeek.createdNotAssigned": "「{name}」已建立於 {date}，但尚未指派。",
+  "calendar.repeatWeek.retryAssignment": "重試指派",
+  "calendar.repeatWeek.remaining": "尚有 {count} 堂課未建立。",
 
   // ── Dialogs ──────────────────────────────────────────────────────────────
   "calendar.dialog.alreadyScheduledTitle": "已排定",

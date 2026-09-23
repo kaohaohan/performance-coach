@@ -74,6 +74,30 @@ func listByCoachID(ctx context.Context, pool *pgxpool.Pool, coachID string) ([]A
 	return athletes, nil
 }
 
+// IsActivelyConnected reports whether coachID and athleteID are linked via
+// coach_athletes and the athlete is not tombstoned.
+func IsActivelyConnected(ctx context.Context, pool *pgxpool.Pool, coachID, athleteID string) (bool, error) {
+	if _, err := uuid.Parse(athleteID); err != nil {
+		return false, nil
+	}
+	var exists int
+	err := pool.QueryRow(ctx, `
+		SELECT 1
+		FROM coach_athletes ca
+		JOIN users u ON u.id = ca.athlete_id
+		WHERE ca.coach_id = $1
+		  AND ca.athlete_id = $2
+		  AND u.role = 'ATHLETE'
+		  AND u.deleted_at IS NULL`, coachID, athleteID).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("athlete: active relationship check: %w", err)
+	}
+	return true, nil
+}
+
 // Remove detaches the coach_athletes relationship between caller and
 // athleteID. It never deletes the athlete's users row, never touches
 // Firebase, and never cascades into scheduled_workouts / workout_sessions
