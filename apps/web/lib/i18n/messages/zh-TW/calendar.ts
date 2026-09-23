@@ -279,10 +279,10 @@ export const calendar: CalendarMessages = {
   "calendar.repeatWeek.body": "依每堂課的已存課表範本，為下週建立進階後的副本。本週範本與指派都不會變更。",
   "calendar.repeatWeek.confirm": "重複本週",
   "calendar.repeatWeek.applying": "重複本週中…",
-  "calendar.repeatWeek.dateShift": "{source} → {target}",
+  "calendar.repeatWeek.dateShift": "{source} 移至 {target}",
   "calendar.repeatWeek.conflict": "目標日期已有課表",
   "calendar.repeatWeek.setsPreview": "{name}：{sourceSets} → {suggestedSets} 組",
-  "calendar.repeatWeek.loadPreview": "{load}",
+  "calendar.repeatWeek.loadPreview": "重量 {load}",
   "calendar.repeatWeek.noLoad": "無重量",
   "calendar.repeatWeek.success": "已將 {count} 份課表重複到下週。",
   "calendar.repeatWeek.partialFailure":
