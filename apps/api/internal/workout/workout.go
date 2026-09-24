@@ -70,6 +70,10 @@ type Workout struct {
 // create or list workouts (i.e. not a COACH).
 var ErrForbidden = errors.New("workout: caller is not a coach")
 
+// ErrNotFound indicates the workout does not exist, is archived, or is not
+// owned by the caller.
+var ErrNotFound = errors.New("workout: not found")
+
 // ValidationError indicates the request failed validation. Handlers should
 // map it to 400 INVALID_ARGUMENT.
 type ValidationError struct {
@@ -91,6 +95,13 @@ type CreateExerciseInput struct {
 type CreateInput struct {
 	Name      string
 	Exercises []CreateExerciseInput
+}
+
+// PatchInput is the decoded request for Patch. V0.1 supports renaming only;
+// prescription edits on reusable templates remain out of scope here because
+// assigned workouts are edited through scheduled-workout snapshot PUT.
+type PatchInput struct {
+	Name string
 }
 
 // Create validates input, then in a single transaction: finds-or-creates
@@ -360,6 +371,34 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 	}
 
 	return workouts, nil
+}
+
+// Patch renames a coach-owned, non-archived workout template. Scheduled
+// workout snapshots are unaffected; calendar display names join this template
+// at read time.
+func Patch(ctx context.Context, pool *pgxpool.Pool, caller authn.User, workoutID string, input PatchInput) (Workout, error) {
+	if caller.Role != "COACH" {
+		return Workout{}, ErrForbidden
+	}
+	if _, err := uuid.Parse(workoutID); err != nil {
+		return Workout{}, &ValidationError{Message: "invalid workout id"}
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Workout{}, &ValidationError{Message: "name is required"}
+	}
+
+	tag, err := pool.Exec(ctx,
+		`UPDATE workouts SET name = $1 WHERE id = $2 AND coach_id = $3 AND archived_at IS NULL`,
+		name, workoutID, caller.ID,
+	)
+	if err != nil {
+		return Workout{}, fmt.Errorf("workout: patch name: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Workout{}, ErrNotFound
+	}
+	return Workout{ID: workoutID, Name: name, Exercises: []Exercise{}}, nil
 }
 
 func validateSetIncrement(increment int) string {

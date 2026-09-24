@@ -144,6 +144,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("POST /api/v1/exercises", authMiddleware(handleCreateExercise(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
+	mux.Handle("PATCH /api/v1/workouts/{workoutId}", authMiddleware(handlePatchWorkout(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts/{id}", authMiddleware(handleGetScheduledWorkout(pool)))
@@ -838,6 +839,47 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(workouts)
+	}
+}
+
+type patchWorkoutRequest struct {
+	Name string `json:"name"`
+}
+
+// handlePatchWorkout renames a coach-owned workout template (§3.3 PATCH).
+func handlePatchWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req patchWorkoutRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		updated, err := workout.Patch(r.Context(), pool, user, r.PathValue("workoutId"), workout.PatchInput{Name: req.Name})
+		if err != nil {
+			var validationErr *workout.ValidationError
+			switch {
+			case errors.Is(err, workout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.Is(err, workout.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "workout not found")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(updated)
 	}
 }
 

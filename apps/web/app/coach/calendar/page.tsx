@@ -2213,7 +2213,7 @@ export default function CoachCalendarPage() {
         return;
       }
 
-      setDraftName("");
+      setDraftName(detail.workout.name);
       setDraftExercises(detail.exercises.map(snapshotExerciseToDraft));
       setExpandedExerciseId(null);
       setExtraAthleteIds([]);
@@ -2226,6 +2226,7 @@ export default function CoachCalendarPage() {
         scheduledWorkoutId: detail.id,
         athleteId: detail.athlete.id,
         athleteName: detail.athlete.name,
+        workoutId: detail.workout.id,
         workoutName: detail.workout.name,
       });
       setProgrammingMode("BUILD");
@@ -2260,6 +2261,13 @@ export default function CoachCalendarPage() {
     buildInFlight.current = true;
     setBuildStatus("savingChanges");
     try {
+      const trimmedName = draftName.trim() || editTarget.workoutName;
+      if (trimmedName !== editTarget.workoutName) {
+        await apiFetch(idToken, `/api/v1/workouts/${editTarget.workoutId}`, {
+          method: "PATCH",
+          body: { name: trimmedName },
+        });
+      }
       await apiFetch(idToken, `/api/v1/scheduled-workouts/${editTarget.scheduledWorkoutId}`, {
         method: "PUT",
         body: { exercises: buildExercisesPayload(draftExercises) },
@@ -2347,10 +2355,13 @@ export default function CoachCalendarPage() {
                   {draftRestoredNotice && <Notice tone="success">{editTarget ? t("calendar.draft.restored") : t("calendar.draft.restoredRecheck")}</Notice>}
                   {copiedFromWorkoutName !== null && <Notice tone="success">{t("calendar.assign.copyNotice", { name: copiedFromWorkoutName })}</Notice>}
 
-                  {!editTarget && <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.workoutNameLabel")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-slate-700">
+                      {t("calendar.workoutNameLabel")}{" "}
+                      {!editTarget && <span className="font-normal text-slate-500">{t("calendar.optional")}</span>}
+                    </span>
                     <input value={draftName} onChange={(event) => setDraftName(event.target.value)} placeholder={t("calendar.workoutNamePlaceholder")} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:cursor-not-allowed disabled:bg-slate-100" />
-                  </label>}
+                  </label>
 
                   <div>
                     <div className="flex items-baseline justify-between gap-3">

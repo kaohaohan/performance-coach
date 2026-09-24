@@ -128,6 +128,46 @@ func TestCreatePersistsAuthoringPlanAndListReconstructsIt(t *testing.T) {
 	}
 }
 
+func TestPatchRenamesWorkoutTemplate(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	reps10 := 10
+	created, err := workout.Create(ctx, pool, coach, workout.CreateInput{Name: prefix + " rename-me", Exercises: []workout.CreateExerciseInput{
+		{Name: prefix + " curl", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps10}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	renamed, err := workout.Patch(ctx, pool, coach, created.ID, workout.PatchInput{Name: prefix + " renamed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Name != prefix+" renamed" {
+		t.Fatalf("patch response = %#v", renamed)
+	}
+
+	var storedName string
+	if err := pool.QueryRow(ctx, `SELECT name FROM workouts WHERE id = $1`, created.ID).Scan(&storedName); err != nil {
+		t.Fatal(err)
+	}
+	if storedName != prefix+" renamed" {
+		t.Fatalf("stored name = %q", storedName)
+	}
+
+	_, err = workout.Patch(ctx, pool, coach, uuid.NewString(), workout.PatchInput{Name: "missing"})
+	if !errors.Is(err, workout.ErrNotFound) {
+		t.Fatalf("missing workout err = %v", err)
+	}
+
+	athlete := user(t, "ATHLETE")
+	_, err = workout.Patch(ctx, pool, athlete, created.ID, workout.PatchInput{Name: "nope"})
+	if !errors.Is(err, workout.ErrForbidden) {
+		t.Fatalf("athlete patch err = %v", err)
+	}
+}
+
 func TestCreateSupportsTextDefaultsAndPrescriptionSwitchOverrides(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()

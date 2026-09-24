@@ -123,6 +123,7 @@ export type DraftEditTarget = {
   scheduledWorkoutId: string;
   athleteId: string;
   athleteName: string;
+  workoutId: string;
   workoutName: string;
 };
 

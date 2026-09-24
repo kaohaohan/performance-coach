@@ -498,6 +498,18 @@ Coach-facing Workout responses return authoring metadata (`defaults + overrides`
 
 **可自由修改**，包含已被排程過的 workout。因為 prescription 已 snapshot，歷史不受影響。
 
+V0.1 實作範圍：**僅支援重新命名** reusable template。已指派課表的處方編輯仍走 `PUT /scheduled-workouts/{id}`；Coach Calendar 的「編輯已指派課表」在儲存處方前可選擇性呼叫本 endpoint 更新顯示名稱。
+
+Request：
+
+```json
+{ "name": "Rehabs Week 2 — Full Body" }
+```
+
+Response `200`：更新後的 `{ "id", "name", "exercises": [] }`（`exercises` 省略展開；需要完整處方時走 `GET /workouts`）。
+
+Validation：`name` 必填、trim 後非空。非 owner / 已封存 / 不存在 → `404 NOT_FOUND`。
+
 ### DELETE /workouts/{workoutId} — Coach only（owner）
 
 Soft delete（`archived_at`）。已封存的 workout 不出現在清單，也不可再排程。V0.1 不 hard delete Workout；`scheduled_workouts.workout_id` 的 FK 不使用 `ON DELETE CASCADE`，避免刪除模板時破壞既有排程與歷史 snapshot。
