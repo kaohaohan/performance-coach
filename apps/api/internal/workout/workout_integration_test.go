@@ -239,15 +239,15 @@ func TestCreatePersistsRepsIncrementAndRejectsInvalid(t *testing.T) {
 	ctx := context.Background()
 	coach := user(t, "COACH")
 	reps := 8
-	one := 1
 	two := 2
+	twentyOne := 21
 	created, err := workout.Create(ctx, pool, coach, workout.CreateInput{Name: prefix + " reps increment", Exercises: []workout.CreateExerciseInput{
-		{Name: prefix + " squat reps bump", RepsIncrement: &one, Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+		{Name: prefix + " squat reps bump", RepsIncrement: &two, Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Exercises[0].RepsIncrement != 1 {
+	if created.Exercises[0].RepsIncrement != 2 {
 		t.Fatalf("repsIncrement = %d", created.Exercises[0].RepsIncrement)
 	}
 	listed, err := workout.ListForCoach(ctx, pool, coach)
@@ -255,11 +255,11 @@ func TestCreatePersistsRepsIncrementAndRejectsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := findWorkout(t, listed, created.ID)
-	if got.Exercises[0].RepsIncrement != 1 {
+	if got.Exercises[0].RepsIncrement != 2 {
 		t.Fatalf("listed repsIncrement = %d", got.Exercises[0].RepsIncrement)
 	}
 	if _, err := workout.Create(ctx, pool, coach, workout.CreateInput{Name: prefix + " bad reps increment", Exercises: []workout.CreateExerciseInput{
-		{Name: prefix + " bad squat reps", RepsIncrement: &two, Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+		{Name: prefix + " bad squat reps", RepsIncrement: &twentyOne, Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
 	}}); !isValidation(err) {
 		t.Fatalf("invalid repsIncrement = %v", err)
 	}

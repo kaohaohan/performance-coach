@@ -74,7 +74,7 @@ export function applyRepsIncrementPrefill<T extends Pick<DraftExerciseProgressio
   exercises: T[],
 ): T[] {
   return exercises.map((item) => {
-    if (item.repsIncrement !== 1 || item.prescriptionMode !== "REPS") return item;
+    if (item.repsIncrement < 1 || item.prescriptionMode !== "REPS") return item;
     const defaultReps = Number(item.defaultReps);
     const bumpedDefault = Number.isInteger(defaultReps) && defaultReps >= 1
       ? String(suggestBumpedReps(defaultReps, item.repsIncrement))

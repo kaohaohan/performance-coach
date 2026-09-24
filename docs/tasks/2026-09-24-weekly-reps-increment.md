@@ -53,10 +53,10 @@
 | 1. Schema + persistence + contract | Done | Migration 0009; workout.go + main.go |
 | 2. Prefill + builder + Repeat | Done | load-increment.ts; calendar builder + Repeat preview |
 | 3. Tests + docs | Done | Go/web tests; contract + schema + MVP/UI specs |
-| 4. Production deploy | Not Started | Parent agent: migrate 0009 + Cloud Run deploy |
+| 4. Production deploy | Done | Migration 0009 on staging+prod; API `f321d4e` serving 100% |
 
 ## 5. Outcome (filled at completion)
 
-- Final status: Shipped on `main`. Independent `repsIncrement` 0\|1 on WorkoutExercise templates; applied at single-athlete copy/build/repeat prefill (load → reps → sets); TEXT no-op.
+- Final status: Shipped on production. Independent `repsIncrement` 0|1 on WorkoutExercise templates; applied at single-athlete copy/build/repeat prefill (load → reps → sets); TEXT no-op.
 - Deviations from plan: None.
-- Follow-ups: Apply migration `0009_weekly_reps_increment` on staging + production; deploy API.
+- Follow-ups: Amount is now a fill-in integer 0–20 (migration 0010), not a 0|1 toggle.

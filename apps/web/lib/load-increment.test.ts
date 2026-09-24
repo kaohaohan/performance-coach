@@ -84,17 +84,17 @@ test("applySetIncrementPrefill leaves zero increment unchanged", () => {
   assert.deepEqual(applySetIncrementPrefill(exercises), exercises);
 });
 
-test("applyRepsIncrementPrefill adds one rep when enabled", () => {
+test("applyRepsIncrementPrefill adds the authored number of reps", () => {
   const exercises = [{
-    repsIncrement: 1,
+    repsIncrement: 2,
     prescriptionMode: "REPS" as const,
     defaultReps: "8",
     overrides: [],
   }];
   assert.deepEqual(applyRepsIncrementPrefill(exercises), [{
-    repsIncrement: 1,
+    repsIncrement: 2,
     prescriptionMode: "REPS",
-    defaultReps: "9",
+    defaultReps: "10",
     overrides: [],
   }]);
 });
@@ -157,5 +157,6 @@ test("suggestBumpedSetCount", () => {
 
 test("suggestBumpedReps", () => {
   assert.equal(suggestBumpedReps(8, 1), 9);
+  assert.equal(suggestBumpedReps(8, 2), 10);
   assert.equal(suggestBumpedReps(8, 0), 8);
 });

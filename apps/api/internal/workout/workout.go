@@ -423,8 +423,8 @@ func validateSetIncrement(increment int) string {
 }
 
 func validateRepsIncrement(increment int) string {
-	if increment != 0 && increment != 1 {
-		return "repsIncrement must be 0 or 1"
+	if increment < 0 || increment > 20 {
+		return "repsIncrement must be an integer from 0 to 20"
 	}
 	return ""
 }
