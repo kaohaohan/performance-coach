@@ -12,6 +12,13 @@ import { timeOfDay as formatTimeOfDay } from "@/lib/i18n/dates";
 import { localizeExerciseName, matchesExerciseQuery } from "@/lib/i18n/exercise-names";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import {
+  allowedLoadIncrements,
+  applyProgressionPrefill,
+  buildLastCompletedLoadsQuery,
+  defaultLoadIncrement,
+  normalizeLoadIncrement,
+} from "@/lib/load-increment";
+import {
   assignmentIdsForSession,
   clearDraft,
   extrasForPersistence,
@@ -38,6 +45,15 @@ import DayCard from "./day-card";
 import ViewToolbar from "./view-toolbar";
 import DuplicateDayPanel from "./duplicate-day-panel";
 import { createDuplicateInFlightGuard, duplicateSourceEndpoint, submitDuplicateRequests } from "./duplicate-requests";
+import {
+  applyRepeatWeekBatch,
+  buildRepeatWeekPreview,
+  collectWeekAssignments,
+  repeatWeekBounds,
+  retryRepeatWeekSchedule,
+  type RepeatWeekApplyFailure,
+  type RepeatWeekPreviewItem,
+} from "./repeat-week";
 import { ExistingExerciseUnavailableError, createOrResolveExercise } from "./exercise-creation";
 import {
   areProgrammingControlsDisabled,
@@ -328,6 +344,8 @@ function fallbackWorkoutName(date: string): string {
 function buildExercisesPayload(items: DraftExercise[]) {
   return items.map((item) => ({
     name: item.exercise.name,
+    loadIncrement: item.loadIncrement,
+    setIncrement: item.setIncrement,
     ...(item.coachCue.trim() === "" ? {} : { coachCue: item.coachCue.trim() }),
     plan: {
       setCount: Number(item.setCount),
@@ -392,6 +410,8 @@ function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise
     defaultPrescriptionNote: baseMode === "TEXT" ? (base?.prescriptionNote ?? "") : "",
     defaultLoad: base?.load !== undefined && base?.load !== null ? String(base.load) : "",
     unit: base?.unit ?? "kg",
+    loadIncrement: defaultLoadIncrement(base?.unit === "lb" ? "lb" : "kg"),
+    setIncrement: 0,
     defaultRpe: base?.rpe !== undefined && base?.rpe !== null ? String(base.rpe) : "",
     coachCue: ex.coachCue ?? "",
     overrides,
@@ -629,6 +649,16 @@ export default function CoachCalendarPage() {
   const [duplicateOutstanding, setDuplicateOutstanding] = useState<string[] | null>(null);
   const duplicateSourceLoadId = useRef(0);
   const duplicateInFlight = useRef(createDuplicateInFlightGuard());
+
+  const [repeatWeekOpen, setRepeatWeekOpen] = useState(false);
+  const [repeatWeekPreview, setRepeatWeekPreview] = useState<RepeatWeekPreviewItem[] | null>(null);
+  const [repeatWeekLastCompleted, setRepeatWeekLastCompleted] = useState<Record<string, number | null>>({});
+  const [repeatWeekApplying, setRepeatWeekApplying] = useState(false);
+  const [repeatWeekError, setRepeatWeekError] = useState<string | null>(null);
+  const [repeatWeekSuccess, setRepeatWeekSuccess] = useState<string | null>(null);
+  const [repeatWeekFailure, setRepeatWeekFailure] = useState<RepeatWeekApplyFailure | null>(null);
+  const [repeatWeekProgress, setRepeatWeekProgress] = useState({ completed: 0, total: 0, remaining: 0 });
+  const repeatWeekInFlight = useRef(false);
 
   // Problem A — browser-local Build Workout draft persistence. coachId
   // scopes the localStorage key so multiple Coach accounts in the same
@@ -930,6 +960,12 @@ export default function CoachCalendarPage() {
   }, [assignSuccess]);
 
   useEffect(() => {
+    if (!repeatWeekSuccess) return;
+    const timeoutId = window.setTimeout(() => setRepeatWeekSuccess(null), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [repeatWeekSuccess]);
+
+  useEffect(() => {
     if (!draftJustSaved) return;
     const timeoutId = window.setTimeout(() => setDraftJustSaved(false), 2500);
     return () => window.clearTimeout(timeoutId);
@@ -1164,6 +1200,8 @@ export default function CoachCalendarPage() {
       defaultPrescriptionNote: "",
       defaultLoad: "",
       unit: "kg",
+      loadIncrement: defaultLoadIncrement("kg"),
+      setIncrement: 0,
       defaultRpe: "",
       coachCue: "",
       overrides: [],
@@ -1699,7 +1737,177 @@ export default function CoachCalendarPage() {
     }
   }
 
-  function startSavedWorkoutCopy() {
+  async function prefillCopiedExerciseLoads(athleteId: string, exercises: DraftExercise[]): Promise<DraftExercise[]> {
+    if (!idToken || exercises.length === 0) return exercises;
+    const query = buildLastCompletedLoadsQuery(exercises);
+    if (!query) return exercises;
+    try {
+      const response = await apiFetch<{ loads: Record<string, number | null> }>(
+        idToken,
+        `/api/v1/athletes/${athleteId}/last-completed-loads?exerciseIds=${encodeURIComponent(query.exerciseIds)}&units=${encodeURIComponent(query.units)}`,
+      );
+      return applyProgressionPrefill(exercises, response.loads);
+    } catch {
+      return exercises;
+    }
+  }
+
+  function assignmentsByDateForAthlete(athleteId: string): Map<string, ScheduledWorkoutSummary[]> {
+    const grouped = new Map<string, ScheduledWorkoutSummary[]>();
+    for (const assignment of assignments ?? []) {
+      if (assignment.athlete.id !== athleteId) continue;
+      const existing = grouped.get(assignment.scheduledDate);
+      if (existing === undefined) grouped.set(assignment.scheduledDate, [assignment]);
+      else existing.push(assignment);
+    }
+    return grouped;
+  }
+
+  async function fetchLastCompletedForWorkouts(workoutIds: readonly string[]): Promise<Record<string, number | null>> {
+    if (!idToken || workoutIds.length === 0) return {};
+    const queryItems = workoutIds.flatMap((workoutId) => {
+      const workout = workouts?.find((candidate) => candidate.id === workoutId);
+      if (workout === undefined) return [];
+      return workout.exercises.map((exercise) => ({
+        exercise: { id: exercise.exerciseId },
+        unit: exercise.plan.defaults.unit === "lb" ? "lb" as const : "kg" as const,
+      }));
+    });
+    const query = buildLastCompletedLoadsQuery(queryItems);
+    if (!query) return {};
+    try {
+      const response = await apiFetch<{ loads: Record<string, number | null> }>(
+        idToken,
+        `/api/v1/athletes/${calendarAthleteId}/last-completed-loads?exerciseIds=${encodeURIComponent(query.exerciseIds)}&units=${encodeURIComponent(query.units)}`,
+      );
+      return response.loads;
+    } catch {
+      return {};
+    }
+  }
+
+  async function openRepeatWeekPreview() {
+    if (!idToken || !calendarAthleteId || view !== "week" || programmingControlsDisabled || repeatWeekInFlight.current) return;
+    const bounds = repeatWeekBounds(weekAnchor);
+    const source = collectWeekAssignments(assignments ?? [], calendarAthleteId, bounds.days);
+    if (source.length === 0) return;
+    const workoutsById = new Map((workouts ?? []).map((workout) => [workout.id, workout]));
+    const lastCompleted = await fetchLastCompletedForWorkouts(source.map((item) => item.workout.id));
+    const preview = buildRepeatWeekPreview(
+      source,
+      workoutsById,
+      assignmentsByDateForAthlete(calendarAthleteId),
+      lastCompleted,
+    );
+    setRepeatWeekLastCompleted(lastCompleted);
+    setRepeatWeekPreview(preview);
+    setRepeatWeekFailure(null);
+    setRepeatWeekError(null);
+    setRepeatWeekSuccess(null);
+    setRepeatWeekProgress({ completed: 0, total: preview.length, remaining: preview.length });
+    setRepeatWeekOpen(true);
+  }
+
+  function closeRepeatWeekDialog() {
+    if (repeatWeekApplying) return;
+    setRepeatWeekOpen(false);
+    setRepeatWeekPreview(null);
+    setRepeatWeekFailure(null);
+    setRepeatWeekError(null);
+  }
+
+  async function confirmRepeatWeek() {
+    if (!idToken || !calendarAthleteId || repeatWeekPreview === null || repeatWeekInFlight.current) return;
+    repeatWeekInFlight.current = true;
+    setRepeatWeekApplying(true);
+    setRepeatWeekError(null);
+    setRepeatWeekSuccess(null);
+    const workoutsById = new Map((workouts ?? []).map((workout) => [workout.id, workout]));
+    const callbacks = {
+      createWorkout: async (body: { name: string; exercises: ReturnType<typeof buildExercisesPayload> }) =>
+        apiFetch<Workout>(idToken, "/api/v1/workouts", { method: "POST", body }),
+      scheduleWorkout: async (body: { workoutId: string; athleteIds: readonly string[]; scheduledDate: string }) => {
+        await apiFetch(idToken, "/api/v1/scheduled-workouts", { method: "POST", body });
+      },
+    };
+    try {
+      if (repeatWeekFailure?.phase === "schedule" && repeatWeekFailure.workoutId !== null) {
+        await retryRepeatWeekSchedule(repeatWeekFailure, calendarAthleteId, { scheduleWorkout: callbacks.scheduleWorkout });
+        setRepeatWeekFailure(null);
+        const continueFrom = repeatWeekProgress.completed;
+        if (continueFrom >= repeatWeekPreview.length) {
+          setRepeatWeekSuccess(t("calendar.repeatWeek.success", { count: repeatWeekPreview.length }));
+          setRepeatWeekOpen(false);
+          setRepeatWeekPreview(null);
+          await refetchAssignments();
+          await refetchWorkouts();
+          return;
+        }
+        const result = await applyRepeatWeekBatch(
+          repeatWeekPreview,
+          workoutsById,
+          calendarAthleteId,
+          repeatWeekLastCompleted,
+          callbacks,
+          continueFrom,
+        );
+        if (result.status === "complete") {
+          setRepeatWeekSuccess(t("calendar.repeatWeek.success", { count: repeatWeekPreview.length }));
+          setRepeatWeekOpen(false);
+          setRepeatWeekPreview(null);
+          await refetchAssignments();
+          await refetchWorkouts();
+          return;
+        }
+        setRepeatWeekFailure(result.failure);
+        setRepeatWeekProgress({ completed: result.completed.length, total: repeatWeekPreview.length, remaining: result.remainingCount });
+        setRepeatWeekError(t("calendar.repeatWeek.partialFailure", {
+          completed: result.completed.length,
+          total: repeatWeekPreview.length,
+          error: result.failure.error,
+          createdNotice: result.failure.phase === "schedule"
+            ? t("calendar.repeatWeek.createdNotAssigned", { name: result.failure.workoutName, date: displayDate(result.failure.targetDate) })
+            : "",
+        }));
+        return;
+      }
+
+      const startIndex = repeatWeekFailure?.phase === "create" ? repeatWeekProgress.completed : 0;
+      const result = await applyRepeatWeekBatch(
+        repeatWeekPreview,
+        workoutsById,
+        calendarAthleteId,
+        repeatWeekLastCompleted,
+        callbacks,
+        startIndex,
+      );
+      if (result.status === "complete") {
+        setRepeatWeekSuccess(t("calendar.repeatWeek.success", { count: repeatWeekPreview.length }));
+        setRepeatWeekOpen(false);
+        setRepeatWeekPreview(null);
+        await refetchAssignments();
+        await refetchWorkouts();
+        return;
+      }
+      setRepeatWeekFailure(result.failure);
+      setRepeatWeekProgress({ completed: result.completed.length, total: repeatWeekPreview.length, remaining: result.remainingCount });
+      setRepeatWeekError(t("calendar.repeatWeek.partialFailure", {
+        completed: result.completed.length,
+        total: repeatWeekPreview.length,
+        error: result.failure.error,
+        createdNotice: result.failure.phase === "schedule"
+          ? t("calendar.repeatWeek.createdNotAssigned", { name: result.failure.workoutName, date: displayDate(result.failure.targetDate) })
+          : "",
+      }));
+    } catch (err) {
+      setRepeatWeekError(describeError(t, err));
+    } finally {
+      repeatWeekInFlight.current = false;
+      setRepeatWeekApplying(false);
+    }
+  }
+
+  async function startSavedWorkoutCopy() {
     if (!calendarAthleteId || programmingControlsDisabled || workouts === null || selectedWorkoutId === "") return;
     const source = workouts.find((workout) => workout.id === selectedWorkoutId);
     if (!source) return;
@@ -1714,8 +1922,11 @@ export default function CoachCalendarPage() {
     resetBuilderDraft();
     applyClearedBuildTransaction();
     const copied = savedWorkoutToDraft(source);
+    const exercises = selectedAthleteIds.length === 1
+      ? await prefillCopiedExerciseLoads(selectedAthleteIds[0], copied.exercises)
+      : copied.exercises;
     setDraftName(copied.name);
-    setDraftExercises(copied.exercises);
+    setDraftExercises(exercises);
     setExpandedExerciseId(null);
     setCopiedFromWorkoutName(source.name);
     setBuilderDate(date);
@@ -1810,6 +2021,11 @@ export default function CoachCalendarPage() {
     else existing.push(assignment);
   }
   const gridDates = view === "week" ? weekDays(weekAnchor) : view === "month" ? monthGridDays(`${viewMonth}-01`) : [];
+  const weekBounds = view === "week" ? repeatWeekBounds(weekAnchor) : null;
+  const weekSourceAssignments = weekBounds && calendarAthleteId
+    ? collectWeekAssignments(assignments ?? [], calendarAthleteId, weekBounds.days)
+    : [];
+  const showRepeatWeek = view === "week" && calendarAthleteId !== "" && weekSourceAssignments.length > 0 && selectedCount <= 1;
 
   function applyCalendarAthlete(athleteId: string) {
     setCalendarAthleteId(athleteId);
@@ -2254,6 +2470,21 @@ export default function CoachCalendarPage() {
           onViewChange={changeView}
         />
 
+        {showRepeatWeek && (
+          <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => void openRepeatWeekPreview()}
+              disabled={programmingControlsDisabled || repeatWeekApplying}
+              className="min-h-11 rounded-xl border border-teal-600/30 bg-teal-50 px-5 text-sm font-bold text-teal-900 transition hover:bg-teal-100 disabled:opacity-50"
+            >
+              {t("calendar.repeatWeek.action")}
+            </button>
+          </div>
+        )}
+
+        {repeatWeekSuccess && <div className="mb-4"><Notice tone="success">{repeatWeekSuccess}</Notice></div>}
+
         {loadError && <div className="mb-4"><Notice tone="error">{loadError}</Notice></div>}
 
         {view === "day" ? (
@@ -2395,6 +2626,53 @@ export default function CoachCalendarPage() {
         onCancel={() => setDuplicateConfirm(null)}
       />}
 
+      {repeatWeekOpen && repeatWeekPreview !== null && <ConfirmDialog
+        title={t("calendar.repeatWeek.title")}
+        body={<div className="grid gap-4 text-left">
+          <p className="text-sm text-slate-600">{t("calendar.repeatWeek.body")}</p>
+          <ul className="grid max-h-80 gap-3 overflow-y-auto">
+            {repeatWeekPreview.map((item) => (
+              <li key={item.sourceAssignmentId} className="rounded-xl border border-slate-200 bg-stone-50 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-bold">{item.workoutName}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">{t("calendar.repeatWeek.dateShift", { source: displayDate(item.sourceDate), target: displayDate(item.targetDate) })}</p>
+                  </div>
+                  {item.hasConflict && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900 ring-1 ring-amber-500/20">{t("calendar.repeatWeek.conflict")}</span>}
+                </div>
+                <ul className="mt-3 grid gap-1 text-xs text-slate-600">
+                  {item.exercises.map((exercise) => (
+                    <li key={`${item.sourceAssignmentId}-${exercise.name}`}>
+                      {t("calendar.repeatWeek.setsPreview", { name: exercise.name, sourceSets: exercise.sourceSets, suggestedSets: exercise.suggestedSets })}
+                      {" · "}
+                      {exercise.suggestedLoad ?? t("calendar.repeatWeek.noLoad")}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+          {repeatWeekError && <Notice tone="error">{repeatWeekError}</Notice>}
+          {repeatWeekFailure?.phase === "schedule" && (
+            <button
+              type="button"
+              onClick={() => void confirmRepeatWeek()}
+              disabled={repeatWeekApplying}
+              className="min-h-12 w-full rounded-2xl bg-amber-500 px-5 text-base font-bold text-slate-950 shadow-sm transition hover:bg-amber-400 disabled:opacity-50"
+            >
+              {t("calendar.repeatWeek.retryAssignment")}
+            </button>
+          )}
+          {repeatWeekFailure && repeatWeekProgress.remaining > 0 && repeatWeekFailure.phase !== "schedule" && (
+            <p className="text-sm text-slate-600">{t("calendar.repeatWeek.remaining", { count: repeatWeekProgress.remaining })}</p>
+          )}
+        </div>}
+        confirmLabel={repeatWeekApplying ? t("calendar.repeatWeek.applying") : t("calendar.repeatWeek.confirm")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={() => void confirmRepeatWeek()}
+        onCancel={closeRepeatWeekDialog}
+      />}
+
       {removeTarget && <ConfirmDialog
         title={t("calendar.dialog.removeTitle")}
         body={<RichMessage message={t("calendar.dialog.removeBody")} values={{
@@ -2515,7 +2793,9 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
           <input id={`${baseId}-reps`} type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" aria-describedby={`${baseId}-reps-hint`} value={item.defaultReps} onChange={(event) => onChange({ defaultReps: event.target.value })} onBlur={() => onValidateField("reps")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />
           {errors?.reps && <FieldError>{errors.reps}</FieldError>}
         </div>}
-    <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.unit")}</span><select value={item.unit} onChange={(event) => onChange({ unit: event.target.value as PlannedUnit })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
+    <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.unit")}</span><select value={item.unit} onChange={(event) => { const unit = event.target.value as PlannedUnit; onChange({ unit, loadIncrement: normalizeLoadIncrement(unit, item.loadIncrement) }); }} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
+    <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.loadIncrement")}</span><select value={item.loadIncrement} onChange={(event) => onChange({ loadIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100">{allowedLoadIncrements(item.unit).map((option) => <option key={option} value={option}>{option === 0 ? t("calendar.optional") : `+${option} ${item.unit}`}</option>)}</select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.loadIncrementHint")}</p></label>
+    <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.setIncrement")}</span><select value={item.setIncrement} onChange={(event) => onChange({ setIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value={0}>{t("calendar.optional")}</option><option value={1}>+1 {t("calendar.field.sets").toLowerCase()}</option></select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.setIncrementHint")}</p></label>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.coachCue")}</span><textarea value={item.coachCue} maxLength={500} rows={2} onChange={(event) => onChange({ coachCue: event.target.value })} disabled={disabled} placeholder={t("calendar.field.coachCuePlaceholder")} className="min-h-20 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 py-2 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100 placeholder:text-slate-400" /></label>
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{t("calendar.plannedSets")}</p>
       {setCount > 0 && <div className="mt-3 grid gap-2">{Array.from({ length: setCount }, (_, offset) => offset + 1).map((position) => {

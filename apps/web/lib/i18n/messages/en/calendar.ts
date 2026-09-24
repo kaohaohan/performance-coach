@@ -175,6 +175,10 @@ export const calendar = {
   "calendar.field.repsHint":
     "Reps takes one whole number, used for every set. For 8-12, 8+, AMAP, or timed sets, switch Prescription to Text — or edit an individual set under Planned sets to vary reps set by set.",
   "calendar.field.load": "Load",
+  "calendar.field.loadIncrement": "Weekly bump",
+  "calendar.field.loadIncrementHint": "Added when you copy this workout for one athlete. Uses last completed load when available.",
+  "calendar.field.setIncrement": "Weekly +1 set",
+  "calendar.field.setIncrementHint": "Adds one set when you copy or repeat this workout for one athlete.",
   "calendar.field.unit": "Unit",
   "calendar.prescription.reps": "Reps",
   "calendar.prescription.text": "Custom target",
@@ -294,6 +298,24 @@ export const calendar = {
   // {error} is the API's own last message, so it stays where English put it.
   "calendar.duplicate.partialFailure":
     "{failed} of {total} could not be duplicated ({names}). {error} Press Duplicate to retry just those.",
+
+  // ── Repeat week ──────────────────────────────────────────────────────────
+  "calendar.repeatWeek.action": "Repeat this week",
+  "calendar.repeatWeek.title": "Repeat this week",
+  "calendar.repeatWeek.body": "Create bumped copies for next week using each session's saved workout template. Source templates and this week's assignments stay unchanged.",
+  "calendar.repeatWeek.confirm": "Repeat week",
+  "calendar.repeatWeek.applying": "Repeating week…",
+  "calendar.repeatWeek.dateShift": "{source} → {target}",
+  "calendar.repeatWeek.conflict": "Target date already has workouts",
+  "calendar.repeatWeek.setsPreview": "{name}: {sourceSets} → {suggestedSets} sets",
+  "calendar.repeatWeek.loadPreview": "{load}",
+  "calendar.repeatWeek.noLoad": "No load",
+  "calendar.repeatWeek.success": "Repeated {count} workouts to next week.",
+  "calendar.repeatWeek.partialFailure":
+    "Stopped after {completed} of {total}. {error} {createdNotice}",
+  "calendar.repeatWeek.createdNotAssigned": "“{name}” was created for {date} but not assigned.",
+  "calendar.repeatWeek.retryAssignment": "Retry assignment",
+  "calendar.repeatWeek.remaining": "{count} sessions were not created.",
 
   // ── Dialogs ──────────────────────────────────────────────────────────────
   "calendar.dialog.alreadyScheduledTitle": "Already scheduled",

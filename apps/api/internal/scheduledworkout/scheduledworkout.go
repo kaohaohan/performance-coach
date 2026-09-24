@@ -1187,6 +1187,20 @@ func isConnected(ctx context.Context, pool *pgxpool.Pool, coachID, athleteID str
 	return true, nil
 }
 
+// AthleteRangeScheduledWorkout is one summary item of GET
+// /api/v1/me/scheduled-workouts?from=&to= (docs/go-backend-api-contract-v0.1.md
+// §3.6): no exercises — only enough for the Athlete month grid.
+type AthleteRangeScheduledWorkout struct {
+	ID            string   `json:"id"`
+	ScheduledDate string   `json:"scheduledDate"`
+	WorkoutName   string   `json:"workoutName"`
+	Session       *Session `json:"session"`
+}
+
+// MaxAthleteScheduleRangeDays is the inclusive day cap for athlete range
+// queries (matches a 6×7 month grid).
+const MaxAthleteScheduleRangeDays = 42
+
 // TodayScheduledWorkout is one item of the GET
 // /api/v1/me/scheduled-workouts response
 // (docs/go-backend-api-contract-v0.1.md §3.6): one of the caller athlete's
@@ -1363,6 +1377,60 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	scheduled := make([]TodayScheduledWorkout, 0, len(order))
 	for _, id := range order {
 		scheduled = append(scheduled, *byID[id])
+	}
+	return scheduled, nil
+}
+
+// ListForAthleteRange returns the caller's own ScheduledWorkouts with
+// scheduled_date in [from, to] (inclusive), without exercises — summary only
+// for the Athlete /today month grid (docs/go-backend-api-contract-v0.1.md
+// §3.6).
+//
+// Authorization: only an ATHLETE may call this; results are always scoped
+// to caller.ID.
+func ListForAthleteRange(ctx context.Context, pool *pgxpool.Pool, caller authn.User, from, to time.Time) ([]AthleteRangeScheduledWorkout, error) {
+	if caller.Role != "ATHLETE" {
+		return nil, ErrForbidden
+	}
+
+	const query = `
+		SELECT sw.id, sw.scheduled_date, w.name,
+		       ws.id, ws.status
+		FROM scheduled_workouts sw
+		JOIN workouts w ON w.id = sw.workout_id
+		LEFT JOIN workout_sessions ws ON ws.scheduled_workout_id = sw.id
+		WHERE sw.athlete_id = $1
+		  AND sw.scheduled_date BETWEEN $2 AND $3
+		ORDER BY sw.scheduled_date, sw.id`
+
+	rows, err := pool.Query(ctx, query, caller.ID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("scheduledworkout: list athlete range: %w", err)
+	}
+	defer rows.Close()
+
+	scheduled := make([]AthleteRangeScheduledWorkout, 0)
+	for rows.Next() {
+		var (
+			item          AthleteRangeScheduledWorkout
+			scheduledDate time.Time
+			sessionID     *string
+			sessionStatus *string
+		)
+		if err := rows.Scan(
+			&item.ID, &scheduledDate, &item.WorkoutName,
+			&sessionID, &sessionStatus,
+		); err != nil {
+			return nil, fmt.Errorf("scheduledworkout: scan athlete range: %w", err)
+		}
+		item.ScheduledDate = scheduledDate.Format(dateLayout)
+		if sessionID != nil {
+			item.Session = &Session{ID: *sessionID, Status: *sessionStatus}
+		}
+		scheduled = append(scheduled, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scheduledworkout: iterate athlete range: %w", err)
 	}
 	return scheduled, nil
 }

@@ -49,6 +49,8 @@ export type WorkoutExercise = {
   workoutExerciseId: string;
   exerciseId: string;
   name: string;
+  loadIncrement?: number;
+  setIncrement?: number;
   plan: WorkoutPlan;
   coachCue?: string;
   position: number;

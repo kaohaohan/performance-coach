@@ -409,6 +409,8 @@ Request：
   "exercises": [
     {
       "name": "Back Squat",
+      "loadIncrement": 2.5,
+      "setIncrement": 1,
       "plan": {
         "setCount": 5,
         "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
@@ -441,6 +443,8 @@ Request：
 - `overrides[].position` 必須唯一且介於 `1..setCount`
 - 一筆 override 至少包含 `reps`、`prescriptionNote`、`load`、`rpe` 之一；若覆寫 prescription，`reps` 與 `prescriptionNote` 恰好一個存在
 - override 欄位省略或為 null 都代表 inheritance/clear-override；null **不**代表 explicit no-target。Response 省略 inherited properties，空 override row 必須移除
+- `loadIncrement` 選填，每個 WorkoutExercise 一個值；省略時依 `plan.defaults.unit` 預設 `2.5`（`kg`）或 `5`（`lb`），無 unit 時預設 `2.5`。允許值：`kg` → `0`、`2.5`、`5`、`10`；`lb` → `0`、`5`、`10`。僅影響 Coach 下次 copy/build/repeat 時的建議負重；已排程 snapshot 不帶此欄位、也不會被回溯修改
+- `setIncrement` 選填，每個 WorkoutExercise 一個值；省略時預設 `0`。允許值：`0` 或 `1`。僅影響 Coach 下次 copy/build/repeat 時的建議組數（`setCount + setIncrement`；新增位置繼承 uniform defaults）；已排程 snapshot 不帶此欄位、也不會被回溯修改
 
 Service 於單一 transaction 內：find-or-create exercises → 建 workouts → 依陣列順序建 workout_exercises（`position` 由 server 給定）。
 
@@ -455,6 +459,8 @@ Response `201`：
       "workoutExerciseId": "...",
       "exerciseId": "...",
       "name": "Back Squat",
+      "loadIncrement": 2.5,
+      "setIncrement": 1,
       "plan": {
         "setCount": 5,
         "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
@@ -590,6 +596,30 @@ Response `200`：
 ### GET /athletes — Coach only
 
 回傳與呼叫者有 **active relationship** 的 athlete 清單（排程時的多選來源）。`deleted_at IS NOT NULL` 的 athlete 不出現。歷史名稱改走 Calendar / session 讀取，顯示 `Deleted Athlete`。
+
+### GET /athletes/{athleteId}/last-completed-loads — Coach only
+
+供 Calendar Builder 在**單一 athlete** 被選中時，查詢各 exercise 最近一次 **COMPLETED** session 的實際負重（同 unit）。Coach 必須與該 athlete 有 **active relationship**，否則 `404 NOT_FOUND`。
+
+Query：
+
+- `exerciseIds`：必填，逗號分隔 UUID 清單（可重複順序與 `units` 對齊）
+- `units`：必填，逗號分隔 `kg`/`lb`，與 `exerciseIds` **等長**
+
+`exerciseIds`/`units` 缺任一、長度不一致、UUID 或 unit 無效 → `400 INVALID_ARGUMENT`。
+
+Response `200`：
+
+```json
+{
+  "loads": {
+    "<exerciseId>": 100,
+    "<exerciseIdWithNoHistory>": null
+  }
+}
+```
+
+只回傳請求中出現的 exercise id。`null` 表示該 athlete + exercise + unit 沒有 COMPLETED SetLog 負重紀錄（ACTIVE session 不算）。前端據此與 template `loadIncrement` 做 prefill；多 athlete 指派時不得呼叫此 endpoint 來改寫 template 負重。
 
 ---
 
@@ -766,7 +796,11 @@ Response `204 No Content`，無 body。
 
 ## 3.6 Athlete Today View（Story 3）
 
-### GET /me/scheduled-workouts?date=2026-08-13 — Athlete only
+### GET /me/scheduled-workouts — Athlete only
+
+查詢參數 **互斥**：`date` **或**（`from` + `to`）。同時提供兩種風格、只提供其一、缺 `from`/`to` 配對、或日期格式無效 → `400 INVALID_ARGUMENT`。`to` 早於 `from` → `400`。`from`–`to` 含首尾日最多 **42** 天；超出 → `400`。
+
+#### `?date=2026-08-13` — 單日詳情（既有行為）
 
 只回傳 `athleteId = caller` 的排程，exercises **一律來自 snapshot**（見第 2 節優先權規則）：
 
@@ -801,6 +835,23 @@ Response `204 No Content`，無 body。
 `session` 非 null 時代表已開始/完成，前端據此顯示 Start / Resume / Done。Optional `coachCue` comes from the snapshot; optional `youtubeUrl` is a live catalog join and is omitted when null.
 
 **注意：**行動端記錄 normal SetLog 同時送 active `scheduledWorkoutExerciseId` 與該 target 的 `scheduledWorkoutPlannedSetId`，不是 `exerciseId`。Extra SetLog 沒有 planned-set ID。
+
+#### `?from=2026-08-01&to=2026-08-31` — 日期範圍摘要（Athlete `/today` 月曆格）
+
+供 Athlete `/today` 月曆格標記有訓練的日期；**不含** `exercises`。同一 athlete 在範圍內可能有多筆排程，全部回傳。
+
+```json
+[
+  {
+    "id": "...",
+    "scheduledDate": "2026-08-13",
+    "workoutName": "Monday Lower",
+    "session": null
+  }
+]
+```
+
+`session` 語意與單日詳情相同。點選某日仍用 `?date=` 取得完整處方。
 
 ---
 
@@ -1048,12 +1099,13 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST /workouts` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
 | `GET/PATCH/DELETE /workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | — |
 | `GET /athletes` | ❌ 401 | ❌ 401 | ✅ 僅 active relationship | ❌ 403 | tombstoned athlete 不列入 |
+| `GET /athletes/{athleteId}/last-completed-loads` | ❌ 401 | ❌ 401 | ✅ active relationship；否則 ❌ 404 | ❌ 403 | 供單一 athlete Builder prefill；只讀 COMPLETED SetLog |
 | `POST /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 且每個 athlete 都需 **active relationship** | ❌ 403 | 任一不符則整批拒絕，不做部分排程；已排同一 workout + 同一日期 → `409`，除非帶 `allowDuplicates: true`，見 §3.5 |
 | `GET /scheduled-workouts` | ❌ 401 | ❌ 401 | ✅ 僅回自己建立的排程 | ❌ 403 | `athleteId` 選填；無 **historical access** → `404`；tombstoned 名稱為 `Deleted Athlete`，見 §3.5 |
 | `GET /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | 單筆展開 snapshot，供 Coach Calendar 的 Edit 表單 prefill；list 刻意不含 exercises |
 | `PUT /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`，永久唯讀，見 §3.5 |
 | `DELETE /scheduled-workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner 且尚未開始訓練 | ❌ 404 | 移除誤排；一旦有 `workout_sessions` row（ACTIVE 或 COMPLETED）→ `409 CONFLICT`。成功回 `204`，不動 reusable Workout template，見 §3.5 |
-| `GET /me/scheduled-workouts` | ❌ 401 | ❌ 401 | ➖ 回自己的 = 空 | ✅ | 無關聯的 application user 得到空清單 |
+| `GET /me/scheduled-workouts` | ❌ 401 | ❌ 401 | ➖ 回自己的 = 空 | ✅ | `date` XOR `from`+`to`；range ≤42 天；range 回應無 exercises |
 | `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
