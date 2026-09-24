@@ -24,6 +24,7 @@ const squatWorkout: Workout = {
     name: "Back Squat",
     loadIncrement: 2.5,
     setIncrement: 1,
+    repsIncrement: 1,
     plan: {
       setCount: 3,
       defaults: { reps: 8, load: 80, unit: "kg" },
@@ -74,6 +75,8 @@ test("buildRepeatWeekPreview bumps sets and load with conflict flag", () => {
   assert.equal(preview[0].hasConflict, true);
   assert.equal(preview[0].exercises[0].sourceSets, 3);
   assert.equal(preview[0].exercises[0].suggestedSets, 4);
+  assert.equal(preview[0].exercises[0].sourceReps, 8);
+  assert.equal(preview[0].exercises[0].suggestedReps, 9);
   assert.equal(preview[0].exercises[0].suggestedLoad, "102.5 kg");
 });
 
@@ -92,4 +95,33 @@ test("setIncrement zero does not bump sets in preview", () => {
   const source = [assignment("a1", "2026-09-22", "workout-1", "Lower")];
   const preview = buildRepeatWeekPreview(source, new Map([["workout-1", workout]]), new Map(), {});
   assert.equal(preview[0].exercises[0].suggestedSets, 3);
+});
+
+test("repsIncrement zero does not bump reps in preview", () => {
+  const workout: Workout = {
+    ...squatWorkout,
+    exercises: [{ ...squatWorkout.exercises[0], repsIncrement: 0 }],
+  };
+  const source = [assignment("a1", "2026-09-22", "workout-1", "Lower")];
+  const preview = buildRepeatWeekPreview(source, new Map([["workout-1", workout]]), new Map(), {});
+  assert.equal(preview[0].exercises[0].suggestedReps, 8);
+});
+
+test("TEXT prescription leaves reps preview null", () => {
+  const workout: Workout = {
+    ...squatWorkout,
+    exercises: [{
+      ...squatWorkout.exercises[0],
+      repsIncrement: 1,
+      plan: {
+        setCount: 3,
+        defaults: { prescriptionNote: "AMAP", load: 80, unit: "kg" },
+        overrides: [],
+      },
+    }],
+  };
+  const source = [assignment("a1", "2026-09-22", "workout-1", "Lower")];
+  const preview = buildRepeatWeekPreview(source, new Map([["workout-1", workout]]), new Map(), {});
+  assert.equal(preview[0].exercises[0].sourceReps, null);
+  assert.equal(preview[0].exercises[0].suggestedReps, null);
 });

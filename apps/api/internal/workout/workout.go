@@ -54,6 +54,7 @@ type Exercise struct {
 	Name              string  `json:"name"`
 	LoadIncrement     float64 `json:"loadIncrement"`
 	SetIncrement      int     `json:"setIncrement"`
+	RepsIncrement     int     `json:"repsIncrement"`
 	Plan              Plan    `json:"plan"`
 	CoachCue          *string `json:"coachCue,omitempty"`
 	Position          int     `json:"position"`
@@ -88,6 +89,7 @@ type CreateExerciseInput struct {
 	Plan          prescription.Plan
 	LoadIncrement *float64
 	SetIncrement  *int
+	RepsIncrement *int
 	CoachCue      *string
 }
 
@@ -145,6 +147,13 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 		if msg := validateSetIncrement(setIncrement); msg != "" {
 			return Workout{}, &ValidationError{Message: fmt.Sprintf("exercises[%d].setIncrement: %s", i, msg)}
 		}
+		repsIncrement := 0
+		if ex.RepsIncrement != nil {
+			repsIncrement = *ex.RepsIncrement
+		}
+		if msg := validateRepsIncrement(repsIncrement); msg != "" {
+			return Workout{}, &ValidationError{Message: fmt.Sprintf("exercises[%d].repsIncrement: %s", i, msg)}
+		}
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -187,12 +196,16 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 		if ex.SetIncrement != nil {
 			setIncrement = *ex.SetIncrement
 		}
+		repsIncrement := 0
+		if ex.RepsIncrement != nil {
+			repsIncrement = *ex.RepsIncrement
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO workout_exercises
-				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rpe, coach_cue, position, load_increment, set_increment)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rpe, coach_cue, position, load_increment, set_increment, reps_increment)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 			workoutExerciseID, workoutID, exerciseID, ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote,
-			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RPE, coachCue, position, loadIncrement, setIncrement,
+			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RPE, coachCue, position, loadIncrement, setIncrement, repsIncrement,
 		); err != nil {
 			return Workout{}, fmt.Errorf("workout: insert workout_exercise: %w", err)
 		}
@@ -213,6 +226,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 			Name:              exerciseName,
 			LoadIncrement:     loadIncrement,
 			SetIncrement:      setIncrement,
+			RepsIncrement:     repsIncrement,
 			Plan:              planFromPrescription(ex.Plan),
 			CoachCue:          coachCue,
 			Position:          position,
@@ -304,7 +318,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 
 	const exercisesQuery = `
 		SELECT we.workout_id, we.id, we.exercise_id, e.name,
-		       we.load_increment, we.set_increment,
+		       we.load_increment, we.set_increment, we.reps_increment,
 		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.coach_cue, we.position
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
@@ -322,7 +336,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 		var ex Exercise
 		var plan Plan
 		if err := exRows.Scan(&workoutID, &ex.WorkoutExerciseID, &ex.ExerciseID, &ex.Name,
-			&ex.LoadIncrement, &ex.SetIncrement,
+			&ex.LoadIncrement, &ex.SetIncrement, &ex.RepsIncrement,
 			&plan.SetCount, &plan.Defaults.Reps, &plan.Defaults.PrescriptionNote, &plan.Defaults.Load, &plan.Defaults.Unit, &plan.Defaults.RPE, &ex.CoachCue, &ex.Position); err != nil {
 			return nil, fmt.Errorf("workout: scan workout_exercise: %w", err)
 		}
@@ -404,6 +418,13 @@ func Patch(ctx context.Context, pool *pgxpool.Pool, caller authn.User, workoutID
 func validateSetIncrement(increment int) string {
 	if increment != 0 && increment != 1 {
 		return "setIncrement must be 0 or 1"
+	}
+	return ""
+}
+
+func validateRepsIncrement(increment int) string {
+	if increment != 0 && increment != 1 {
+		return "repsIncrement must be 0 or 1"
 	}
 	return ""
 }

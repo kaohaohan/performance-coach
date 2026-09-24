@@ -55,6 +55,7 @@ export type DraftExercise = {
   unit: PlannedUnit;
   loadIncrement: number;
   setIncrement: number;
+  repsIncrement: number;
   defaultRpe: string;
   coachCue: string;
   overrides: DraftSetOverride[];
@@ -104,6 +105,7 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
           unit,
           loadIncrement: item.loadIncrement ?? defaultLoadIncrement(unit),
           setIncrement: item.setIncrement ?? 0,
+          repsIncrement: item.repsIncrement ?? 0,
           defaultRpe: item.plan.defaults.rpe !== undefined ? String(item.plan.defaults.rpe) : "",
           coachCue: item.coachCue ?? "",
           overrides,

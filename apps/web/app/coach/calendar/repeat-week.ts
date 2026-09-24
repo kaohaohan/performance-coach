@@ -37,6 +37,8 @@ export type RepeatWeekPreviewExercise = {
   name: string;
   sourceSets: number;
   suggestedSets: number;
+  sourceReps: number | null;
+  suggestedReps: number | null;
   suggestedLoad: string | null;
 };
 
@@ -53,6 +55,18 @@ export type RepeatWeekPreviewItem = {
 function formatSuggestedLoad(exercise: DraftExercise): string | null {
   if (exercise.defaultLoad.trim() === "") return null;
   return `${exercise.defaultLoad} ${exercise.unit}`;
+}
+
+function sourceRepsFromWorkout(defaults: { reps?: number; prescriptionNote?: string }): number | null {
+  if (defaults.reps === undefined) return null;
+  return defaults.reps;
+}
+
+function suggestedRepsFromDraft(exercise: DraftExercise): number | null {
+  if (exercise.prescriptionMode !== "REPS") return null;
+  const reps = Number(exercise.defaultReps);
+  if (!Number.isInteger(reps) || reps < 1) return null;
+  return reps;
 }
 
 export function buildRepeatWeekPreview(
@@ -80,6 +94,8 @@ export function buildRepeatWeekPreview(
           name: exercise.exercise.name,
           sourceSets,
           suggestedSets: Number(exercise.setCount),
+          sourceReps: source ? sourceRepsFromWorkout(source.plan.defaults) : null,
+          suggestedReps: suggestedRepsFromDraft(exercise),
           suggestedLoad: formatSuggestedLoad(exercise),
         };
       }),
@@ -126,6 +142,7 @@ export function buildRepeatCreateExercises(exercises: DraftExercise[]) {
     name: item.exercise.name,
     loadIncrement: item.loadIncrement,
     setIncrement: item.setIncrement,
+    repsIncrement: item.repsIncrement,
     ...(item.coachCue.trim() === "" ? {} : { coachCue: item.coachCue.trim() }),
     plan: {
       setCount: Number(item.setCount),

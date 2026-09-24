@@ -66,7 +66,7 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 | `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
 | `exercises` | `id`, `name`, `owner_coach_id`, optional `description`, `youtube_url`, `image_object_key` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. SYSTEM `name` is English identity, not a localized label. Media columns are nullable catalog attributes, not part of identity. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
-| `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, optional `coach_cue`, `load_increment`, `set_increment`, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults, coach-authored weekly load/set bumps for next copy/build/repeat, and workout-context Coach guidance for one template exercise. |
+| `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, optional `coach_cue`, `load_increment`, `set_increment`, `reps_increment`, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults, coach-authored weekly load/set/reps bumps for next copy/build/repeat, and workout-context Coach guidance for one template exercise. |
 | `workout_exercise_set_overrides` | `workout_exercise_id`, `planned_position`, nullable override values | WorkoutExercise 1:N | Sparse, property-specific explicit values; absent property means inherit. |
 | `scheduled_workouts` | `workout_id`, `coach_id`, `athlete_id`, `scheduled_date` | Workout 1:N; Athlete 1:N | One concrete workout occurrence scheduled to one athlete on one date. |
 | `scheduled_workout_exercises` | `scheduled_workout_id`, `exercise_id`, `exercise_name`, planned load unit, optional `coach_cue`, `position` | ScheduledWorkout 1:N | Frozen exercise identity/name/unit/cue snapshot parent. |
@@ -141,6 +141,7 @@ workout_exercises(
   target_rpe numeric null,
   load_increment numeric not null,
   set_increment integer not null,
+  reps_increment integer not null,
   position integer not null,
   unique (workout_id, position),
   check (target_reps is not null or target_prescription_note is not null)

@@ -714,6 +714,7 @@ type createWorkoutExerciseRequest struct {
 	Name          string                   `json:"name"`
 	LoadIncrement *float64                 `json:"loadIncrement"`
 	SetIncrement  *int                     `json:"setIncrement"`
+	RepsIncrement *int                     `json:"repsIncrement"`
 	Plan          createWorkoutPlanRequest `json:"plan"`
 	CoachCue      *string                  `json:"coachCue"`
 }
@@ -787,6 +788,7 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 				Name:          ex.Name,
 				LoadIncrement: ex.LoadIncrement,
 				SetIncrement:  ex.SetIncrement,
+				RepsIncrement: ex.RepsIncrement,
 				CoachCue:      ex.CoachCue,
 				Plan: prescription.Plan{
 					SetCount:  ex.Plan.SetCount,

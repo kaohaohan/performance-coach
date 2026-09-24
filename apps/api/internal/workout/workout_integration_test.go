@@ -234,6 +234,37 @@ func TestCreatePersistsSetIncrementAndRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestCreatePersistsRepsIncrementAndRejectsInvalid(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coach := user(t, "COACH")
+	reps := 8
+	one := 1
+	two := 2
+	created, err := workout.Create(ctx, pool, coach, workout.CreateInput{Name: prefix + " reps increment", Exercises: []workout.CreateExerciseInput{
+		{Name: prefix + " squat reps bump", RepsIncrement: &one, Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Exercises[0].RepsIncrement != 1 {
+		t.Fatalf("repsIncrement = %d", created.Exercises[0].RepsIncrement)
+	}
+	listed, err := workout.ListForCoach(ctx, pool, coach)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findWorkout(t, listed, created.ID)
+	if got.Exercises[0].RepsIncrement != 1 {
+		t.Fatalf("listed repsIncrement = %d", got.Exercises[0].RepsIncrement)
+	}
+	if _, err := workout.Create(ctx, pool, coach, workout.CreateInput{Name: prefix + " bad reps increment", Exercises: []workout.CreateExerciseInput{
+		{Name: prefix + " bad squat reps", RepsIncrement: &two, Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps}}},
+	}}); !isValidation(err) {
+		t.Fatalf("invalid repsIncrement = %v", err)
+	}
+}
+
 func TestCreateAuthorizationAndValidation(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()

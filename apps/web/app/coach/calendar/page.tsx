@@ -346,6 +346,7 @@ function buildExercisesPayload(items: DraftExercise[]) {
     name: item.exercise.name,
     loadIncrement: item.loadIncrement,
     setIncrement: item.setIncrement,
+    repsIncrement: item.repsIncrement,
     ...(item.coachCue.trim() === "" ? {} : { coachCue: item.coachCue.trim() }),
     plan: {
       setCount: Number(item.setCount),
@@ -412,6 +413,7 @@ function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise
     unit: base?.unit ?? "kg",
     loadIncrement: defaultLoadIncrement(base?.unit === "lb" ? "lb" : "kg"),
     setIncrement: 0,
+    repsIncrement: 0,
     defaultRpe: base?.rpe !== undefined && base?.rpe !== null ? String(base.rpe) : "",
     coachCue: ex.coachCue ?? "",
     overrides,
@@ -1202,6 +1204,7 @@ export default function CoachCalendarPage() {
       unit: "kg",
       loadIncrement: defaultLoadIncrement("kg"),
       setIncrement: 0,
+      repsIncrement: 0,
       defaultRpe: "",
       coachCue: "",
       overrides: [],
@@ -2655,6 +2658,12 @@ export default function CoachCalendarPage() {
                   {item.exercises.map((exercise) => (
                     <li key={`${item.sourceAssignmentId}-${exercise.name}`}>
                       {t("calendar.repeatWeek.setsPreview", { name: exercise.name, sourceSets: exercise.sourceSets, suggestedSets: exercise.suggestedSets })}
+                      {exercise.sourceReps !== null && exercise.suggestedReps !== null && (
+                        <>
+                          {" · "}
+                          {t("calendar.repeatWeek.repsPreview", { sourceReps: exercise.sourceReps, suggestedReps: exercise.suggestedReps })}
+                        </>
+                      )}
                       {" · "}
                       {exercise.suggestedLoad ?? t("calendar.repeatWeek.noLoad")}
                     </li>
@@ -2807,6 +2816,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
     <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.unit")}</span><select value={item.unit} onChange={(event) => { const unit = event.target.value as PlannedUnit; onChange({ unit, loadIncrement: normalizeLoadIncrement(unit, item.loadIncrement) }); }} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.loadIncrement")}</span><select value={item.loadIncrement} onChange={(event) => onChange({ loadIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100">{allowedLoadIncrements(item.unit).map((option) => <option key={option} value={option}>{option === 0 ? t("calendar.optional") : `+${option} ${item.unit}`}</option>)}</select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.loadIncrementHint")}</p></label>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.setIncrement")}</span><select value={item.setIncrement} onChange={(event) => onChange({ setIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value={0}>{t("calendar.optional")}</option><option value={1}>+1 {t("calendar.field.sets").toLowerCase()}</option></select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.setIncrementHint")}</p></label>
+    <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.repsIncrement")}</span><select value={item.repsIncrement} onChange={(event) => onChange({ repsIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value={0}>{t("calendar.optional")}</option><option value={1}>+1 {t("calendar.field.reps").toLowerCase()}</option></select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.repsIncrementHint")}</p></label>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.coachCue")}</span><textarea value={item.coachCue} maxLength={500} rows={2} onChange={(event) => onChange({ coachCue: event.target.value })} disabled={disabled} placeholder={t("calendar.field.coachCuePlaceholder")} className="min-h-20 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 py-2 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100 placeholder:text-slate-400" /></label>
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{t("calendar.plannedSets")}</p>
       {setCount > 0 && <div className="mt-3 grid gap-2">{Array.from({ length: setCount }, (_, offset) => offset + 1).map((position) => {

@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyLoadIncrementPrefill, applyProgressionPrefill, applySetIncrementPrefill, defaultLoadIncrement, suggestBumpedLoad, suggestBumpedSetCount } from "./load-increment.ts";
+import {
+  applyLoadIncrementPrefill,
+  applyProgressionPrefill,
+  applyRepsIncrementPrefill,
+  applySetIncrementPrefill,
+  defaultLoadIncrement,
+  suggestBumpedLoad,
+  suggestBumpedReps,
+  suggestBumpedSetCount,
+} from "./load-increment.ts";
 
 test("defaultLoadIncrement follows unit", () => {
   assert.equal(defaultLoadIncrement("kg"), 2.5);
@@ -21,6 +30,9 @@ test("applyLoadIncrementPrefill uses history before template", () => {
     loadIncrement: 2.5,
     setCount: "3",
     setIncrement: 0,
+    repsIncrement: 0,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
     overrides: [{ position: 3, load: "90" }],
   }];
   const got = applyLoadIncrementPrefill(exercises, { "ex-1": 100 });
@@ -36,6 +48,9 @@ test("applyLoadIncrementPrefill falls back to template without history", () => {
     loadIncrement: 5,
     setCount: "3",
     setIncrement: 0,
+    repsIncrement: 0,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
     overrides: [],
   }];
   const got = applyLoadIncrementPrefill(exercises, { "ex-1": null });
@@ -50,6 +65,9 @@ test("applyLoadIncrementPrefill leaves exercises unchanged for zero increment", 
     loadIncrement: 0,
     setCount: "3",
     setIncrement: 0,
+    repsIncrement: 0,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
     overrides: [],
   }];
   const got = applyLoadIncrementPrefill(exercises, { "ex-1": 100 });
@@ -66,7 +84,54 @@ test("applySetIncrementPrefill leaves zero increment unchanged", () => {
   assert.deepEqual(applySetIncrementPrefill(exercises), exercises);
 });
 
-test("applyProgressionPrefill applies load and set bumps", () => {
+test("applyRepsIncrementPrefill adds one rep when enabled", () => {
+  const exercises = [{
+    repsIncrement: 1,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
+    overrides: [],
+  }];
+  assert.deepEqual(applyRepsIncrementPrefill(exercises), [{
+    repsIncrement: 1,
+    prescriptionMode: "REPS",
+    defaultReps: "9",
+    overrides: [],
+  }]);
+});
+
+test("applyRepsIncrementPrefill leaves zero increment unchanged", () => {
+  const exercises = [{
+    repsIncrement: 0,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
+    overrides: [],
+  }];
+  assert.deepEqual(applyRepsIncrementPrefill(exercises), exercises);
+});
+
+test("applyRepsIncrementPrefill no-ops for TEXT prescription", () => {
+  const exercises = [{
+    repsIncrement: 1,
+    prescriptionMode: "TEXT" as const,
+    defaultReps: "",
+    overrides: [],
+  }];
+  assert.deepEqual(applyRepsIncrementPrefill(exercises), exercises);
+});
+
+test("applyRepsIncrementPrefill bumps override reps", () => {
+  const exercises = [{
+    repsIncrement: 1,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
+    overrides: [{ position: 3, reps: "6" }],
+  }];
+  const got = applyRepsIncrementPrefill(exercises);
+  assert.equal(got[0].defaultReps, "9");
+  assert.equal(got[0].overrides[0].reps, "7");
+});
+
+test("applyProgressionPrefill applies load, reps, and set bumps", () => {
   const exercises = [{
     exercise: { id: "ex-1" },
     defaultLoad: "80",
@@ -74,14 +139,23 @@ test("applyProgressionPrefill applies load and set bumps", () => {
     loadIncrement: 2.5,
     setCount: "3",
     setIncrement: 1,
+    repsIncrement: 1,
+    prescriptionMode: "REPS" as const,
+    defaultReps: "8",
     overrides: [],
   }];
   const got = applyProgressionPrefill(exercises, { "ex-1": 100 });
   assert.equal(got[0].defaultLoad, "102.5");
+  assert.equal(got[0].defaultReps, "9");
   assert.equal(got[0].setCount, "4");
 });
 
 test("suggestBumpedSetCount", () => {
   assert.equal(suggestBumpedSetCount(3, 1), 4);
   assert.equal(suggestBumpedSetCount(3, 0), 3);
+});
+
+test("suggestBumpedReps", () => {
+  assert.equal(suggestBumpedReps(8, 1), 9);
+  assert.equal(suggestBumpedReps(8, 0), 8);
 });

@@ -27,6 +27,11 @@ export function suggestBumpedSetCount(sourceSets: number, setIncrement: number):
   return sourceSets + setIncrement;
 }
 
+export function suggestBumpedReps(sourceReps: number, repsIncrement: number): number {
+  if (!Number.isInteger(sourceReps) || sourceReps < 1 || repsIncrement === 0) return sourceReps;
+  return sourceReps + repsIncrement;
+}
+
 export type DraftExerciseProgressionPrefill = {
   exercise: { id: string };
   defaultLoad: string;
@@ -34,7 +39,10 @@ export type DraftExerciseProgressionPrefill = {
   loadIncrement: number;
   setCount: string;
   setIncrement: number;
-  overrides: Array<{ position: number; load?: string }>;
+  repsIncrement: number;
+  prescriptionMode: "REPS" | "TEXT";
+  defaultReps: string;
+  overrides: Array<{ position: number; load?: string; reps?: string }>;
 };
 
 export function applyLoadIncrementPrefill<T extends DraftExerciseProgressionPrefill>(
@@ -62,6 +70,25 @@ export function applyLoadIncrementPrefill<T extends DraftExerciseProgressionPref
   });
 }
 
+export function applyRepsIncrementPrefill<T extends Pick<DraftExerciseProgressionPrefill, "repsIncrement" | "prescriptionMode" | "defaultReps" | "overrides">>(
+  exercises: T[],
+): T[] {
+  return exercises.map((item) => {
+    if (item.repsIncrement !== 1 || item.prescriptionMode !== "REPS") return item;
+    const defaultReps = Number(item.defaultReps);
+    const bumpedDefault = Number.isInteger(defaultReps) && defaultReps >= 1
+      ? String(suggestBumpedReps(defaultReps, item.repsIncrement))
+      : item.defaultReps;
+    const overrides = item.overrides.map((override) => {
+      if (override.reps === undefined) return override;
+      const reps = Number(override.reps);
+      if (!Number.isInteger(reps) || reps < 1) return override;
+      return { ...override, reps: String(suggestBumpedReps(reps, item.repsIncrement)) };
+    });
+    return { ...item, defaultReps: bumpedDefault, overrides };
+  });
+}
+
 export function applySetIncrementPrefill<T extends Pick<DraftExerciseProgressionPrefill, "setCount" | "setIncrement">>(
   exercises: T[],
 ): T[] {
@@ -77,7 +104,7 @@ export function applyProgressionPrefill<T extends DraftExerciseProgressionPrefil
   exercises: T[],
   lastCompleted: Record<string, number | null>,
 ): T[] {
-  return applySetIncrementPrefill(applyLoadIncrementPrefill(exercises, lastCompleted));
+  return applySetIncrementPrefill(applyRepsIncrementPrefill(applyLoadIncrementPrefill(exercises, lastCompleted)));
 }
 
 export function buildLastCompletedLoadsQuery(exercises: Pick<DraftExerciseProgressionPrefill, "exercise" | "unit">[]): { exerciseIds: string; units: string } | null {

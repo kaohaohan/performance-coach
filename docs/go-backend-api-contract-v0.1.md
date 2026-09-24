@@ -411,6 +411,7 @@ Request：
       "name": "Back Squat",
       "loadIncrement": 2.5,
       "setIncrement": 1,
+      "repsIncrement": 1,
       "plan": {
         "setCount": 5,
         "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
@@ -445,6 +446,7 @@ Request：
 - override 欄位省略或為 null 都代表 inheritance/clear-override；null **不**代表 explicit no-target。Response 省略 inherited properties，空 override row 必須移除
 - `loadIncrement` 選填，每個 WorkoutExercise 一個值；省略時依 `plan.defaults.unit` 預設 `2.5`（`kg`）或 `5`（`lb`），無 unit 時預設 `2.5`。允許值：`kg` → `0`、`2.5`、`5`、`10`；`lb` → `0`、`5`、`10`。僅影響 Coach 下次 copy/build/repeat 時的建議負重；已排程 snapshot 不帶此欄位、也不會被回溯修改
 - `setIncrement` 選填，每個 WorkoutExercise 一個值；省略時預設 `0`。允許值：`0` 或 `1`。僅影響 Coach 下次 copy/build/repeat 時的建議組數（`setCount + setIncrement`；新增位置繼承 uniform defaults）；已排程 snapshot 不帶此欄位、也不會被回溯修改
+- `repsIncrement` 選填，每個 WorkoutExercise 一個值；省略時預設 `0`。允許值：`0` 或 `1`。僅影響 Coach 下次 copy/build/repeat 時的建議次數（REPS 模式下 `defaultReps + repsIncrement` 與 explicit `overrides[].reps`；TEXT 模式 no-op）；與 `setIncrement` 獨立；已排程 snapshot 不帶此欄位、也不會被回溯修改
 
 Service 於單一 transaction 內：find-or-create exercises → 建 workouts → 依陣列順序建 workout_exercises（`position` 由 server 給定）。
 
@@ -461,6 +463,7 @@ Response `201`：
       "name": "Back Squat",
       "loadIncrement": 2.5,
       "setIncrement": 1,
+      "repsIncrement": 1,
       "plan": {
         "setCount": 5,
         "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
