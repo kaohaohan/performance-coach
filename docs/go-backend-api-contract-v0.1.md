@@ -1195,6 +1195,7 @@ Response `200`：
 - `assignments`（完成率、計畫組數 vs 完成組數）**只計 caller 自己排的 ScheduledWorkout**，`scope` 固定 `"OWN"`，不揭露其他 Coach 的處方或排程。
 - 完成率 = COMPLETED session ÷ caller 排的、日期 ≤ 今天且在窗口內的 ScheduledWorkout；未開始與進行中視為未完成；`scheduled = 0` 時 `completionRate: null`。計畫組數取凍結的 planned sets，完成組數取 `kind: PLANNED` 的 SetLog；EXTRA 另列 `extraSets`，不計入完成。
 - 每個動作每個單位一列（兩種單位 = 兩列，不換算）；`trend` 每週一點，無資料週為 `estimated1rm: null`（不插值）；`estimated1rm` 缺 RIR 時退而用頂組重量；`recentEvents` 為近 28 天事件，新到舊，最多 5 筆。
+- **V0.13.1 additive — `recentEventTotals`（尚未實作）。** 頂層新增 `"recentEventTotals": { "windowDays": 28, "loadPr": 3, "repPr": 9, "total": 12 }`：近 28 天、窗口內**所有**動作（各單位合計，不換算）的 `LOAD_PR` 與 `REP_PR` 事件總數，由後端以同一套 `internal/progress` 計算，**不受每個動作 `recentEvents` 最多 5 筆的上限影響**。`total = loadPr + repPr`。UI 頂部的「近 28 天 PR」讀此欄位，不再由前端加總 `recentEvents`。
 - 不回傳任何 id（session / SetLog / 其他 Coach 的課表）、課表名稱，也**不回傳任何 grade、score、狀態標籤（Progressing / Stable / Needs review）或建議**。
 
 ---

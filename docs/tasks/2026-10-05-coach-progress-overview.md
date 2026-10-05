@@ -81,6 +81,17 @@
 | 3. Web | Done | 2026-10-05. Overview section replaces the plain exercise list on `/coach/clients/[athleteId]` (strip, rows, inline SVG sparkline, chips, en + zh-TW); helpers in `lib/progress-overview.ts` with unit tests. The now-unused `distinctExercises` helper and `progress.clients.*` strings were removed. The "PRs · last 28 days" number is counted client-side from `recentEvents` (max 5 per row), so a very busy exercise can undercount; a server-side count would need a contract field. Checked in headless Chromium against the local API and Auth Emulator (en and zh-TW). |
 | 4. Staging deploy + smoke | Not Started | Production excluded until explicitly approved. |
 
+## 3b. Follow-up: PR total (approved 2026-10-05)
+
+- Problem: the strip's "PRs in the last 28 days" was summed from per-exercise `recentEvents`, which is capped at 5 per exercise, so heavily trained exercises undercount.
+- Change: add `recentEventTotals { windowDays, loadPr, repPr, total }` (contract §3.11, V0.13.1) computed server-side over all exercises with no cap; the web strip reads `total`. Visual design unchanged. No schema change, no migration.
+- Sub-tasks: (a) backend field + tests (an exercise with more than 5 PRs in the window must count all of them; both units summed; PRs older than 28 days excluded; null/empty window gives zeros); (b) web strip reads the field and the client-side summation is removed, with helper tests updated.
+
+| Follow-up sub-task | Status | Notes |
+| --- | --- | --- |
+| 3b-a. Backend `recentEventTotals` | Not Started | |
+| 3b-b. Web strip uses `total` | Not Started | |
+
 ## 5. Outcome (filled at completion)
 
 - Final status:
