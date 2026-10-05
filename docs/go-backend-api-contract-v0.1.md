@@ -10,7 +10,7 @@ Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
 
-> V0.12 變更（Training History & Exercise Progress，見 `docs/tasks/2026-10-04-training-history.md`）：**已核准、尚未實作。** `GET /sessions/{id}` 每個 exercise 新增 additive `history`（LAST / PR baseline）；新增唯讀 `GET /training-log`（Coach 或 Athlete）回傳實際訓練、server 計算的 progress events 與單一動作的 per-exposure metrics。Coach 讀取範圍沿用 `GET /sessions/{id}` 的 **historical access**，**不限於自己排的課**（跨教練可見）；他教練的 session 一律遮蔽 id、課表名稱、cue 與處方。不打分數、不回傳任何 grade 或 status 判斷。
+> V0.12 變更（Training History & Exercise Progress，見 `docs/tasks/2026-10-04-training-history.md`）：**API 端 `history` 與 `GET /training-log`（含 events、exposures）已實作**（migration `0012` 僅新增 index）。`GET /sessions/{id}` 每個 exercise 新增 additive `history`（LAST / PR baseline）；新增唯讀 `GET /training-log`（Coach 或 Athlete）回傳實際訓練、server 計算的 progress events 與單一動作的 per-exposure metrics。Coach 讀取範圍沿用 `GET /sessions/{id}` 的 **historical access**，**不限於自己排的課**（跨教練可見）；他教練的 session 一律遮蔽 id、課表名稱、cue 與處方。不打分數、不回傳任何 grade 或 status 判斷。
 
 > V0.11 變更（RPE → RIR，見 `docs/tasks/2026-10-04-rpe-to-rir.md`）：所有強度欄位由 RPE 改為 **RIR**（reps in reserve），範圍 0–9、可為小數。JSON 欄位 `rpe` → `rir`（`plan.defaults`、`overrides[]`、`plan.sets[]`、`setLogs[]`、`POST /sessions/{id}/set-logs` 與 `PATCH /set-logs/{id}` body）。既有資料以 `rir = 10 − rpe` 轉換（migration `0011_rpe_to_rir`）。過渡期內，任何寫入 request 若仍帶 `rpe` 鍵，回 `400 INVALID_ARGUMENT`（`rpe is no longer accepted; use rir`），不得靜默忽略；此 guard 於確認無 client 送 `rpe` 後移除。route、status code、授權不變。
 
@@ -1115,7 +1115,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 
 ---
 
-## 3.10 Training Log & Exercise Progress（V0.12 — approved, not yet implemented）
+## 3.10 Training Log & Exercise Progress（V0.12 — implemented）
 
 ### GET /training-log?from=&to=&athleteId=&exerciseId=&status= — Coach or Athlete
 
@@ -1162,7 +1162,7 @@ Response `200`：
 }
 ```
 
-`exposures` 只在帶 `exerciseId` 時出現，依單位分組、oldest first，只含 COMPLETED。`events` 只對 COMPLETED session 計算；ACTIVE session 的 `events` 為 `[]`。
+`exposures` 只在帶 `exerciseId` **且回應只涵蓋單一 athlete**（Athlete 本人，或 Coach 帶 `athleteId`）時出現，依單位（`kg` / `lb`）分組、oldest first，只含 COMPLETED；Coach 帶 `exerciseId` 但省略 `athleteId` 時不回 `exposures`（跨 athlete 的 series 無意義）；自體重（無 load）的 exposure 不列入 `exposures`，其 sets 與 `events` 仍在 `sessions` 內。Events 與 exposures 比較的是 `to` 以前的**所有**更早 COMPLETED 紀錄（含 `from` 之前），不只範圍內。`events` 只對 COMPLETED session 計算；ACTIVE session 的 `events` 為 `[]`。
 
 ### Progress events（comparison engine，server 端唯一實作）
 
@@ -1211,7 +1211,7 @@ Response `200`：
 | `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
-| `GET /training-log` | ❌ 401 | ❌ 401 | ✅ **historical access**（不限排課 Coach）；指定無權 athlete ❌ 404 | ✅ 僅自己（不限 Coach）；指定他人 ❌ 404 | V0.12 尚未實作；`OTHER_COACH` 遮蔽 id/課表名/cue/plan；不回 SetLog id；range ≤ 184 天，見 §3.10 |
+| `GET /training-log` | ❌ 401 | ❌ 401 | ✅ **historical access**（不限排課 Coach）；指定無權 athlete ❌ 404 | ✅ 僅自己（不限 Coach）；指定他人 ❌ 404 | `OTHER_COACH` 遮蔽 id/課表名/cue/plan；不回 SetLog id；range ≤ 184 天，見 §3.10 |
 | `GET /sessions/{id}/exercise-options` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE session；SYSTEM + assignment Coach private exercises |
 | `POST /sessions/{id}/exercises` | ❌ 401 | ❌ 401 | ✅ add / remove / replace active exercises | ✅ add only | Athlete request carrying `replacesScheduledWorkoutExerciseId` → `409 CONFLICT` |
 | `DELETE /sessions/{id}/exercises/{exerciseId}` | ❌ 401 | ❌ 401 | ✅ any active exercise | ✅ only own `ATHLETE_ADDED` | soft remove; no plan or SetLog deletion |

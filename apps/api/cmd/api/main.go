@@ -37,6 +37,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/traininglog"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workoutsession"
 )
@@ -155,6 +156,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
+	mux.Handle("GET /api/v1/training-log", authMiddleware(handleTrainingLog(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}/exercise-options", authMiddleware(handleListSessionExerciseOptions(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/exercises", authMiddleware(handleAdjustSessionExercise(pool)))
 	mux.Handle("DELETE /api/v1/sessions/{sessionId}/exercises/{exerciseId}", authMiddleware(handleRemoveSessionExercise(pool)))
@@ -1317,6 +1319,43 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(detail)
+	}
+}
+
+// handleTrainingLog returns actual training with engine-computed events
+// (docs/go-backend-api-contract-v0.1.md §3.10). Coach (historical access) or
+// Athlete (self); an athleteId the caller cannot read is 404, not 403.
+func handleTrainingLog(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		qs := r.URL.Query()
+		resp, err := traininglog.List(r.Context(), pool, user, traininglog.Query{
+			From: qs.Get("from"), To: qs.Get("to"), AthleteID: qs.Get("athleteId"),
+			ExerciseID: qs.Get("exerciseId"), Status: qs.Get("status"),
+		})
+		if err != nil {
+			var validationErr *traininglog.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, traininglog.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
+			case errors.Is(err, traininglog.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller role not allowed")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
