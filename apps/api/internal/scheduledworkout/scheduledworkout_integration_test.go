@@ -58,13 +58,13 @@ func TestCreateSnapshotsResolvedPlansForEachAthlete(t *testing.T) {
 
 	reps10, reps8 := 10, 8
 	load80, load90 := 80.0, 90.0
-	rpe8, rpe9 := 8.0, 9.0
+	rir8, rir9 := 8.0, 9.0
 	kg := "kg"
 	w := createWorkout(t, coach, []workout.CreateExerciseInput{
-		{Name: prefix + " complex", Plan: prescription.Plan{SetCount: 5, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RPE: &rpe8}, Overrides: []prescription.SetOverride{
-			{Position: 5, Load: &load90}, {Position: 3, Reps: &reps8}, {Position: 4, RPE: &rpe9},
+		{Name: prefix + " complex", Plan: prescription.Plan{SetCount: 5, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RIR: &rir8}, Overrides: []prescription.SetOverride{
+			{Position: 5, Load: &load90}, {Position: 3, Reps: &reps8}, {Position: 4, RIR: &rir9},
 		}}},
-		{Name: prefix + " uniform", Plan: prescription.Plan{SetCount: 5, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RPE: &rpe8}}},
+		{Name: prefix + " uniform", Plan: prescription.Plan{SetCount: 5, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RIR: &rir8}}},
 	})
 
 	created, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
@@ -81,18 +81,18 @@ func TestCreateSnapshotsResolvedPlansForEachAthlete(t *testing.T) {
 			t.Fatalf("exercise response ordering = %#v", item.Exercises)
 		}
 		assertResolvedSets(t, item.Exercises[0].Plan.Sets, []expectedSet{
-			{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 3, reps: intPtr(8), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 4, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(9)},
-			{position: 5, reps: intPtr(10), load: floatPtr(90), unit: stringPtr("kg"), rpe: floatPtr(8)},
+			{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 3, reps: intPtr(8), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 4, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(9)},
+			{position: 5, reps: intPtr(10), load: floatPtr(90), unit: stringPtr("kg"), rir: floatPtr(8)},
 		})
 		assertResolvedSets(t, item.Exercises[1].Plan.Sets, []expectedSet{
-			{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 3, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 4, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-			{position: 5, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
+			{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 3, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 4, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+			{position: 5, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
 		})
 	}
 
@@ -161,11 +161,11 @@ func TestListForAthleteReadsCanonicalFrozenPlannedSets(t *testing.T) {
 
 	reps10, reps8 := 10, 8
 	load80, load85 := 80.0, 85.0
-	rpe8, rpe9 := 8.0, 9.0
+	rir8, rir9 := 8.0, 9.0
 	kg := "kg"
 	seconds, repRange := "30 sec", "10–12"
 	w := createWorkout(t, coach, []workout.CreateExerciseInput{
-		{Name: prefix + " today varied", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RPE: &rpe8}, Overrides: []prescription.SetOverride{{Position: 3, Reps: &reps8, Load: &load85, RPE: &rpe9}}}},
+		{Name: prefix + " today varied", Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RIR: &rir8}, Overrides: []prescription.SetOverride{{Position: 3, Reps: &reps8, Load: &load85, RIR: &rir9}}}},
 		{Name: prefix + " today text", Plan: prescription.Plan{SetCount: 2, Defaults: prescription.Defaults{PrescriptionNote: &seconds}, Overrides: []prescription.SetOverride{{Position: 2, PrescriptionNote: &repRange}}}},
 	})
 	created, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{
@@ -178,10 +178,10 @@ func TestListForAthleteReadsCanonicalFrozenPlannedSets(t *testing.T) {
 
 	// Deliberately poison compatibility-only scalar columns and the live
 	// template. Today must still return the immutable planned-set rows above.
-	if _, err := pool.Exec(ctx, `UPDATE scheduled_workout_exercises SET target_sets = 1, target_reps = 1, target_prescription_note = NULL, target_rpe = 1 WHERE scheduled_workout_id = $1`, athleteScheduled.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_workout_exercises SET target_sets = 1, target_reps = 1, target_prescription_note = NULL, target_rir = 1 WHERE scheduled_workout_id = $1`, athleteScheduled.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE workout_exercises SET target_reps = 1, target_prescription_note = NULL, target_rpe = 1 WHERE workout_id = $1`, w.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE workout_exercises SET target_reps = 1, target_prescription_note = NULL, target_rir = 1 WHERE workout_id = $1`, w.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,9 +201,9 @@ func TestListForAthleteReadsCanonicalFrozenPlannedSets(t *testing.T) {
 		t.Fatalf("today varied exercise identity = %#v", varied)
 	}
 	assertResolvedSets(t, varied.Plan.Sets, []expectedSet{
-		{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-		{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rpe: floatPtr(8)},
-		{position: 3, reps: intPtr(8), load: floatPtr(85), unit: stringPtr("kg"), rpe: floatPtr(9)},
+		{position: 1, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+		{position: 2, reps: intPtr(10), load: floatPtr(80), unit: stringPtr("kg"), rir: floatPtr(8)},
+		{position: 3, reps: intPtr(8), load: floatPtr(85), unit: stringPtr("kg"), rir: floatPtr(9)},
 	})
 	for i, planned := range varied.Plan.Sets {
 		if planned.ScheduledWorkoutPlannedSetID != athleteScheduled.Exercises[0].Plan.Sets[i].ScheduledWorkoutPlannedSetID {
@@ -346,9 +346,9 @@ func TestCreateRejectsInvalidStoredTemplateWithoutScheduling(t *testing.T) {
 	ctx := context.Background()
 	coach, athlete := user(t, "COACH"), user(t, "ATHLETE")
 	connect(t, coach, athlete)
-	reps, rpe := 5, 8.0
+	reps, rir := 5, 8.0
 	w := createWorkout(t, coach, []workout.CreateExerciseInput{{Name: prefix + " invalid", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}}}})
-	if _, err := pool.Exec(ctx, `INSERT INTO workout_exercise_set_overrides (id, workout_exercise_id, planned_position, rpe_override) VALUES ($1, $2, $3, $4)`, uuid.NewString(), w.Exercises[0].WorkoutExerciseID, 2, rpe); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO workout_exercise_set_overrides (id, workout_exercise_id, planned_position, rir_override) VALUES ($1, $2, $3, $4)`, uuid.NewString(), w.Exercises[0].WorkoutExerciseID, 2, rir); err != nil {
 		t.Fatal(err)
 	}
 	_, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: "2026-08-16"})
@@ -383,7 +383,7 @@ type expectedSet struct {
 	note     *string
 	load     *float64
 	unit     *string
-	rpe      *float64
+	rir      *float64
 }
 
 func assertResolvedSets(t *testing.T, got []scheduledworkout.PlannedSet, want []expectedSet) {
@@ -393,7 +393,7 @@ func assertResolvedSets(t *testing.T, got []scheduledworkout.PlannedSet, want []
 	}
 	for i, expected := range want {
 		actual := got[i]
-		if actual.ScheduledWorkoutPlannedSetID == "" || actual.Position != expected.position || !sameInt(actual.Reps, expected.reps) || !sameString(actual.PrescriptionNote, expected.note) || !sameFloat(actual.Load, expected.load) || !sameString(actual.Unit, expected.unit) || !sameFloat(actual.RPE, expected.rpe) {
+		if actual.ScheduledWorkoutPlannedSetID == "" || actual.Position != expected.position || !sameInt(actual.Reps, expected.reps) || !sameString(actual.PrescriptionNote, expected.note) || !sameFloat(actual.Load, expected.load) || !sameString(actual.Unit, expected.unit) || !sameFloat(actual.RIR, expected.rir) {
 			t.Fatalf("planned set %d = %#v, want %#v", i, actual, expected)
 		}
 		if (actual.Reps == nil) == (actual.PrescriptionNote == nil) {
@@ -404,7 +404,7 @@ func assertResolvedSets(t *testing.T, got []scheduledworkout.PlannedSet, want []
 
 func assertStoredSets(t *testing.T, scheduledWorkoutExerciseID string, want []expectedSet) {
 	t.Helper()
-	rows, err := pool.Query(context.Background(), `SELECT planned_position, target_reps, target_prescription_note, target_load, target_rpe FROM scheduled_workout_planned_sets WHERE scheduled_workout_exercise_id = $1 ORDER BY planned_position`, scheduledWorkoutExerciseID)
+	rows, err := pool.Query(context.Background(), `SELECT planned_position, target_reps, target_prescription_note, target_load, target_rir FROM scheduled_workout_planned_sets WHERE scheduled_workout_exercise_id = $1 ORDER BY planned_position`, scheduledWorkoutExerciseID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func assertStoredSets(t *testing.T, scheduledWorkoutExerciseID string, want []ex
 	got := make([]expectedSet, 0, len(want))
 	for rows.Next() {
 		var set expectedSet
-		if err := rows.Scan(&set.position, &set.reps, &set.note, &set.load, &set.rpe); err != nil {
+		if err := rows.Scan(&set.position, &set.reps, &set.note, &set.load, &set.rir); err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, set)
@@ -424,7 +424,7 @@ func assertStoredSets(t *testing.T, scheduledWorkoutExerciseID string, want []ex
 		t.Fatalf("stored set count = %d, want %d", len(got), len(want))
 	}
 	for i := range want {
-		if got[i].position != want[i].position || !sameInt(got[i].reps, want[i].reps) || !sameString(got[i].note, want[i].note) || !sameFloat(got[i].load, want[i].load) || !sameFloat(got[i].rpe, want[i].rpe) {
+		if got[i].position != want[i].position || !sameInt(got[i].reps, want[i].reps) || !sameString(got[i].note, want[i].note) || !sameFloat(got[i].load, want[i].load) || !sameFloat(got[i].rir, want[i].rir) {
 			t.Fatalf("stored set %d = %#v, want %#v", i, got[i], want[i])
 		}
 	}
@@ -442,17 +442,17 @@ func assertSnapshotRows(t *testing.T, scheduledWorkoutID, scheduledWorkoutExerci
 	assertCount(t, `SELECT count(*) FROM scheduled_workout_planned_sets WHERE scheduled_workout_exercise_id = $1`, scheduledWorkoutExerciseID, want)
 }
 
-func assertCompatibilityParent(t *testing.T, id string, sets, reps int, note *string, rpe float64, unit string) {
+func assertCompatibilityParent(t *testing.T, id string, sets, reps int, note *string, rir float64, unit string) {
 	t.Helper()
 	var actualSets int
 	var actualReps *int
 	var actualNote, actualUnit *string
-	var actualRPE *float64
-	if err := pool.QueryRow(context.Background(), `SELECT target_sets, target_reps, target_prescription_note, target_rpe, target_load_unit FROM scheduled_workout_exercises WHERE id = $1`, id).Scan(&actualSets, &actualReps, &actualNote, &actualRPE, &actualUnit); err != nil {
+	var actualRIR *float64
+	if err := pool.QueryRow(context.Background(), `SELECT target_sets, target_reps, target_prescription_note, target_rir, target_load_unit FROM scheduled_workout_exercises WHERE id = $1`, id).Scan(&actualSets, &actualReps, &actualNote, &actualRIR, &actualUnit); err != nil {
 		t.Fatal(err)
 	}
-	if actualSets != sets || !sameInt(actualReps, intPtr(reps)) || !sameString(actualNote, note) || !sameFloat(actualRPE, floatPtr(rpe)) || !sameString(actualUnit, stringPtr(unit)) {
-		t.Fatalf("compatibility parent = %d %#v %#v %#v %#v", actualSets, actualReps, actualNote, actualRPE, actualUnit)
+	if actualSets != sets || !sameInt(actualReps, intPtr(reps)) || !sameString(actualNote, note) || !sameFloat(actualRIR, floatPtr(rir)) || !sameString(actualUnit, stringPtr(unit)) {
+		t.Fatalf("compatibility parent = %d %#v %#v %#v %#v", actualSets, actualReps, actualNote, actualRIR, actualUnit)
 	}
 }
 

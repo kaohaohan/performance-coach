@@ -29,7 +29,7 @@ type Defaults struct {
 	PrescriptionNote *string
 	Load             *float64
 	Unit             *string
-	RPE              *float64
+	RIR              *float64
 }
 
 // SetOverride contains only explicit property values for one planned
@@ -39,7 +39,7 @@ type SetOverride struct {
 	Reps             *int
 	PrescriptionNote *string
 	Load             *float64
-	RPE              *float64
+	RIR              *float64
 }
 
 // ResolvedPlannedSet is one effective, ordered target after defaults and
@@ -50,7 +50,7 @@ type ResolvedPlannedSet struct {
 	PrescriptionNote *string
 	Load             *float64
 	Unit             *string
-	RPE              *float64
+	RIR              *float64
 }
 
 // ValidationError reports an authoring-plan domain validation failure. It has
@@ -87,7 +87,7 @@ func Resolve(plan Plan) ([]ResolvedPlannedSet, error) {
 			Reps:             cloneInt(plan.Defaults.Reps),
 			PrescriptionNote: cloneString(plan.Defaults.PrescriptionNote),
 			Load:             cloneFloat64(plan.Defaults.Load),
-			RPE:              cloneFloat64(plan.Defaults.RPE),
+			RIR:              cloneFloat64(plan.Defaults.RIR),
 		}
 
 		if override, ok := overridesByPosition[position]; ok {
@@ -101,8 +101,8 @@ func Resolve(plan Plan) ([]ResolvedPlannedSet, error) {
 			if override.Load != nil {
 				set.Load = cloneFloat64(override.Load)
 			}
-			if override.RPE != nil {
-				set.RPE = cloneFloat64(override.RPE)
+			if override.RIR != nil {
+				set.RIR = cloneFloat64(override.RIR)
 			}
 		}
 
@@ -128,8 +128,8 @@ func validateDefaults(defaults Defaults) error {
 	if defaults.Load != nil && !isNonNegative(*defaults.Load) {
 		return validationError("defaults.load must be at least 0")
 	}
-	if defaults.RPE != nil && !isRPE(*defaults.RPE) {
-		return validationError("defaults.rpe must be between 1 and 10")
+	if defaults.RIR != nil && !isRIR(*defaults.RIR) {
+		return validationError("defaults.rir must be between 0 and 9")
 	}
 	return nil
 }
@@ -148,7 +148,7 @@ func validateOverrides(plan Plan) (map[int]SetOverride, bool, error) {
 		if _, exists := overridesByPosition[override.Position]; exists {
 			return nil, false, validationError(fmt.Sprintf("override position %d is duplicated", override.Position))
 		}
-		if override.Reps == nil && override.PrescriptionNote == nil && override.Load == nil && override.RPE == nil {
+		if override.Reps == nil && override.PrescriptionNote == nil && override.Load == nil && override.RIR == nil {
 			return nil, false, validationError(fmt.Sprintf("override at position %d must specify at least one property", override.Position))
 		}
 		if override.Reps != nil && override.PrescriptionNote != nil {
@@ -166,8 +166,8 @@ func validateOverrides(plan Plan) (map[int]SetOverride, bool, error) {
 			}
 			hasAnyLoad = true
 		}
-		if override.RPE != nil && !isRPE(*override.RPE) {
-			return nil, false, validationError(fmt.Sprintf("override at position %d rpe must be between 1 and 10", override.Position))
+		if override.RIR != nil && !isRIR(*override.RIR) {
+			return nil, false, validationError(fmt.Sprintf("override at position %d rir must be between 0 and 9", override.Position))
 		}
 
 		overridesByPosition[override.Position] = override
@@ -193,8 +193,8 @@ func isNonNegative(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
 }
 
-func isRPE(value float64) bool {
-	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 1 && value <= 10
+func isRIR(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 9
 }
 
 func validationError(message string) error {

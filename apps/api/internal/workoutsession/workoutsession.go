@@ -282,7 +282,7 @@ type PlannedSet struct {
 	PrescriptionNote             *string  `json:"prescriptionNote,omitempty"`
 	Load                         *float64 `json:"load,omitempty"`
 	Unit                         *string  `json:"unit,omitempty"`
-	RPE                          *float64 `json:"rpe,omitempty"`
+	RIR                          *float64 `json:"rir,omitempty"`
 }
 
 // SetLog is one recorded set, scoped to a session and a
@@ -297,7 +297,7 @@ type SetLog struct {
 	Load                         *float64 `json:"load,omitempty"`
 	Unit                         *string  `json:"unit,omitempty"`
 	Reps                         int      `json:"reps"`
-	RPE                          *float64 `json:"rpe,omitempty"`
+	RIR                          *float64 `json:"rir,omitempty"`
 	LoggedByUserID               string   `json:"loggedByUserId"`
 }
 
@@ -584,16 +584,16 @@ func AdjustExercise(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 		origin = "ATHLETE_ADDED"
 	}
 	id := uuid.NewString()
-	if _, err := tx.Exec(ctx, `INSERT INTO scheduled_workout_exercises (id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, coach_cue, position, origin, added_by_user_id, replaces_scheduled_workout_exercise_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, id, h.scheduledWorkoutID, input.ExerciseID, exerciseName, input.Plan.Defaults.Unit, input.Plan.SetCount, input.Plan.Defaults.Reps, input.Plan.Defaults.PrescriptionNote, input.Plan.Defaults.RPE, input.CoachCue, position, origin, caller.ID, input.ReplacesScheduledWorkoutExerciseID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO scheduled_workout_exercises (id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rir, coach_cue, position, origin, added_by_user_id, replaces_scheduled_workout_exercise_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, id, h.scheduledWorkoutID, input.ExerciseID, exerciseName, input.Plan.Defaults.Unit, input.Plan.SetCount, input.Plan.Defaults.Reps, input.Plan.Defaults.PrescriptionNote, input.Plan.Defaults.RIR, input.CoachCue, position, origin, caller.ID, input.ReplacesScheduledWorkoutExerciseID); err != nil {
 		return Exercise{}, err
 	}
 	plan := make([]PlannedSet, 0, len(sets))
 	for _, set := range sets {
 		setID := uuid.NewString()
-		if _, err := tx.Exec(ctx, `INSERT INTO scheduled_workout_planned_sets (id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rpe) VALUES ($1,$2,$3,$4,$5,$6,$7)`, setID, id, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RPE); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO scheduled_workout_planned_sets (id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rir) VALUES ($1,$2,$3,$4,$5,$6,$7)`, setID, id, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RIR); err != nil {
 			return Exercise{}, err
 		}
-		plan = append(plan, PlannedSet{ScheduledWorkoutPlannedSetID: setID, Position: set.Position, Reps: set.Reps, PrescriptionNote: set.PrescriptionNote, Load: set.Load, Unit: set.Unit, RPE: set.RPE})
+		plan = append(plan, PlannedSet{ScheduledWorkoutPlannedSetID: setID, Position: set.Position, Reps: set.Reps, PrescriptionNote: set.PrescriptionNote, Load: set.Load, Unit: set.Unit, RIR: set.RIR})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Exercise{}, err
@@ -755,7 +755,7 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 		       e.youtube_url,
 		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
-		       p.target_rpe
+		       p.target_rir
 		FROM scheduled_workout_exercises swe
 		JOIN scheduled_workout_planned_sets p ON p.scheduled_workout_exercise_id = swe.id
 		LEFT JOIN exercises e ON e.id = swe.exercise_id
@@ -783,7 +783,7 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 			&swExerciseID, &exerciseID, &exerciseName, &coachCue, &origin,
 			&addedByUserID, &removedAt, &removedByUserID, &replacesID,
 			&youtubeURL,
-			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
+			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RIR,
 		); err != nil {
 			return nil, nil, fmt.Errorf("workoutsession: scan planned exercise row: %w", err)
 		}
@@ -827,7 +827,7 @@ func loadActualSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID, sched
 	const query = `
 		SELECT sl.scheduled_workout_exercise_id,
 		       sl.id, sl.scheduled_workout_planned_set_id, p.planned_position,
-		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rpe, sl.logged_by_user_id
+		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rir, sl.logged_by_user_id
 		FROM set_logs sl
 		JOIN scheduled_workout_exercises swe ON swe.id = sl.scheduled_workout_exercise_id
 		LEFT JOIN scheduled_workout_planned_sets p
@@ -850,7 +850,7 @@ func loadActualSetLogs(ctx context.Context, pool *pgxpool.Pool, sessionID, sched
 		if err := rows.Scan(
 			&swExerciseID,
 			&setLog.ID, &setLog.ScheduledWorkoutPlannedSetID, &setLog.PlannedPosition,
-			&setLog.SetNumber, &setLog.Load, &setLog.Unit, &setLog.Reps, &setLog.RPE, &setLog.LoggedByUserID,
+			&setLog.SetNumber, &setLog.Load, &setLog.Unit, &setLog.Reps, &setLog.RIR, &setLog.LoggedByUserID,
 		); err != nil {
 			return fmt.Errorf("workoutsession: scan actual set-log row: %w", err)
 		}
@@ -924,7 +924,7 @@ type CreateSetLogInput struct {
 	Load                         *float64
 	Unit                         *string
 	Reps                         *int
-	RPE                          *float64
+	RIR                          *float64
 }
 
 // UpdateSetLogInput preserves omitted-versus-null semantics for PATCH. A
@@ -936,12 +936,12 @@ type UpdateSetLogInput struct {
 	UnitPresent bool
 	Reps        *int
 	RepsPresent bool
-	RPE         *float64
-	RPEPresent  bool
+	RIR         *float64
+	RIRPresent  bool
 }
 
-func (in UpdateSetLogInput) validate(load *float64, unit *string, reps *int, rpe *float64) error {
-	if !in.LoadPresent && !in.UnitPresent && !in.RepsPresent && !in.RPEPresent {
+func (in UpdateSetLogInput) validate(load *float64, unit *string, reps *int, rir *float64) error {
+	if !in.LoadPresent && !in.UnitPresent && !in.RepsPresent && !in.RIRPresent {
 		return &ValidationError{Message: "at least one supported field is required"}
 	}
 	if in.RepsPresent && reps == nil {
@@ -965,8 +965,8 @@ func (in UpdateSetLogInput) validate(load *float64, unit *string, reps *int, rpe
 			return &ValidationError{Message: "unit must be 'kg' or 'lb'"}
 		}
 	}
-	if rpe != nil && (*rpe < 1 || *rpe > 10) {
-		return &ValidationError{Message: "rpe must be between 1 and 10"}
+	if rir != nil && (*rir < 0 || *rir > 9) {
+		return &ValidationError{Message: "rir must be between 0 and 9"}
 	}
 	return nil
 }
@@ -980,12 +980,12 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 
 	const lookup = `
 		SELECT sl.id, sl.session_id, sl.scheduled_workout_planned_set_id,
-		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rpe, sl.logged_by_user_id
+		       sl.set_number, sl.load, sl.unit, sl.reps, sl.rir, sl.logged_by_user_id
 		FROM set_logs sl WHERE sl.id = $1`
 	var s SetLog
 	var sessionID string
 	if err := pool.QueryRow(ctx, lookup, setLogID).Scan(&s.ID, &sessionID, &s.ScheduledWorkoutPlannedSetID,
-		&s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
+		&s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RIR, &s.LoggedByUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SetLog{}, ErrNotFound
 		}
@@ -1002,7 +1002,7 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 		return SetLog{}, ErrSessionNotActive
 	}
 
-	load, unit, reps, rpe := s.Load, s.Unit, &s.Reps, s.RPE
+	load, unit, reps, rir := s.Load, s.Unit, &s.Reps, s.RIR
 	if input.LoadPresent {
 		load = input.Load
 	}
@@ -1012,10 +1012,10 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 	if input.RepsPresent {
 		reps = input.Reps
 	}
-	if input.RPEPresent {
-		rpe = input.RPE
+	if input.RIRPresent {
+		rir = input.RIR
 	}
-	if err := input.validate(load, unit, reps, rpe); err != nil {
+	if err := input.validate(load, unit, reps, rir); err != nil {
 		return SetLog{}, err
 	}
 
@@ -1034,12 +1034,12 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 	if input.RepsPresent {
 		add("reps", input.Reps)
 	}
-	if input.RPEPresent {
-		add("rpe", input.RPE)
+	if input.RIRPresent {
+		add("rir", input.RIR)
 	}
 	query := fmt.Sprintf(`UPDATE set_logs SET %s WHERE id = $1
-		RETURNING id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id`, strings.Join(sets, ", "))
-	if err := pool.QueryRow(ctx, query, args...).Scan(&s.ID, &s.ScheduledWorkoutPlannedSetID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID); err != nil {
+		RETURNING id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rir, logged_by_user_id`, strings.Join(sets, ", "))
+	if err := pool.QueryRow(ctx, query, args...).Scan(&s.ID, &s.ScheduledWorkoutPlannedSetID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RIR, &s.LoggedByUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SetLog{}, ErrNotFound
 		}
@@ -1065,7 +1065,7 @@ func UpdateSetLog(ctx context.Context, pool *pgxpool.Pool, caller authn.User, se
 //   - reps: required, integer, >= 1
 //   - load: optional; if present, >= 0 and unit is required (kg or lb)
 //   - unit: must be nil exactly when load is nil
-//   - rpe: optional; if present, 1-10
+//   - rir: optional; if present, 0-9
 func (in CreateSetLogInput) validate() error {
 	if in.Kind != "PLANNED" && in.Kind != "EXTRA" {
 		return &ValidationError{Message: "kind must be 'PLANNED' or 'EXTRA'"}
@@ -1097,8 +1097,8 @@ func (in CreateSetLogInput) validate() error {
 			return &ValidationError{Message: "unit must be 'kg' or 'lb'"}
 		}
 	}
-	if in.RPE != nil && (*in.RPE < 1 || *in.RPE > 10) {
-		return &ValidationError{Message: "rpe must be between 1 and 10"}
+	if in.RIR != nil && (*in.RIR < 0 || *in.RIR > 9) {
+		return &ValidationError{Message: "rir must be between 0 and 9"}
 	}
 	return nil
 }
@@ -1113,7 +1113,7 @@ func (in CreateSetLogInput) validate() error {
 //  3. the session must be ACTIVE -> else ErrSessionNotActive
 //  4. input.ScheduledWorkoutExerciseID must be a well-formed UUID -> else
 //     *ValidationError
-//  5. field validation (reps/load/unit/rpe) -> else *ValidationError
+//  5. field validation (reps/load/unit/rir) -> else *ValidationError
 //  6. input.ScheduledWorkoutExerciseID must belong to this session's
 //     scheduled_workout -> else ErrExerciseNotInSession
 //  7. a PLANNED target must belong to that same snapshot exercise -> else
@@ -1255,9 +1255,9 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 		FROM set_logs
 		WHERE session_id = $1 AND scheduled_workout_exercise_id = $2`
 	const insert = `
-		INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id, created_at)
+		INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rir, logged_by_user_id, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-		RETURNING id, set_number, load, unit, reps, rpe, logged_by_user_id`
+		RETURNING id, set_number, load, unit, reps, rir, logged_by_user_id`
 
 	var lastErr error
 	for attempt := 1; attempt <= maxSetLogInsertAttempts; attempt++ {
@@ -1311,8 +1311,8 @@ func insertSetLogWithRetry(ctx context.Context, pool *pgxpool.Pool, caller authn
 			var s SetLog
 			err = tx.QueryRow(ctx, insert,
 				uuid.NewString(), sessionID, input.ScheduledWorkoutExerciseID, input.ScheduledWorkoutPlannedSetID, setNumber,
-				input.Load, input.Unit, *input.Reps, input.RPE, caller.ID,
-			).Scan(&s.ID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RPE, &s.LoggedByUserID)
+				input.Load, input.Unit, *input.Reps, input.RIR, caller.ID,
+			).Scan(&s.ID, &s.SetNumber, &s.Load, &s.Unit, &s.Reps, &s.RIR, &s.LoggedByUserID)
 			if err != nil {
 				return SetLog{}, err
 			}

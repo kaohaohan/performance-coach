@@ -53,11 +53,11 @@ func TestCreatePersistsAuthoringPlanAndListReconstructsIt(t *testing.T) {
 	}
 	reps10, reps8 := 10, 8
 	load80, load90 := 80.0, 90.0
-	rpe8, rpe9 := 8.0, 9.0
+	rir8, rir9 := 8.0, 9.0
 	kg := "kg"
 	created, err := workout.Create(ctx, pool, coach, workout.CreateInput{Name: "  " + prefix + " Lower  ", Exercises: []workout.CreateExerciseInput{
-		{Name: prefix + " Back Squat", Plan: prescription.Plan{SetCount: 5, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RPE: &rpe8}, Overrides: []prescription.SetOverride{
-			{Position: 5, Load: &load90, RPE: &rpe9}, {Position: 3, Reps: &reps8},
+		{Name: prefix + " Back Squat", Plan: prescription.Plan{SetCount: 5, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RIR: &rir8}, Overrides: []prescription.SetOverride{
+			{Position: 5, Load: &load90, RIR: &rir9}, {Position: 3, Reps: &reps8},
 		}}},
 		{Name: prefix + " Row", Plan: prescription.Plan{SetCount: 2, Defaults: prescription.Defaults{Reps: &reps10}}},
 	}})
@@ -75,14 +75,14 @@ func TestCreatePersistsAuthoringPlanAndListReconstructsIt(t *testing.T) {
 	var gotReps *int
 	var gotLoad *float64
 	var gotUnit *string
-	var gotRPE *float64
-	if err := pool.QueryRow(ctx, `SELECT target_sets, target_reps, target_load, target_load_unit, target_rpe FROM workout_exercises WHERE id = $1`, created.Exercises[0].WorkoutExerciseID).Scan(&sets, &gotReps, &gotLoad, &gotUnit, &gotRPE); err != nil {
+	var gotRIR *float64
+	if err := pool.QueryRow(ctx, `SELECT target_sets, target_reps, target_load, target_load_unit, target_rir FROM workout_exercises WHERE id = $1`, created.Exercises[0].WorkoutExerciseID).Scan(&sets, &gotReps, &gotLoad, &gotUnit, &gotRIR); err != nil {
 		t.Fatal(err)
 	}
-	if sets != 5 || *gotReps != 10 || *gotLoad != 80 || *gotUnit != "kg" || *gotRPE != 8 {
-		t.Fatalf("defaults persisted as %d %#v %#v %#v %#v", sets, gotReps, gotLoad, gotUnit, gotRPE)
+	if sets != 5 || *gotReps != 10 || *gotLoad != 80 || *gotUnit != "kg" || *gotRIR != 8 {
+		t.Fatalf("defaults persisted as %d %#v %#v %#v %#v", sets, gotReps, gotLoad, gotUnit, gotRIR)
 	}
-	rows, err := pool.Query(ctx, `SELECT planned_position, reps_override, prescription_note_override, load_override, rpe_override FROM workout_exercise_set_overrides WHERE workout_exercise_id = $1 ORDER BY planned_position`, created.Exercises[0].WorkoutExerciseID)
+	rows, err := pool.Query(ctx, `SELECT planned_position, reps_override, prescription_note_override, load_override, rir_override FROM workout_exercise_set_overrides WHERE workout_exercise_id = $1 ORDER BY planned_position`, created.Exercises[0].WorkoutExerciseID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,16 +93,16 @@ func TestCreatePersistsAuthoringPlanAndListReconstructsIt(t *testing.T) {
 		var reps *int
 		var note *string
 		var load *float64
-		var rpe *float64
-		if err := rows.Scan(&pos, &reps, &note, &load, &rpe); err != nil {
+		var rir *float64
+		if err := rows.Scan(&pos, &reps, &note, &load, &rir); err != nil {
 			t.Fatal(err)
 		}
 		positions = append(positions, pos)
-		if pos == 3 && (reps == nil || *reps != 8 || note != nil || load != nil || rpe != nil) {
-			t.Fatalf("sparse reps override = %#v %#v %#v %#v", reps, note, load, rpe)
+		if pos == 3 && (reps == nil || *reps != 8 || note != nil || load != nil || rir != nil) {
+			t.Fatalf("sparse reps override = %#v %#v %#v %#v", reps, note, load, rir)
 		}
-		if pos == 5 && (reps != nil || note != nil || load == nil || *load != 90 || rpe == nil || *rpe != 9) {
-			t.Fatalf("sparse load/rpe override = %#v %#v %#v %#v", reps, note, load, rpe)
+		if pos == 5 && (reps != nil || note != nil || load == nil || *load != 90 || rir == nil || *rir != 9) {
+			t.Fatalf("sparse load/rir override = %#v %#v %#v %#v", reps, note, load, rir)
 		}
 	}
 	if err := rows.Err(); err != nil {

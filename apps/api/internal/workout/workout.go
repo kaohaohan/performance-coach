@@ -36,7 +36,7 @@ type Defaults struct {
 	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
 	Load             *float64 `json:"load,omitempty"`
 	Unit             *string  `json:"unit,omitempty"`
-	RPE              *float64 `json:"rpe,omitempty"`
+	RIR              *float64 `json:"rir,omitempty"`
 }
 
 type SetOverride struct {
@@ -44,7 +44,7 @@ type SetOverride struct {
 	Reps             *int     `json:"reps,omitempty"`
 	PrescriptionNote *string  `json:"prescriptionNote,omitempty"`
 	Load             *float64 `json:"load,omitempty"`
-	RPE              *float64 `json:"rpe,omitempty"`
+	RIR              *float64 `json:"rir,omitempty"`
 }
 
 // Exercise is one prescribed exercise inside a Workout response.
@@ -202,19 +202,19 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO workout_exercises
-				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rpe, coach_cue, position, load_increment, set_increment, reps_increment)
+				(id, workout_id, exercise_id, target_sets, target_reps, target_prescription_note, target_load, target_load_unit, target_rir, coach_cue, position, load_increment, set_increment, reps_increment)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 			workoutExerciseID, workoutID, exerciseID, ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote,
-			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RPE, coachCue, position, loadIncrement, setIncrement, repsIncrement,
+			ex.Plan.Defaults.Load, ex.Plan.Defaults.Unit, ex.Plan.Defaults.RIR, coachCue, position, loadIncrement, setIncrement, repsIncrement,
 		); err != nil {
 			return Workout{}, fmt.Errorf("workout: insert workout_exercise: %w", err)
 		}
 		for _, override := range ex.Plan.Overrides {
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO workout_exercise_set_overrides
-					(id, workout_exercise_id, planned_position, reps_override, prescription_note_override, load_override, rpe_override)
+					(id, workout_exercise_id, planned_position, reps_override, prescription_note_override, load_override, rir_override)
 				 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-				uuid.NewString(), workoutExerciseID, override.Position, override.Reps, override.PrescriptionNote, override.Load, override.RPE,
+				uuid.NewString(), workoutExerciseID, override.Position, override.Reps, override.PrescriptionNote, override.Load, override.RIR,
 			); err != nil {
 				return Workout{}, fmt.Errorf("workout: insert set override: %w", err)
 			}
@@ -319,7 +319,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 	const exercisesQuery = `
 		SELECT we.workout_id, we.id, we.exercise_id, e.name,
 		       we.load_increment, we.set_increment, we.reps_increment,
-		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.coach_cue, we.position
+		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rir, we.coach_cue, we.position
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
 		WHERE we.workout_id = ANY($1)
@@ -337,7 +337,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 		var plan Plan
 		if err := exRows.Scan(&workoutID, &ex.WorkoutExerciseID, &ex.ExerciseID, &ex.Name,
 			&ex.LoadIncrement, &ex.SetIncrement, &ex.RepsIncrement,
-			&plan.SetCount, &plan.Defaults.Reps, &plan.Defaults.PrescriptionNote, &plan.Defaults.Load, &plan.Defaults.Unit, &plan.Defaults.RPE, &ex.CoachCue, &ex.Position); err != nil {
+			&plan.SetCount, &plan.Defaults.Reps, &plan.Defaults.PrescriptionNote, &plan.Defaults.Load, &plan.Defaults.Unit, &plan.Defaults.RIR, &ex.CoachCue, &ex.Position); err != nil {
 			return nil, fmt.Errorf("workout: scan workout_exercise: %w", err)
 		}
 		plan.Overrides = []SetOverride{}
@@ -354,7 +354,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 
 	const overridesQuery = `
 		SELECT o.workout_exercise_id, o.planned_position, o.reps_override,
-		       o.prescription_note_override, o.load_override, o.rpe_override
+		       o.prescription_note_override, o.load_override, o.rir_override
 		FROM workout_exercise_set_overrides o
 		JOIN workout_exercises we ON we.id = o.workout_exercise_id
 		WHERE we.workout_id = ANY($1)
@@ -373,7 +373,7 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User) ([
 	for overrideRows.Next() {
 		var workoutExerciseID string
 		var override SetOverride
-		if err := overrideRows.Scan(&workoutExerciseID, &override.Position, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RPE); err != nil {
+		if err := overrideRows.Scan(&workoutExerciseID, &override.Position, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RIR); err != nil {
 			return nil, fmt.Errorf("workout: scan set override: %w", err)
 		}
 		if index, ok := exerciseIndexes[workoutExerciseID]; ok {
@@ -432,7 +432,7 @@ func validateRepsIncrement(increment int) string {
 func planFromPrescription(plan prescription.Plan) Plan {
 	overrides := make([]SetOverride, len(plan.Overrides))
 	for i, override := range plan.Overrides {
-		overrides[i] = SetOverride{Position: override.Position, Reps: override.Reps, PrescriptionNote: override.PrescriptionNote, Load: override.Load, RPE: override.RPE}
+		overrides[i] = SetOverride{Position: override.Position, Reps: override.Reps, PrescriptionNote: override.PrescriptionNote, Load: override.Load, RIR: override.RIR}
 	}
-	return Plan{SetCount: plan.SetCount, Defaults: Defaults{Reps: plan.Defaults.Reps, PrescriptionNote: plan.Defaults.PrescriptionNote, Load: plan.Defaults.Load, Unit: plan.Defaults.Unit, RPE: plan.Defaults.RPE}, Overrides: overrides}
+	return Plan{SetCount: plan.SetCount, Defaults: Defaults{Reps: plan.Defaults.Reps, PrescriptionNote: plan.Defaults.PrescriptionNote, Load: plan.Defaults.Load, Unit: plan.Defaults.Unit, RIR: plan.Defaults.RIR}, Overrides: overrides}
 }

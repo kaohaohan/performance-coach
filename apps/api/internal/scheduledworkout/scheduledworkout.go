@@ -161,7 +161,7 @@ type PlannedSet struct {
 	PrescriptionNote             *string  `json:"prescriptionNote,omitempty"`
 	Load                         *float64 `json:"load,omitempty"`
 	Unit                         *string  `json:"unit,omitempty"`
-	RPE                          *float64 `json:"rpe,omitempty"`
+	RIR                          *float64 `json:"rir,omitempty"`
 }
 
 // CreatedPlan is the resolved snapshot plan returned by scheduling and
@@ -309,10 +309,10 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 			scheduledWorkoutExerciseID := uuid.NewString()
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO scheduled_workout_exercises
-				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, coach_cue, position)
+				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rir, coach_cue, position)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				scheduledWorkoutExerciseID, scheduledWorkoutID, p.ExerciseID, p.ExerciseName,
-				p.TargetLoadUnit, p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRPE, p.CoachCue, p.Position,
+				p.TargetLoadUnit, p.TargetSets, p.TargetReps, p.TargetPrescriptionNote, p.TargetRIR, p.CoachCue, p.Position,
 			); err != nil {
 				return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
 			}
@@ -322,9 +322,9 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 				plannedSetID := uuid.NewString()
 				if _, err := tx.Exec(ctx,
 					`INSERT INTO scheduled_workout_planned_sets
-						(id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rpe)
+						(id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rir)
 					 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-					plannedSetID, scheduledWorkoutExerciseID, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RPE,
+					plannedSetID, scheduledWorkoutExerciseID, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RIR,
 				); err != nil {
 					return nil, fmt.Errorf("scheduledworkout: insert scheduled_workout_planned_set: %w", err)
 				}
@@ -340,7 +340,7 @@ func Create(ctx context.Context, pool *pgxpool.Pool, caller authn.User, input Cr
 					PrescriptionNote:             set.PrescriptionNote,
 					Load:                         set.Load,
 					Unit:                         unit,
-					RPE:                          set.RPE,
+					RIR:                          set.RIR,
 				})
 			}
 
@@ -544,7 +544,7 @@ type resolvedPrescription struct {
 	TargetPrescriptionNote *string
 	TargetLoad             *float64
 	TargetLoadUnit         *string
-	TargetRPE              *float64
+	TargetRIR              *float64
 	CoachCue               *string
 	Position               int
 	Overrides              []prescription.SetOverride
@@ -558,8 +558,8 @@ type resolvedPrescription struct {
 func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string) ([]resolvedPrescription, error) {
 	const query = `
 		SELECT we.id, we.exercise_id, e.name,
-		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rpe, we.coach_cue, we.position,
-		       o.planned_position, o.reps_override, o.prescription_note_override, o.load_override, o.rpe_override
+		       we.target_sets, we.target_reps, we.target_prescription_note, we.target_load, we.target_load_unit, we.target_rir, we.coach_cue, we.position,
+		       o.planned_position, o.reps_override, o.prescription_note_override, o.load_override, o.rir_override
 		FROM workout_exercises we
 		JOIN exercises e ON e.id = we.exercise_id
 		LEFT JOIN workout_exercise_set_overrides o ON o.workout_exercise_id = we.id
@@ -583,8 +583,8 @@ func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string
 		var p resolvedPrescription
 		if err := rows.Scan(
 			&workoutExerciseID, &p.ExerciseID, &p.ExerciseName,
-			&p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetLoad, &p.TargetLoadUnit, &p.TargetRPE, &p.CoachCue, &p.Position,
-			&plannedPosition, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RPE,
+			&p.TargetSets, &p.TargetReps, &p.TargetPrescriptionNote, &p.TargetLoad, &p.TargetLoadUnit, &p.TargetRIR, &p.CoachCue, &p.Position,
+			&plannedPosition, &override.Reps, &override.PrescriptionNote, &override.Load, &override.RIR,
 		); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan prescription: %w", err)
 		}
@@ -616,7 +616,7 @@ func lookupResolvedPrescription(ctx context.Context, tx pgx.Tx, workoutID string
 				PrescriptionNote: p.TargetPrescriptionNote,
 				Load:             p.TargetLoad,
 				Unit:             p.TargetLoadUnit,
-				RPE:              p.TargetRPE,
+				RIR:              p.TargetRIR,
 			},
 			Overrides: p.Overrides,
 		})
@@ -752,10 +752,10 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 		scheduledWorkoutExerciseID := uuid.NewString()
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO scheduled_workout_exercises
-				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rpe, coach_cue, position)
+				(id, scheduled_workout_id, exercise_id, exercise_name, target_load_unit, target_sets, target_reps, target_prescription_note, target_rir, coach_cue, position)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			scheduledWorkoutExerciseID, scheduledWorkoutID, exerciseID, exerciseName, ex.Plan.Defaults.Unit,
-			ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote, ex.Plan.Defaults.RPE, coachCue, position,
+			ex.Plan.SetCount, ex.Plan.Defaults.Reps, ex.Plan.Defaults.PrescriptionNote, ex.Plan.Defaults.RIR, coachCue, position,
 		); err != nil {
 			return Created{}, fmt.Errorf("scheduledworkout: insert scheduled_workout_exercise: %w", err)
 		}
@@ -765,9 +765,9 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 			plannedSetID := uuid.NewString()
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO scheduled_workout_planned_sets
-					(id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rpe)
+					(id, scheduled_workout_exercise_id, planned_position, target_reps, target_prescription_note, target_load, target_rir)
 				 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-				plannedSetID, scheduledWorkoutExerciseID, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RPE,
+				plannedSetID, scheduledWorkoutExerciseID, set.Position, set.Reps, set.PrescriptionNote, set.Load, set.RIR,
 			); err != nil {
 				return Created{}, fmt.Errorf("scheduledworkout: insert scheduled_workout_planned_set: %w", err)
 			}
@@ -783,7 +783,7 @@ func Update(ctx context.Context, pool *pgxpool.Pool, caller authn.User, schedule
 				PrescriptionNote:             set.PrescriptionNote,
 				Load:                         set.Load,
 				Unit:                         unit,
-				RPE:                          set.RPE,
+				RIR:                          set.RIR,
 			})
 		}
 
@@ -1069,7 +1069,7 @@ func GetForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sch
 			SELECT p.scheduled_workout_exercise_id,
 			       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 			       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
-			       p.target_rpe
+			       p.target_rir
 			FROM scheduled_workout_planned_sets p
 			JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
 			WHERE p.scheduled_workout_exercise_id = ANY($1)
@@ -1083,7 +1083,7 @@ func GetForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sch
 		for setRows.Next() {
 			var exerciseID string
 			var set PlannedSet
-			if err := setRows.Scan(&exerciseID, &set.ScheduledWorkoutPlannedSetID, &set.Position, &set.Reps, &set.PrescriptionNote, &set.Load, &set.Unit, &set.RPE); err != nil {
+			if err := setRows.Scan(&exerciseID, &set.ScheduledWorkoutPlannedSetID, &set.Position, &set.Reps, &set.PrescriptionNote, &set.Load, &set.Unit, &set.RIR); err != nil {
 				return Created{}, fmt.Errorf("scheduledworkout: scan snapshot planned set: %w", err)
 			}
 			idx := indexByID[exerciseID]
@@ -1343,7 +1343,7 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 		SELECT p.scheduled_workout_exercise_id,
 		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
-		       p.target_rpe
+		       p.target_rir
 		FROM scheduled_workout_planned_sets p
 		JOIN scheduled_workout_exercises swe ON swe.id = p.scheduled_workout_exercise_id
 		WHERE p.scheduled_workout_exercise_id = ANY($1)
@@ -1362,7 +1362,7 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 		)
 		if err := rows.Scan(
 			&exerciseID,
-			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RPE,
+			&plannedSet.ScheduledWorkoutPlannedSetID, &plannedSet.Position, &plannedSet.Reps, &plannedSet.PrescriptionNote, &plannedSet.Load, &plannedSet.Unit, &plannedSet.RIR,
 		); err != nil {
 			return nil, fmt.Errorf("scheduledworkout: scan today planned set: %w", err)
 		}
