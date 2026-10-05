@@ -130,7 +130,7 @@
 | Phase 0 — read-only inspection | Done | Data already links set_logs → scheduled_workout_exercises.exercise_id (+ position); `GET /sessions/{id}` already uses historical-access ACL without `coachId = caller`. |
 | Design review — grades rejected | Done | 2026-10-05: A+–D grades prototyped and dropped; events + trends adopted; Overview deferred. |
 | 0. RPE → RIR | Not Started | Separate Task Doc. |
-| 1. Contract + spec docs | Not Started | |
+| 1. Contract + spec docs | Done | 2026-10-05: contract V0.12 (`history`, §3.10 `/training-log`, event rules, auth rows), UI routes, MVP section. |
 | 2. Comparison engine | Not Started | |
 | 3. LAST / PR in workout | Not Started | |
 | 4. Exercise history + progress chart | Not Started | |

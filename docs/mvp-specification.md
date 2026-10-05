@@ -63,6 +63,20 @@ Route/navigation detail lives in `docs/frontend-ui-spec.md`; this document defin
 
 ---
 
+## **Training History & Exercise Progress — Approved (V0.12), not yet implemented**
+
+Implementation plan: `docs/tasks/2026-10-04-training-history.md`.
+
+The product turns SetLogs into **raw data → trend → objective events → coach decision**. It never grades or scores a session or an athlete.
+
+- **In the workout:** every exercise shows what the athlete did last time and their best reps at the working load, so each set has a concrete target.
+- **Exercise Progress:** per athlete and exercise, a chart over time plus the full set-by-set history. Raw sets are always visible.
+- **Training history:** Coach History cards show results inline, with no need to open each session. Athletes get their own read-only history.
+- **Events are computed, never hand-labelled:** Load PR, Rep PR, load change, Matched, Reps down. The rules are in the API contract §3.10.
+- **Cross-coach visibility:** a connected Coach sees the athlete's training logged under other Coaches. That training is shown as actuals only, without the other Coach's identity, workout name, cues, or prescription. The athlete is told this when joining and on the Privacy page.
+- **Units are never converted.** kg and lb are shown separately.
+- **Not in this release:** grades and scores; Progressing / Stable / Needs review judgments; recovery check-ins; and the Coach Progress Overview, which comes next with objective data only.
+
 ## **Coach & Athlete Onboarding — Implemented (V0.1)**
 
 > **Status: implemented.** This section defines product behavior only.
@@ -190,8 +204,8 @@ Calendar → 2026-08-16
 Athletes → Student 2, Student 3
 
 Build Workout: Lower Strength A
-  Back Squat — 3 × 5 @ RPE 8
-  Romanian Deadlift — 3 × 8 @ RPE 8
+  Back Squat — 3 × 5 @ RIR 2
+  Romanian Deadlift — 3 × 8 @ RIR 2
 
 Build & Assign
 ```
@@ -236,7 +250,7 @@ Refreshing the page does not remove the workout or the schedule.
 
 - Calendar is the primary Coach programming workspace; from a selected date and one-or-more selected connected Athletes, Coach can choose either path without first visiting Workout History.
 - Existing Workout path: Coach can choose a saved Workout and either copy it into an editable draft or assign it as saved to all selected Athletes. Copy & edit is the primary action; Assign as saved is the secondary shortcut.
-- An editable copy preserves the source Workout's ordered Exercises, set counts, reps or text prescription, load/unit, RPE, optional per-exercise Coach cue, and sparse property-specific per-position overrides. The source Workout and previously scheduled prescriptions are never mutated.
+- An editable copy preserves the source Workout's ordered Exercises, set counts, reps or text prescription, load/unit, RIR, optional per-exercise Coach cue, and sparse property-specific per-position overrides. The source Workout and previously scheduled prescriptions are never mutated.
 - Editing a copied exercise uses the same uniform-first semantics as any new draft: changing that exercise's set count or default prescription updates its effective planned positions while preserving explicit overrides as defined below. Each WorkoutExercise may carry a coach-authored weekly `loadIncrement` applied only on the next copy/build/repeat for a single selected Athlete (last COMPLETED SetLog for that exercise and unit, else template planned load), optional `setIncrement` (`0` or `1`, default `0`) that adds one set on copy/build/repeat, and optional `repsIncrement` (integer `0`–`20`, default `0`) that adds that many reps on copy/build/repeat when prescription is REPS. Load, sets, and reps are independent knobs. Multi-Athlete assign keeps template-written loads, set counts, and reps. **Repeat this week** (Calendar week view, one Athlete): preview each assignment → date+7 with load/set suggestions, then confirm via sequential `POST /workouts` + `POST /scheduled-workouts`; no new backend route. Programs remain deferred. Workout-wide percentage progression and bulk cross-exercise set/load changes remain deferred.
 - Inline Build path: Coach can enter one Workout name; add one-or-more existing Exercises using `GET /api/v1/exercises?q=`, or create one missing private Exercise through `POST /api/v1/exercises`; then define sets and a planned prescription. For each exercise, sets establish ordered planned set positions; the Coach can use a uniform default prescription or override individual positions.
 - Build & Assign validates one draft, calls `POST /api/v1/workouts` once, stores the returned `workout.id`, then calls `POST /api/v1/scheduled-workouts` once with all selected Athlete IDs and the selected date. It does not create one Workout per Athlete.
@@ -252,7 +266,7 @@ Refreshing the page does not remove the workout or the schedule.
 - Workout History (`/coach/workouts`) remains the secondary cross-athlete review tool. It shows one entry per past or current-day Athlete assignment, supports Athlete and date-range filters, and includes Not started, In progress, and Done statuses. Saved templates remain reusable through Calendar → From saved, and `+ Create Workout` remains available on History.
 - Full workout creation on mobile is not required.
 - **Partial failure / retry:** `POST /api/v1/workouts` and `POST /api/v1/scheduled-workouts` are separate operations and are not atomic together. If Workout creation succeeds but scheduling fails, frontend preserves the created `workout.id`, selected date, selected Athletes, and builder state; reports “Workout was created, but it was not assigned”; and offers an explicit retry-assignment action. Retry calls only `POST /api/v1/scheduled-workouts` with the existing `workout.id`, never `POST /api/v1/workouts` again. Frontend must not blindly auto-retry after an ambiguous network failure: scheduled-workouts has no idempotency key and duplicate scheduling is structurally possible, so Coach explicitly retries after reviewing current Calendar state.
-- **Prescription and programming scope:** V0.1 supports the planned-set semantics defined below: ordered planned positions, a uniform shorthand/default, individual overrides, planned reps or text prescription, planned load with one unit per WorkoutExercise, and planned RPE. Template authoring stores defaults plus sparse overrides; scheduling stores fully resolved frozen planned-set rows; normal SetLogs explicitly associate with a frozen planned set. Percentages, velocity, tempo, rest prescription, supersets, circuits, arbitrary custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture remain deferred.
+- **Prescription and programming scope:** V0.1 supports the planned-set semantics defined below: ordered planned positions, a uniform shorthand/default, individual overrides, planned reps or text prescription, planned load with one unit per WorkoutExercise, and planned RIR. Template authoring stores defaults plus sparse overrides; scheduling stores fully resolved frozen planned-set rows; normal SetLogs explicitly associate with a frozen planned set. Percentages, velocity, tempo, rest prescription, supersets, circuits, arbitrary custom properties, Programs, Calendar hierarchy, Parent Calendar, nested calendars, groups, team hierarchy, and enterprise scheduling architecture remain deferred.
 - **Backend implementation is unchanged by this framing**: the Calendar composes existing `GET /api/v1/exercises?q=`, `POST /api/v1/workouts`, and `POST /api/v1/scheduled-workouts`; it is not a new domain object or transactional endpoint (see `go-backend-api-contract-v0.1.md` §7.5). Future one-off scheduled Workouts, a “Save as template” toggle, and ephemeral prescriptions are explicitly deferred.
 
 ### **V0.1 planned-set prescription and Builder behavior**
@@ -278,7 +292,7 @@ For each prescribed exercise:
 
 1. The Coach chooses the number of sets first.
 2. `Sets = N` establishes exactly `N` effective planned set positions, ordered `1..N`.
-3. The default editing mode is **FAST / UNIFORM**: one reps value, one load plus unit, and one RPE value may each apply to all `N` positions. The Coach is not required to type `N` repeated values for a uniform prescription.
+3. The default editing mode is **FAST / UNIFORM**: one reps value, one load plus unit, and one RIR value may each apply to all `N` positions. The Coach is not required to type `N` repeated values for a uniform prescription.
 4. Each uniform value is an exercise-level **default** for its own property. A planned position without an explicit override for that property **inherits** the current default.
 5. The Coach may then enter a per-set customization mode and override an individual property for an individual planned position. Overrides are property-specific, not an all-or-nothing set object. V0.1 has only two states for an overrideable property: inherited or explicit value; it does not support an explicit "no target" override.
 6. When the Coach begins editing an inherited property on a position, the control is prefilled with that position's current **effective** value, not left blank. Changing that value creates an explicit override.
@@ -291,17 +305,17 @@ Back Squat
 Sets: 5
 Reps: 10
 Load: 80 kg
-RPE: 8
+RIR: 2
 ```
 
 is semantically equivalent to:
 
 ```
-Set 1: 10 reps / 80 kg / RPE 8
-Set 2: 10 reps / 80 kg / RPE 8
-Set 3: 10 reps / 80 kg / RPE 8
-Set 4: 10 reps / 80 kg / RPE 8
-Set 5: 10 reps / 80 kg / RPE 8
+Set 1: 10 reps / 80 kg / RIR 2
+Set 2: 10 reps / 80 kg / RIR 2
+Set 3: 10 reps / 80 kg / RIR 2
+Set 4: 10 reps / 80 kg / RIR 2
+Set 5: 10 reps / 80 kg / RIR 2
 ```
 
 Case 2 — reps overrides:
@@ -320,18 +334,18 @@ Case 3 — independent property overrides:
 Defaults:
 Reps: 10
 Load: 80 kg
-RPE: 8
+RIR: 2
 
 Set 3 reps override: 8
 Set 5 load override: 90 kg
-Set 5 RPE override: 9
+Set 5 RIR override: 1
 
 Effective:
-Set 1: 10 reps / 80 kg / RPE 8
-Set 2: 10 reps / 80 kg / RPE 8
-Set 3:  8 reps / 80 kg / RPE 8
-Set 4: 10 reps / 80 kg / RPE 8
-Set 5: 10 reps / 90 kg / RPE 9
+Set 1: 10 reps / 80 kg / RIR 2
+Set 2: 10 reps / 80 kg / RIR 2
+Set 3:  8 reps / 80 kg / RIR 2
+Set 4: 10 reps / 80 kg / RIR 2
+Set 5: 10 reps / 90 kg / RIR 1
 ```
 
 Case 4 — changing a default preserves overrides:
@@ -361,7 +375,7 @@ Effective Set 3 reps: 12 inherited
 - **Cardinality and ordering:** an exercise prescribed for `N` sets has exactly `N` effective planned positions, each with a stable ordinal `1..N`. Planned-set position is distinct from exercise order inside a Workout.
 - **Authoring model:** a Coach authors exercise-level defaults plus sparse, property-specific overrides. A default, inherited value, and explicit override are distinct authoring states even when they currently resolve to the same visible value.
 - **Uniform shorthand and inheritance:** defaults are semantically applied to every planned position that has no override for that property. Uniform work therefore needs one entry per default, not N repeated entries.
-- **Per-set override:** an individual position may independently override its reps or text instruction, numeric load, and/or RPE. Changing default reps must not affect a position with a reps override; it may still inherit load and RPE. V0.1 does not support an explicit-none override: clearing an override always resumes inheritance.
+- **Per-set override:** an individual position may independently override its reps or text instruction, numeric load, and/or RIR. Changing default reps must not affect a position with a reps override; it may still inherit load and RIR. V0.1 does not support an explicit-none override: clearing an override always resumes inheritance.
 - **Edit prefill and clear:** opening an inherited property for editing begins with its effective value. Editing creates an override; clearing that override restores inheritance from the current default.
 - **Effective prescription:** at save/build and at scheduling, every planned position has a deterministic resolved effective value where applicable. Defaults and sparse overrides are authoring semantics; the effective plan is the resolved prescription used for snapshot and execution.
 - **Text prescriptions:** an effective position may use the existing text/non-numeric prescription capability (for example `AMAP`, `30 sec`, or `10–12`) instead of numeric reps. For example, a default note of `AMAP` produces `N` positions that inherit `AMAP` until a position explicitly overrides its note. This preserves current prescription expressiveness; it does not by itself add time/distance actual logging.
@@ -375,8 +389,8 @@ Effective Set 3 reps: 12 inherited
 Example — planned versus actual:
 
 ```
-Planned Set 4: 8 reps / 85 kg / RPE 8
-Actual Set 4:  7 reps / 85 kg / RPE 9
+Planned Set 4: 8 reps / 85 kg / RIR 2
+Actual Set 4:  7 reps / 85 kg / RIR 1
 ```
 
 Both values must remain independently representable and understandable during execution and review.
@@ -436,7 +450,7 @@ TODAY
 Monday Lower
 3 exercises
 
-Back Squat          4 × 5 · 80 kg · RPE 8
+Back Squat          4 × 5 · 80 kg · RIR 2
 Romanian Deadlift   3 × 8 · 60 kg
 Plank               3 × 30s hold
 
@@ -485,7 +499,7 @@ The user manually enters:
 ```
 Load: 100 kg
 Reps: 5
-RPE: 7
+RIR: 3
 ```
 
 and saves the set. The Session screen shows a compact overview of every exercise first; the Athlete or Coach opens one exercise to record that set.
@@ -511,7 +525,7 @@ Example:
   "load": 100,
   "unit": "kg",
   "reps": 5,
-  "rpe": 7,
+  "rir": 3,
   "loggedByUserId": "..."
 }
 ```
@@ -551,13 +565,13 @@ The current user may be either:
 The user presses the microphone button and says:
 
 ```
-「第一組一百公斤五下，RPE 七。」
+「第一組一百公斤五下，RIR 三。」
 ```
 
 or:
 
 ```
-「Kevin 深蹲一百公斤五下，RPE 七。」
+「Kevin 深蹲一百公斤五下，RIR 三。」
 ```
 
 > V0.1 voice commands always apply to the **currently active session + active exercise**. Athlete or exercise names spoken in the sentence are treated as natural-language redundancy only; V0.1 does **not** perform name-to-entity resolution.
@@ -581,7 +595,7 @@ Target structured command:
   "load": 100,
   "unit": "kg",
   "reps": 5,
-  "rpe": 7
+  "rir": 3
 }
 ```
 
@@ -590,7 +604,7 @@ The UI then displays:
 ```
 Set 1
 100 kg × 5
-RPE 7
+RIR 3
 ```
 
 ## **Acceptance Criteria**
@@ -619,7 +633,7 @@ Back Squat
 
 Set 1
 100 kg × 5
-RPE 7
+RIR 3
 ```
 
 ## **When**
@@ -648,10 +662,10 @@ After validation, the SetLog becomes:
 ```
 Set 1
 105 kg × 5
-RPE 7
+RIR 3
 ```
 
-The existing reps and RPE remain unchanged.
+The existing reps and RIR remain unchanged.
 
 ---
 
@@ -676,7 +690,7 @@ The application identifies the most recent valid SetLog within the current worko
 ## **Acceptance Criteria**
 
 - User can correct the previous set’s load.
-- User can correct reps or RPE when explicitly stated.
+- User can correct reps or RIR when explicitly stated.
 - Existing fields remain unchanged when they are not mentioned.
 - User can delete the previous set.
 - Correction passes validation before database mutation.
@@ -705,13 +719,13 @@ Example:
 Back Squat
 
 Plan
-4 × 5 @ RPE 8
+4 × 5 @ RIR 2
 
 Actual
-Set 1   100 × 5   RPE 7
-Set 2   105 × 5   RPE 8
-Set 3   105 × 5   RPE 8
-Set 4   110 × 4   RPE 9
+Set 1   100 × 5   RIR 3
+Set 2   105 × 5   RIR 2
+Set 3   105 × 5   RIR 2
+Set 4   110 × 4   RIR 1
 ```
 
 ## **Acceptance Criteria**
@@ -731,7 +745,7 @@ Set 4   110 × 4   RPE 9
 The MVP core loop is complete when this exact scenario works:
 
 1. Coach logs in on the web interface.
-2. From the Calendar (`/coach/calendar`), Coach selects today's date and creates `Monday Lower` (`Back Squat — 4 × 5 @ RPE 8`).
+2. From the Calendar (`/coach/calendar`), Coach selects today's date and creates `Monday Lower` (`Back Squat — 4 × 5 @ RIR 2`).
 3. Coach assigns `Monday Lower` to Kevin for today, directly from the Calendar.
 4. Kevin logs in on mobile/PWA.
 5. Kevin sees `Monday Lower` on `/today`.
