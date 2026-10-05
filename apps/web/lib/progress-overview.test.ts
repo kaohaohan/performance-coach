@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { completionText, eventChips, layoutSparkline, prCount, topSetText, type OverviewEvent, type OverviewExercise } from "./progress-overview";
+import { completionText, eventChips, layoutSparkline, topSetText, type OverviewEvent } from "./progress-overview";
 
 const t = ((key: string) => key) as never;
-
-function exercise(events: OverviewEvent[]): OverviewExercise {
-  return { exerciseId: "e", name: "Curl", unit: "kg", latest: { date: "2026-10-05", topSet: { load: 32.5, reps: 11, rir: 1 } }, trend: [], recentEvents: events, exposures: 1 };
-}
 
 test("topSetText shows load, reps and RIR; leaves RIR and load out when absent", () => {
   assert.equal(topSetText({ load: 32.5, reps: 11, rir: 1 }, "kg"), "32.5 kg × 11 @1");
@@ -20,16 +16,6 @@ test("completionText is a rounded percentage, or a dash when nothing was schedul
   assert.equal(completionText(0), "0%");
   assert.equal(completionText(1), "100%");
   assert.equal(completionText(null), "—");
-});
-
-test("prCount counts only Load PR and Rep PR events across rows", () => {
-  const rows = [
-    exercise([{ date: "2026-10-05", type: "REP_PR", load: 32.5, unit: "kg", reps: 11 }, { date: "2026-10-05", type: "LOAD_CHANGE", delta: 2.5, unit: "kg" }]),
-    exercise([{ date: "2026-10-01", type: "LOAD_PR", load: 100, unit: "kg" }, { date: "2026-09-20", type: "MATCHED" }]),
-    exercise([]),
-  ];
-  assert.equal(prCount(rows), 2);
-  assert.equal(prCount([]), 0);
 });
 
 test("eventChips lists distinct PR and load-up chips only", () => {

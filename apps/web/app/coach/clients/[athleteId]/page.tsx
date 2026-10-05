@@ -9,7 +9,7 @@ import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
 import { monthDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { AppHeader } from "@/components/app-header";
-import { completionText, eventChips, layoutSparkline, prCount, topSetText, type OverviewExercise, type ProgressOverview } from "@/lib/progress-overview";
+import { completionText, eventChips, layoutSparkline, topSetText, type OverviewExercise, type ProgressOverview } from "@/lib/progress-overview";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 
 type Role = "COACH" | "ATHLETE";
@@ -266,7 +266,7 @@ function OverviewSection({ athleteId, data }: { athleteId: string; data: Progres
       <div className="grid grid-cols-3 gap-2">
         <StripCell label={t("progress.overview.completion")} value={completionText(a.completionRate)} detail={a.scheduled === 0 ? t("progress.overview.noAssignments") : t("progress.overview.completionDetail", { completed: a.completed, scheduled: a.scheduled })} />
         <StripCell label={t("progress.overview.sets")} value={t("progress.overview.setsValue", { completed: a.completedPlannedSets, planned: a.plannedSets })} detail={a.extraSets > 0 ? t("progress.overview.extraSets", { count: a.extraSets }) : undefined} />
-        <StripCell label={t("progress.overview.prs")} value={String(prCount(data.exercises))} detail={t("progress.overview.prsDetail")} />
+        <StripCell label={t("progress.overview.prs")} value={String(data.recentEventTotals.total)} detail={t("progress.overview.prsDetail")} />
       </div>
       <p className="px-1 text-xs text-slate-500">{t("progress.overview.scopeNote")}</p>
       {data.exercises.length === 0 ? <EmptyCard title={t("progress.overview.empty", { weeks })} /> : (

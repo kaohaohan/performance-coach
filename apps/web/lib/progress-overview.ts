@@ -26,6 +26,9 @@ export type ProgressOverview = {
     completedPlannedSets: number;
     extraSets: number;
   };
+  // LOAD_PR / REP_PR over the last 28 days across all exercises and units;
+  // computed by the API without the per-exercise recentEvents cap.
+  recentEventTotals: { windowDays: number; loadPr: number; repPr: number; total: number };
   exercises: OverviewExercise[];
 };
 
@@ -39,16 +42,6 @@ export function topSetText(topSet: OverviewExercise["latest"]["topSet"], unit: U
 // null = no assignments of the caller's in the window: show a dash, not 0%.
 export function completionText(rate: number | null): string {
   return rate === null ? "—" : `${Math.round(rate * 100)}%`;
-}
-
-export function isPr(event: OverviewEvent): boolean {
-  return event.type === "LOAD_PR" || event.type === "REP_PR";
-}
-
-// PRs in the last 28 days, summed over the exercise rows. recentEvents is
-// capped at 5 per row by the API, so a busy row can undercount.
-export function prCount(exercises: OverviewExercise[]): number {
-  return exercises.reduce((total, e) => total + e.recentEvents.filter(isPr).length, 0);
 }
 
 export type Chip = { key: "loadPr" | "repPr" | "loadUp"; label: string };
