@@ -89,7 +89,7 @@
 
 | Follow-up sub-task | Status | Notes |
 | --- | --- | --- |
-| 3b-a. Backend `recentEventTotals` | Not Started | |
+| 3b-a. Backend `recentEventTotals` | Done | 2026-10-05. Counted in `loadExercises` from the engine's events (date ≥ today−27), before the bodyweight-row skip, so all exercises and units are included and the 5-item cap does not apply. No migration (no new query). Integration test covers >5 PRs, kg + lb, PRs older than 28 days, empty window, window-length independence; redaction test unchanged and passing. |
 | 3b-b. Web strip uses `total` | Not Started | |
 
 ## 5. Outcome (filled at completion)

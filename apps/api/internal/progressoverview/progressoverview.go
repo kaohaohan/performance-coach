@@ -119,11 +119,22 @@ type Exercise struct {
 	Exposures    int           `json:"exposures"`
 }
 
+// RecentEventTotals counts LOAD_PR and REP_PR events over the last WindowDays
+// across every exercise and unit (no conversion). Unlike Exercise.RecentEvents
+// it is not capped.
+type RecentEventTotals struct {
+	WindowDays int `json:"windowDays"`
+	LoadPR     int `json:"loadPr"`
+	RepPR      int `json:"repPr"`
+	Total      int `json:"total"`
+}
+
 type Response struct {
-	Athlete     Athlete     `json:"athlete"`
-	Window      Window      `json:"window"`
-	Assignments Assignments `json:"assignments"`
-	Exercises   []Exercise  `json:"exercises"`
+	Athlete           Athlete           `json:"athlete"`
+	Window            Window            `json:"window"`
+	Assignments       Assignments       `json:"assignments"`
+	RecentEventTotals RecentEventTotals `json:"recentEventTotals"`
+	Exercises         []Exercise        `json:"exercises"`
 }
 
 func parseWeeks(raw string) (int, error) {
@@ -176,7 +187,7 @@ func Get(ctx context.Context, pool *pgxpool.Pool, caller authn.User, q Query, to
 	if resp.Assignments, err = loadAssignments(ctx, pool, caller.ID, q.AthleteID, resp.Window); err != nil {
 		return Response{}, err
 	}
-	if resp.Exercises, err = loadExercises(ctx, pool, q.AthleteID, from, today); err != nil {
+	if resp.Exercises, resp.RecentEventTotals, err = loadExercises(ctx, pool, q.AthleteID, from, today); err != nil {
 		return Response{}, err
 	}
 	return resp, nil
@@ -230,7 +241,8 @@ type exerciseHistory struct {
 	exposures []progress.Exposure
 }
 
-func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, from, today time.Time) ([]Exercise, error) {
+func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, from, today time.Time) ([]Exercise, RecentEventTotals, error) {
+	totals := RecentEventTotals{WindowDays: recentDays}
 	rows, err := pool.Query(ctx, `
 		SELECT swe.exercise_id::text, swe.exercise_name, ws.id::text, sw.scheduled_date::text,
 		       swe.position, sl.set_number, sl.load, sl.unit, sl.reps, sl.rir
@@ -242,7 +254,7 @@ func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, fr
 		ORDER BY sw.scheduled_date, ws.completed_at, ws.id, sl.set_number`,
 		athleteID, today.Format(dateLayout))
 	if err != nil {
-		return nil, fmt.Errorf("progressoverview: load exposures: %w", err)
+		return nil, totals, fmt.Errorf("progressoverview: load exposures: %w", err)
 	}
 	defer rows.Close()
 
@@ -257,7 +269,7 @@ func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, fr
 			unit                                *string
 		)
 		if err := rows.Scan(&exerciseID, &exName, &sessionID, &date, &position, &setNumber, &load, &unit, &reps, &rir); err != nil {
-			return nil, fmt.Errorf("progressoverview: scan exposure: %w", err)
+			return nil, totals, fmt.Errorf("progressoverview: scan exposure: %w", err)
 		}
 		h, ok := byExercise[exerciseID]
 		if !ok {
@@ -278,7 +290,7 @@ func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, fr
 		e.Sets = append(e.Sets, set)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("progressoverview: iterate exposures: %w", err)
+		return nil, totals, fmt.Errorf("progressoverview: iterate exposures: %w", err)
 	}
 
 	fromStr := from.Format(dateLayout)
@@ -292,6 +304,20 @@ func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, fr
 	for _, h := range order {
 		byUnit := progress.Analyze(h.exposures)
 		for unit, results := range byUnit {
+			// Totals cover every exercise and unit, including rows not listed.
+			for _, r := range results {
+				if r.Date < recentFrom {
+					continue
+				}
+				for _, ev := range r.Events {
+					switch ev.Type {
+					case progress.EventLoadPR:
+						totals.LoadPR++
+					case progress.EventRepPR:
+						totals.RepPR++
+					}
+				}
+			}
 			if unit == bodyweightUnit {
 				continue // no load to trend
 			}
@@ -358,5 +384,6 @@ func loadExercises(ctx context.Context, pool *pgxpool.Pool, athleteID string, fr
 		}
 		return out[a].Unit < out[b].Unit
 	})
-	return out, nil
+	totals.Total = totals.LoadPR + totals.RepPR
+	return out, totals, nil
 }

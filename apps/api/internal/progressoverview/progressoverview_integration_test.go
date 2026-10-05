@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -319,6 +320,44 @@ func TestWindowTrendNullWeeksAndEvents(t *testing.T) {
 	r26 := get(t, coach, athlete.ID, "26")
 	if r26.Exercises[0].Exposures != 6 {
 		t.Fatalf("26 week exposures = %d, want 6", r26.Exercises[0].Exposures)
+	}
+}
+
+func TestRecentEventTotalsAreUncappedAndCountAllUnits(t *testing.T) {
+	requireDB(t)
+	coach := newUser(t, "COACH", "Coach Totals")
+	athlete := newUser(t, "ATHLETE", "Jason")
+	connect(t, coach, athlete)
+	name := sharedExercise(t)
+
+	// Empty window: zeros, windowDays still reported.
+	empty := get(t, coach, athlete.ID, "4").RecentEventTotals
+	if empty != (progressoverview.RecentEventTotals{WindowDays: 28}) {
+		t.Fatalf("empty totals = %+v", empty)
+	}
+
+	done(t, coach, athlete, "2026-09-01", name, "kg", set{80, 8, 2})     // baseline
+	done(t, coach, athlete, "2026-09-09", name, "kg", set{81, 8, 2})     // LOAD_PR, but older than 28 days (recent starts Sep 10)
+	for i, load := range []float64{82.5, 85, 87.5, 90, 92.5, 95, 97.5} { // 7 LOAD_PRs, more than the 5-event cap
+		done(t, coach, athlete, fmt.Sprintf("2026-09-%02d", 11+i), name, "kg", set{load, 8, 2})
+	}
+	done(t, coach, athlete, "2026-09-01", name, "lb", set{200, 5, 2}) // lb baseline
+	done(t, coach, athlete, "2026-09-12", name, "lb", set{205, 5, 2}) // lb LOAD_PR
+	done(t, coach, athlete, "2026-09-20", name, "lb", set{205, 6, 2}) // lb REP_PR
+
+	r := get(t, coach, athlete.ID, "4")
+	want := progressoverview.RecentEventTotals{WindowDays: 28, LoadPR: 8, RepPR: 1, Total: 9}
+	if r.RecentEventTotals != want {
+		t.Fatalf("totals = %+v, want %+v", r.RecentEventTotals, want)
+	}
+	for _, ex := range r.Exercises {
+		if len(ex.RecentEvents) > 5 {
+			t.Fatalf("recentEvents cap broken: %d", len(ex.RecentEvents))
+		}
+	}
+	// Totals do not depend on the window length.
+	if got := get(t, coach, athlete.ID, "26").RecentEventTotals; got != want {
+		t.Fatalf("26 week totals = %+v, want %+v", got, want)
 	}
 }
 
