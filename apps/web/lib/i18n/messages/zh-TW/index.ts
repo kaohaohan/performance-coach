@@ -19,6 +19,7 @@ import { athlete } from "./athlete.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
+import { progress } from "./progress.ts";
 
 export const zhTW: Catalog = {
   ...auth,
@@ -28,4 +29,5 @@ export const zhTW: Catalog = {
   ...common,
   ...errors,
   ...settings,
+  ...progress,
 };

@@ -431,6 +431,7 @@ export default function SessionPage() {
             savingCue={savingCue}
             cueError={cueError}
             adjusting={adjusting}
+            progressHref={me?.role === "COACH" ? `/coach/clients/${session.athlete.id}/exercises/${focusedExercise.exerciseId}` : me?.role === "ATHLETE" ? `/history/exercises/${focusedExercise.exerciseId}` : undefined}
             canRemove={isActive && (me?.role === "COACH" || (me?.role === "ATHLETE" && focusedExercise.origin === "ATHLETE_ADDED" && focusedExercise.addedByUserId === me.id))}
             hasPrev={focusedIndex > 0}
             hasNext={focusedIndex >= 0 && focusedIndex < activeExercises.length - 1}

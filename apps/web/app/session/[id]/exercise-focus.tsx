@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { useLocale, useT } from "@/lib/i18n";
@@ -38,6 +39,7 @@ export function ExerciseFocus({
   savingCue,
   cueError,
   adjusting,
+  progressHref,
   canRemove,
   hasPrev,
   hasNext,
@@ -72,6 +74,9 @@ export function ExerciseFocus({
   savingCue: boolean;
   cueError: string | null;
   adjusting: boolean;
+  // Exercise Progress page for this exercise and athlete; undefined until the
+  // caller's role is known.
+  progressHref?: string;
   canRemove: boolean;
   hasPrev: boolean;
   hasNext: boolean;
@@ -113,7 +118,7 @@ export function ExerciseFocus({
       </div>
       <div className="px-4 pb-2">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>
+          <h2 className="text-lg font-semibold tracking-tight">{progressHref ? <Link href={progressHref} className="underline decoration-slate-300 decoration-2 underline-offset-4 hover:decoration-teal-600">{localizeExerciseName(exercise.name, locale)}</Link> : localizeExerciseName(exercise.name, locale)}</h2>
           {exercise.origin === "ATHLETE_ADDED" && <span className="text-[11px] font-medium text-slate-500">{t("athlete.session.athleteAdded")}</span>}
           {exercise.origin === "COACH_ADDED" && <span className="text-[11px] font-medium text-slate-500">{t("athlete.session.coachAdded")}</span>}
         </div>
