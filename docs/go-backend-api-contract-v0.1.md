@@ -1183,7 +1183,7 @@ Response `200`：
 
 ---
 
-## 3.11 Progress Overview（V0.13 — approved, not yet implemented）
+## 3.11 Progress Overview（V0.13 — backend implemented）
 
 ### GET /athletes/{athleteId}/progress-overview?weeks=8 — Coach only
 
@@ -1228,7 +1228,7 @@ Response `200`：
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
 | `GET /training-log` | ❌ 401 | ❌ 401 | ✅ **historical access**（不限排課 Coach）；指定無權 athlete ❌ 404 | ✅ 僅自己（不限 Coach）；指定他人 ❌ 404 | `OTHER_COACH` 遮蔽 id/課表名/cue/plan；不回 SetLog id；range ≤ 184 天，見 §3.10 |
-| `GET /athletes/{athleteId}/progress-overview` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ❌ 403 | V0.13 尚未實作；動作數據含他教練訓練（僅實際值）；assignments 僅計自己排的課，見 §3.11 |
+| `GET /athletes/{athleteId}/progress-overview` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ❌ 403 | V0.13 已實作；動作數據含他教練訓練（僅實際值）；assignments 僅計自己排的課，見 §3.11 |
 | `GET /sessions/{id}/exercise-options` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE session；SYSTEM + assignment Coach private exercises |
 | `POST /sessions/{id}/exercises` | ❌ 401 | ❌ 401 | ✅ add / remove / replace active exercises | ✅ add only | Athlete request carrying `replacesScheduledWorkoutExerciseId` → `409 CONFLICT` |
 | `DELETE /sessions/{id}/exercises/{exerciseId}` | ❌ 401 | ❌ 401 | ✅ any active exercise | ✅ only own `ATHLETE_ADDED` | soft remove; no plan or SetLog deletion |

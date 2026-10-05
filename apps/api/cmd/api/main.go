@@ -36,6 +36,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/logging"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/progressoverview"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/traininglog"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
@@ -157,6 +158,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
 	mux.Handle("GET /api/v1/training-log", authMiddleware(handleTrainingLog(pool)))
+	mux.Handle("GET /api/v1/athletes/{athleteId}/progress-overview", authMiddleware(handleProgressOverview(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}/exercise-options", authMiddleware(handleListSessionExerciseOptions(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/exercises", authMiddleware(handleAdjustSessionExercise(pool)))
 	mux.Handle("DELETE /api/v1/sessions/{sessionId}/exercises/{exerciseId}", authMiddleware(handleRemoveSessionExercise(pool)))
@@ -1346,6 +1348,41 @@ func handleTrainingLog(pool *pgxpool.Pool) http.HandlerFunc {
 			case errors.Is(err, traininglog.ErrNotFound):
 				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
 			case errors.Is(err, traininglog.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller role not allowed")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// handleProgressOverview returns the objective N-week summary of one athlete
+// (docs/go-backend-api-contract-v0.1.md §3.11). Coach with historical access
+// only: Athlete -> 403, no access or invalid UUID -> 404.
+func handleProgressOverview(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		resp, err := progressoverview.Get(r.Context(), pool, user, progressoverview.Query{
+			AthleteID: r.PathValue("athleteId"), Weeks: r.URL.Query().Get("weeks"),
+		}, time.Now().UTC())
+		if err != nil {
+			var validationErr *progressoverview.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, progressoverview.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
+			case errors.Is(err, progressoverview.ErrForbidden):
 				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller role not allowed")
 			default:
 				authn.WriteInternalError(w, r, err)
