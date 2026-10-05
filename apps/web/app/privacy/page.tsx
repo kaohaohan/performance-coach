@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { BRAND_NAME } from "@/lib/brand";
+import { TrainingLogSection } from "./training-log-section";
 
 const supportEmail = "haohan920@icloud.com";
 
@@ -40,6 +41,8 @@ export default function PrivacyPage() {
               record workouts, and let coaches and athletes view the training information they share through the app.
             </p>
           </section>
+
+          <TrainingLogSection />
 
           <section>
             <h2 className="text-xl font-semibold tracking-tight text-slate-900">3. Authentication providers</h2>

@@ -53,6 +53,17 @@ export const progress = {
   "progress.clients.empty": "No completed exercises in the last 6 months.",
   "progress.clients.lastTrained": "Last {date}",
   "progress.viewProgress": "View progress",
+
+  // Cross-coach visibility disclosure (join flow + Privacy page). Must ship
+  // with or before LAST / PR reaches production.
+  "progress.disclosure.join":
+    "Every Coach you connect with can see your full training log, including training you logged with other Coaches. A Coach sees another Coach's sessions as dates, exercises and sets only.",
+  "progress.disclosure.privacyLink": "Privacy Policy",
+  "privacy.trainingLog.heading": "Training log visibility",
+  "privacy.trainingLog.body1":
+    "Every Coach connected to you in PumpLoop can see your full training log, including training you logged with other Coaches. This lets a Coach see your lifting history and progress over time.",
+  "privacy.trainingLog.body2":
+    "Training logged under another Coach appears to a connected Coach as actuals only: the date, exercises, and sets (load, unit, reps, RIR). It does not show the other Coach's name, the workout name, coaching cues, or the planned prescription. You always see all of your own history.",
 } as const;
 
 export type ProgressMessages = Record<keyof typeof progress, string>;

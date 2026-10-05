@@ -53,4 +53,14 @@ export const progress: ProgressMessages = {
   "progress.clients.empty": "近 6 個月沒有已完成的動作。",
   "progress.clients.lastTrained": "最近 {date}",
   "progress.viewProgress": "查看進度",
+
+  // 跨教練可見性揭露（加入流程與隱私權政策）。
+  "progress.disclosure.join":
+    "每位與你連結的教練都能看到你完整的訓練紀錄，包括你和其他教練一起進行的訓練。教練看到其他教練的訓練時，只會看到日期、動作與組數。",
+  "progress.disclosure.privacyLink": "隱私權政策",
+  "privacy.trainingLog.heading": "訓練紀錄的可見範圍",
+  "privacy.trainingLog.body1":
+    "每位在 PumpLoop 與你連結的教練，都能看到你完整的訓練紀錄，包括你和其他教練一起進行的訓練，以便教練了解你的訓練歷史與長期進度。",
+  "privacy.trainingLog.body2":
+    "在其他教練名下記錄的訓練，連結的教練只會看到實際執行內容：日期、動作與各組（重量、單位、次數、RIR），不會看到其他教練的名字、課表名稱、教練提示或預定處方。你永遠能看到自己的全部歷史。",
 };
