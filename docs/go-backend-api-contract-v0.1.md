@@ -1183,6 +1183,22 @@ Response `200`：
 
 ---
 
+## 3.11 Progress Overview（V0.13 — approved, not yet implemented）
+
+### GET /athletes/{athleteId}/progress-overview?weeks=8 — Coach only
+
+唯讀摘要，給 Coach 一眼看單一 athlete 近 N 週的**客觀數據**。詳見 `docs/tasks/2026-10-05-coach-progress-overview.md`。
+
+- `weeks`：4–26，預設 8；範圍外 → `400 INVALID_ARGUMENT`。
+- 授權：Coach 且與 athlete 有 **historical access**，否則 `404`；Athlete caller → `403`；非法 UUID → `404`。
+- `exercises`（動作趨勢、PR 事件）涵蓋 athlete 在**任何 Coach** 下的 COMPLETED 訓練（與 §3.10 同一規則）；事件由 `internal/progress` 計算，比較對象為窗口前的完整歷史。
+- `assignments`（完成率、計畫組數 vs 完成組數）**只計 caller 自己排的 ScheduledWorkout**，`scope` 固定 `"OWN"`，不揭露其他 Coach 的處方或排程。
+- 完成率 = COMPLETED session ÷ caller 排的、日期 ≤ 今天且在窗口內的 ScheduledWorkout；未開始與進行中視為未完成；`scheduled = 0` 時 `completionRate: null`。計畫組數取凍結的 planned sets，完成組數取 `kind: PLANNED` 的 SetLog；EXTRA 另列 `extraSets`，不計入完成。
+- 每個動作每個單位一列（兩種單位 = 兩列，不換算）；`trend` 每週一點，無資料週為 `estimated1rm: null`（不插值）；`estimated1rm` 缺 RIR 時退而用頂組重量；`recentEvents` 為近 28 天事件，新到舊，最多 5 筆。
+- 不回傳任何 id（session / SetLog / 其他 Coach 的課表）、課表名稱，也**不回傳任何 grade、score、狀態標籤（Progressing / Stable / Needs review）或建議**。
+
+---
+
 # 4. 權限矩陣 (Authorization Matrix)
 
 四種 caller state 的定義見 §1 Authentication。Coach / Athlete 欄位中的 owner、connected 條件與其失敗碼直接寫在格內；endpoint 專屬的冪等性與衝突行為寫在 Constraints 欄。
@@ -1212,6 +1228,7 @@ Response `200`：
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
 | `GET /training-log` | ❌ 401 | ❌ 401 | ✅ **historical access**（不限排課 Coach）；指定無權 athlete ❌ 404 | ✅ 僅自己（不限 Coach）；指定他人 ❌ 404 | `OTHER_COACH` 遮蔽 id/課表名/cue/plan；不回 SetLog id；range ≤ 184 天，見 §3.10 |
+| `GET /athletes/{athleteId}/progress-overview` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ❌ 403 | V0.13 尚未實作；動作數據含他教練訓練（僅實際值）；assignments 僅計自己排的課，見 §3.11 |
 | `GET /sessions/{id}/exercise-options` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE session；SYSTEM + assignment Coach private exercises |
 | `POST /sessions/{id}/exercises` | ❌ 401 | ❌ 401 | ✅ add / remove / replace active exercises | ✅ add only | Athlete request carrying `replacesScheduledWorkoutExerciseId` → `409 CONFLICT` |
 | `DELETE /sessions/{id}/exercises/{exerciseId}` | ❌ 401 | ❌ 401 | ✅ any active exercise | ✅ only own `ATHLETE_ADDED` | soft remove; no plan or SetLog deletion |

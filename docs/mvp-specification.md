@@ -75,7 +75,7 @@ The product turns SetLogs into **raw data → trend → objective events → coa
 - **Events are computed, never hand-labelled:** Load PR, Rep PR, load change, Matched, Reps down. The rules are in the API contract §3.10.
 - **Cross-coach visibility:** a connected Coach sees the athlete's training logged under other Coaches. That training is shown as actuals only, without the other Coach's identity, workout name, cues, or prescription. The athlete is told this when joining and on the Privacy page.
 - **Units are never converted.** kg and lb are shown separately.
-- **Not in this release:** grades and scores; Progressing / Stable / Needs review judgments; recovery check-ins; and the Coach Progress Overview, which comes next with objective data only.
+- **Not in this release:** grades and scores; Progressing / Stable / Needs review judgments; recovery check-ins; and any Progress Overview status labels. The **Coach Progress Overview V1** (approved, `docs/tasks/2026-10-05-coach-progress-overview.md`) shows objective data only: completion rate and planned vs completed sets for the Coach's own assignments, plus per-exercise latest top set, 8-week trend, and recent PR events.
 
 ## **Coach & Athlete Onboarding — Implemented (V0.1)**
 
