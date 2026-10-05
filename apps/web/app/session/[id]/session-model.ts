@@ -1,4 +1,5 @@
 import type { Translate } from "@/lib/i18n";
+import type { ExerciseHistory } from "./history";
 import { orderedPlannedSets, targetSummary, type Plan, type PlannedSet } from "@/lib/prescription-summary";
 
 export type { Plan, PlannedSet };
@@ -29,6 +30,8 @@ export type SessionExercise = {
   removedAt?: string;
   removedByUserId?: string;
   replacesScheduledWorkoutExerciseId?: string;
+  // LAST / PR baseline; only GET /sessions/{id} returns it.
+  history?: ExerciseHistory;
 };
 
 export type ExerciseOption = { id: string; name: string; scope: "SYSTEM" | "PRIVATE" };

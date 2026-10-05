@@ -59,6 +59,13 @@ export const athlete: AthleteMessages = {
   "athlete.set.reps": "{count} 次",
   "athlete.set.bodyweight": "徒手",
 
+  "athlete.history.last": "上次 · {date}",
+  "athlete.history.prAt": "{load} {unit} 的 PR",
+  "athlete.history.prBodyweight": "PR 紀錄",
+  "athlete.history.badgeRepPr": "次數 PR",
+  "athlete.history.badgeMatched": "持平",
+  "athlete.history.badgeHint": "與先前訓練比較；最終結果於課程儲存後計算。",
+
   "athlete.status.active": "進行中",
   "athlete.status.completed": "已完成",
 

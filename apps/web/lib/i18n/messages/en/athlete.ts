@@ -62,6 +62,15 @@ export const athlete = {
   "athlete.set.reps": "{count} reps",
   "athlete.set.bodyweight": "Bodyweight",
 
+  // LAST / PR cards and the provisional badge on a just-logged set. "LAST",
+  // "PR" and "RIR" are gym vocabulary and stay in Latin letters in zh-TW.
+  "athlete.history.last": "LAST · {date}",
+  "athlete.history.prAt": "PR @ {load} {unit}",
+  "athlete.history.prBodyweight": "PR",
+  "athlete.history.badgeRepPr": "Rep PR",
+  "athlete.history.badgeMatched": "Matched",
+  "athlete.history.badgeHint": "Compared with your earlier sessions; the final result is calculated when the session is saved.",
+
   // Session status badge. Upper-case in English because that is how the
   // badge has always read; the Chinese form is ordinary words, since
   // capitalisation carries no meaning there.
