@@ -7,7 +7,7 @@ export type PlannedSet = {
   prescriptionNote?: string;
   load?: number;
   unit?: "kg" | "lb";
-  rpe?: number;
+  rir?: number;
 };
 
 export type Plan = { sets: PlannedSet[] };
@@ -21,12 +21,12 @@ export function samePrescription(left: PlannedSet, right: PlannedSet): boolean {
     && left.prescriptionNote === right.prescriptionNote
     && left.load === right.load
     && left.unit === right.unit
-    && left.rpe === right.rpe;
+    && left.rir === right.rir;
 }
 
 export function targetSummary(t: SummaryTranslate, target: PlannedSet): string {
   const prescription = target.reps === undefined ? target.prescriptionNote ?? "" : t("athlete.set.reps", { count: target.reps });
-  return [prescription, target.load === undefined ? "" : `${target.load} ${target.unit}`, target.rpe === undefined ? "" : `RPE ${target.rpe}`].filter(Boolean).join(" · ");
+  return withRir([prescription, target.load === undefined ? "" : `${target.load} ${target.unit}`].filter(Boolean).join(" · "), target.rir);
 }
 
 export function compactPrescription(t: SummaryTranslate, plan: Plan): string {
@@ -39,5 +39,11 @@ export function compactPrescription(t: SummaryTranslate, plan: Plan): string {
   const head = first.reps === undefined
     ? [String(targets.length), first.prescriptionNote ?? ""].filter(Boolean).join(" × ")
     : `${targets.length} × ${first.reps}`;
-  return [head, first.load === undefined ? "" : `${first.load} ${first.unit}`, first.rpe === undefined ? "" : `RPE ${first.rpe}`].filter(Boolean).join(" · ");
+  return withRir([head, first.load === undefined ? "" : `${first.load} ${first.unit}`].filter(Boolean).join(" · "), first.rir);
+}
+
+// Effort reads as a suffix: "4 × 5 · 80 kg @ 2 RIR" (docs/tasks/2026-10-04-rpe-to-rir.md).
+function withRir(text: string, rir: number | undefined): string {
+  if (rir === undefined) return text;
+  return text === "" ? `${rir} RIR` : `${text} @ ${rir} RIR`;
 }

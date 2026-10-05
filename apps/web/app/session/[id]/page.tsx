@@ -55,7 +55,7 @@ export default function SessionPage() {
   const [addedSets, setAddedSets] = useState("3");
   const [addedReps, setAddedReps] = useState("10");
   const [addedLoad, setAddedLoad] = useState("");
-  const [addedRpe, setAddedRpe] = useState("");
+  const [addedRir, setAddedRir] = useState("");
   const [adjusting, setAdjusting] = useState(false);
   const [adjustError, setAdjustError] = useState<string | null>(null);
   const [editingCueId, setEditingCueId] = useState<string | null>(null);
@@ -200,11 +200,11 @@ export default function SessionPage() {
         return;
       }
     }
-    let rpe: number | undefined;
-    if (form.rpe.trim() !== "") {
-      rpe = Number(form.rpe);
-      if (!Number.isFinite(rpe) || rpe < 1 || rpe > 10) {
-        updateForm(key, initial, { error: t("athlete.session.rpeInvalid") });
+    let rir: number | undefined;
+    if (form.rir.trim() !== "") {
+      rir = Number(form.rir);
+      if (!Number.isFinite(rir) || rir < 0 || rir > 9) {
+        updateForm(key, initial, { error: t("athlete.session.rirInvalid") });
         return;
       }
     }
@@ -215,7 +215,7 @@ export default function SessionPage() {
       body.load = load;
       body.unit = form.unit;
     }
-    if (rpe !== undefined) body.rpe = rpe;
+    if (rir !== undefined) body.rir = rir;
 
     submittingFormKeys.current.add(key);
     updateForm(key, initial, { submitting: true, error: null });
@@ -305,10 +305,10 @@ export default function SessionPage() {
     setAdjusting(true);
     setAdjustError(null);
     try {
-      const defaults: { reps: number; load?: number; unit?: "kg"; rpe?: number } = { reps };
+      const defaults: { reps: number; load?: number; unit?: "kg"; rir?: number } = { reps };
       if (addedLoad.trim() !== "") { defaults.load = Number(addedLoad); defaults.unit = "kg"; }
-      if (addedRpe.trim() !== "") defaults.rpe = Number(addedRpe);
-      if ((defaults.load !== undefined && (!Number.isFinite(defaults.load) || defaults.load < 0)) || (defaults.rpe !== undefined && (!Number.isFinite(defaults.rpe) || defaults.rpe < 1 || defaults.rpe > 10))) { setAdjustError(t("athlete.session.adjustNumbersInvalid")); return; }
+      if (addedRir.trim() !== "") defaults.rir = Number(addedRir);
+      if ((defaults.load !== undefined && (!Number.isFinite(defaults.load) || defaults.load < 0)) || (defaults.rir !== undefined && (!Number.isFinite(defaults.rir) || defaults.rir < 0 || defaults.rir > 9))) { setAdjustError(t("athlete.session.adjustNumbersInvalid")); return; }
       const added = await apiFetch<SessionExercise>(idToken, `/api/v1/sessions/${sessionId}/exercises`, {
         method: "POST",
         body: { exerciseId: selectedExerciseId, plan: { setCount, defaults, overrides: [] }, ...(replaceExerciseId ? { replacesScheduledWorkoutExerciseId: replaceExerciseId } : {}) },
@@ -390,7 +390,7 @@ export default function SessionPage() {
             setsLabel={t("athlete.session.adjustSets")}
             repsLabel={t("athlete.session.adjustReps")}
             loadLabel={t("athlete.session.adjustLoad")}
-            rpeLabel={t("athlete.session.adjustRpe")}
+            rirLabel={t("athlete.session.adjustRir")}
             submitLabel={adjusting ? t("common.saving") : replaceExerciseId ? t("athlete.session.replaceAndAdd") : t("athlete.session.addToWorkout")}
             canReplace={canReplace}
             adjusting={adjusting}
@@ -402,7 +402,7 @@ export default function SessionPage() {
             addedSets={addedSets}
             addedReps={addedReps}
             addedLoad={addedLoad}
-            addedRpe={addedRpe}
+            addedRir={addedRir}
             locale={locale}
             onClose={() => !adjusting && setAdjustOpen(false)}
             onSelectExercise={setSelectedExerciseId}
@@ -410,7 +410,7 @@ export default function SessionPage() {
             onSets={setAddedSets}
             onReps={setAddedReps}
             onLoad={setAddedLoad}
-            onRpe={setAddedRpe}
+            onRir={setAddedRir}
             onSubmit={handleAddExercise}
           />
         )}
@@ -465,9 +465,9 @@ export default function SessionPage() {
 const fieldClass = "min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3";
 
 function AddExerciseDialog({
-  title, closeLabel, exerciseLabel, replaceLabel, addWithoutReplacing, setsLabel, repsLabel, loadLabel, rpeLabel, submitLabel,
-  canReplace, adjusting, error, exerciseOptions, activeExercises, selectedExerciseId, replaceExerciseId, addedSets, addedReps, addedLoad, addedRpe, locale,
-  onClose, onSelectExercise, onSelectReplace, onSets, onReps, onLoad, onRpe, onSubmit,
+  title, closeLabel, exerciseLabel, replaceLabel, addWithoutReplacing, setsLabel, repsLabel, loadLabel, rirLabel, submitLabel,
+  canReplace, adjusting, error, exerciseOptions, activeExercises, selectedExerciseId, replaceExerciseId, addedSets, addedReps, addedLoad, addedRir, locale,
+  onClose, onSelectExercise, onSelectReplace, onSets, onReps, onLoad, onRir, onSubmit,
 }: {
   title: string;
   closeLabel: string;
@@ -477,7 +477,7 @@ function AddExerciseDialog({
   setsLabel: string;
   repsLabel: string;
   loadLabel: string;
-  rpeLabel: string;
+  rirLabel: string;
   submitLabel: string;
   canReplace: boolean;
   adjusting: boolean;
@@ -489,7 +489,7 @@ function AddExerciseDialog({
   addedSets: string;
   addedReps: string;
   addedLoad: string;
-  addedRpe: string;
+  addedRir: string;
   locale: "en" | "zh-TW";
   onClose: () => void;
   onSelectExercise: (id: string) => void;
@@ -497,7 +497,7 @@ function AddExerciseDialog({
   onSets: (value: string) => void;
   onReps: (value: string) => void;
   onLoad: (value: string) => void;
-  onRpe: (value: string) => void;
+  onRir: (value: string) => void;
   onSubmit: () => void;
 }) {
   return (
@@ -527,7 +527,7 @@ function AddExerciseDialog({
             <label className="grid min-w-0 gap-1 text-sm font-bold text-slate-700">{setsLabel}<input type="number" min="1" value={addedSets} onChange={(event) => onSets(event.target.value)} className={fieldClass} /></label>
             <label className="grid min-w-0 gap-1 text-sm font-bold text-slate-700">{repsLabel}<input type="number" min="1" value={addedReps} onChange={(event) => onReps(event.target.value)} className={fieldClass} /></label>
             <label className="grid min-w-0 gap-1 text-sm font-bold text-slate-700">{loadLabel}<input type="number" min="0" value={addedLoad} onChange={(event) => onLoad(event.target.value)} className={fieldClass} /></label>
-            <label className="grid min-w-0 gap-1 text-sm font-bold text-slate-700">{rpeLabel}<input type="number" min="1" max="10" step="0.5" value={addedRpe} onChange={(event) => onRpe(event.target.value)} className={fieldClass} /></label>
+            <label className="grid min-w-0 gap-1 text-sm font-bold text-slate-700">{rirLabel}<input type="number" min="0" max="9" step="0.5" value={addedRir} onChange={(event) => onRir(event.target.value)} className={fieldClass} /></label>
           </div>
           {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>}
           <button type="button" onClick={onSubmit} disabled={adjusting || !selectedExerciseId} className="min-h-12 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white disabled:opacity-50">{submitLabel}</button>

@@ -29,7 +29,7 @@ export default function PrivacyPage() {
             <p className="mt-3">
               We also collect the training information you or your coach enter in PumpLoop, including coach-athlete
               relationships, exercises, workout programs, scheduled workouts, workout sessions, and set logs such as
-              repetitions, load, unit, and RPE.
+              repetitions, load, unit, and RIR.
             </p>
           </section>
 

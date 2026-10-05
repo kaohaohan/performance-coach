@@ -162,7 +162,7 @@ export const calendar = {
   "calendar.exercise.dragHandle": "Drag to reorder",
   "calendar.exercise.mine": "Mine",
   "calendar.field.sets": "Sets",
-  // "RPE" itself is not a key: Taiwan coaches say "RPE", so a zh-TW value
+  // "RIR" itself is not a key: Taiwan coaches say "RIR", so a zh-TW value
   // would be identical to the English and the label stays a literal in the
   // JSX, exactly like the kg / lb unit options.
   "calendar.field.prescription": "Training target",
@@ -189,7 +189,7 @@ export const calendar = {
   "calendar.setSummaryReps": "{reps} reps",
   "calendar.useDefault": "Use default",
   "calendar.useDefaultLoad": "Use default load",
-  "calendar.useDefaultRpe": "Use default RPE",
+  "calendar.useDefaultRir": "Use default RIR",
   "calendar.moveUp": "Move earlier",
   "calendar.moveDown": "Move later",
 
@@ -228,7 +228,7 @@ export const calendar = {
   "calendar.validation.repsMin": "Reps must be at least 1.",
   "calendar.validation.instructionRequired": "Instruction is required.",
   "calendar.validation.loadMin": "Load must be 0 or greater.",
-  "calendar.validation.rpeRange": "RPE must be between 1 and 10.",
+  "calendar.validation.rirRange": "RIR must be between 0 and 9.",
   "calendar.validation.setOutsideCount": "Set {position} is outside the current set count.",
   "calendar.validation.setBothRepsAndText": "This set has both reps and text — pick one.",
   "calendar.validation.removeOverridesFirst":

@@ -150,14 +150,14 @@ export function buildRepeatCreateExercises(exercises: DraftExercise[]) {
         ...(item.prescriptionMode === "REPS" ? { reps: Number(item.defaultReps) } : { prescriptionNote: item.defaultPrescriptionNote.trim() }),
         ...(item.defaultLoad.trim() === "" ? {} : { load: Number(item.defaultLoad) }),
         ...(item.defaultLoad.trim() === "" && !item.overrides.some((override) => override.load !== undefined) ? {} : { unit: item.unit }),
-        ...(item.defaultRpe.trim() === "" ? {} : { rpe: Number(item.defaultRpe) }),
+        ...(item.defaultRir.trim() === "" ? {} : { rir: Number(item.defaultRir) }),
       },
       overrides: item.overrides.map((override) => ({
         position: override.position,
         ...(override.reps === undefined ? {} : { reps: Number(override.reps) }),
         ...(override.prescriptionNote === undefined ? {} : { prescriptionNote: override.prescriptionNote.trim() }),
         ...(override.load === undefined ? {} : { load: Number(override.load) }),
-        ...(override.rpe === undefined ? {} : { rpe: Number(override.rpe) }),
+        ...(override.rir === undefined ? {} : { rir: Number(override.rir) }),
       })),
     },
   }));

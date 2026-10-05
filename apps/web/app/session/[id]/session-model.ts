@@ -12,7 +12,7 @@ export type SetLog = {
   load?: number;
   unit?: "kg" | "lb";
   reps: number;
-  rpe?: number;
+  rir?: number;
   loggedByUserId: string;
 };
 
@@ -34,16 +34,16 @@ export type SessionExercise = {
 export type ExerciseOption = { id: string; name: string; scope: "SYSTEM" | "PRIVATE" };
 export type Me = { id: string; role: "COACH" | "ATHLETE" };
 export type SessionDetail = { id: string; status: "ACTIVE" | "COMPLETED"; athlete: { id: string; name: string }; exercises: SessionExercise[] };
-export type SetLogFormState = { load: string; unit: "kg" | "lb"; reps: string; rpe: string; submitting: boolean; error: string | null };
+export type SetLogFormState = { load: string; unit: "kg" | "lb"; reps: string; rir: string; submitting: boolean; error: string | null };
 export type SetLogKind = "PLANNED" | "EXTRA";
 export type EditFormState = SetLogFormState;
 
 export function emptyForm(): SetLogFormState {
-  return { load: "", unit: "kg", reps: "", rpe: "", submitting: false, error: null };
+  return { load: "", unit: "kg", reps: "", rir: "", submitting: false, error: null };
 }
 
 export function formForPlannedSet(target: PlannedSet): SetLogFormState {
-  return { load: target.load === undefined ? "" : String(target.load), unit: target.unit ?? "kg", reps: target.reps === undefined ? "" : String(target.reps), rpe: "", submitting: false, error: null };
+  return { load: target.load === undefined ? "" : String(target.load), unit: target.unit ?? "kg", reps: target.reps === undefined ? "" : String(target.reps), rir: "", submitting: false, error: null };
 }
 
 export function orderedTargets(exercise: SessionExercise): PlannedSet[] {
@@ -64,7 +64,7 @@ export function firstIncompleteTarget(exercise: SessionExercise): PlannedSet | u
 }
 
 export function actualSummary(t: Translate, log: SetLog): string {
-  return [log.load === undefined ? t("athlete.set.bodyweight") : `${log.load} ${log.unit}`, t("athlete.set.reps", { count: log.reps }), log.rpe === undefined ? "" : `RPE ${log.rpe}`].filter(Boolean).join(" · ");
+  return [log.load === undefined ? t("athlete.set.bodyweight") : `${log.load} ${log.unit}`, t("athlete.set.reps", { count: log.reps }), log.rir === undefined ? "" : `RIR ${log.rir}`].filter(Boolean).join(" · ");
 }
 
 export function plannedFormKey(target: PlannedSet): string {

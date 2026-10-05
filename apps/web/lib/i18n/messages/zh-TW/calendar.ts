@@ -9,7 +9,7 @@
 //   Sets               組數        one set is 第 N 組
 //   Reps               次數        a count of reps reads "{n} 次"
 //   Load               重量
-//   RPE                RPE         left in Latin — Taiwan coaches say "RPE"
+//   RIR                RIR         left in Latin — Taiwan coaches say "RIR"
 //   Unit               單位        kg / lb themselves stay untranslated
 //   Prescription       指定方式    the Reps-vs-Text choice
 //   Instruction        指示        the free-text prescription
@@ -176,7 +176,7 @@ export const calendar: CalendarMessages = {
   "calendar.setSummaryReps": "{reps} 次",
   "calendar.useDefault": "使用預設值",
   "calendar.useDefaultLoad": "使用預設重量",
-  "calendar.useDefaultRpe": "使用預設 RPE",
+  "calendar.useDefaultRir": "使用預設 RIR",
   "calendar.moveUp": "往前移動",
   "calendar.moveDown": "往後移動",
 
@@ -211,7 +211,7 @@ export const calendar: CalendarMessages = {
   "calendar.validation.repsMin": "次數至少為 1。",
   "calendar.validation.instructionRequired": "指示為必填。",
   "calendar.validation.loadMin": "重量必須大於或等於 0。",
-  "calendar.validation.rpeRange": "RPE 必須介於 1 到 10 之間。",
+  "calendar.validation.rirRange": "RIR 必須介於 0 到 9 之間。",
   "calendar.validation.setOutsideCount": "第 {position} 組超出目前的組數範圍。",
   "calendar.validation.setBothRepsAndText": "這一組同時有次數和文字 — 請擇一。",
   "calendar.validation.removeOverridesFirst": "請先移除超過新組數的個別設定，再減少組數。",

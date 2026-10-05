@@ -12,13 +12,13 @@ const t = (key: string, vars?: Record<string, string | number>) => {
 test("compactPrescription collapses a uniform plan", () => {
   const plan: Plan = {
     sets: [
-      { scheduledWorkoutPlannedSetId: "a", position: 1, reps: 5, load: 80, unit: "kg", rpe: 8 },
-      { scheduledWorkoutPlannedSetId: "b", position: 2, reps: 5, load: 80, unit: "kg", rpe: 8 },
-      { scheduledWorkoutPlannedSetId: "c", position: 3, reps: 5, load: 80, unit: "kg", rpe: 8 },
-      { scheduledWorkoutPlannedSetId: "d", position: 4, reps: 5, load: 80, unit: "kg", rpe: 8 },
+      { scheduledWorkoutPlannedSetId: "a", position: 1, reps: 5, load: 80, unit: "kg", rir: 2 },
+      { scheduledWorkoutPlannedSetId: "b", position: 2, reps: 5, load: 80, unit: "kg", rir: 2 },
+      { scheduledWorkoutPlannedSetId: "c", position: 3, reps: 5, load: 80, unit: "kg", rir: 2 },
+      { scheduledWorkoutPlannedSetId: "d", position: 4, reps: 5, load: 80, unit: "kg", rir: 2 },
     ],
   };
-  assert.equal(compactPrescription(t as never, plan), "4 × 5 · 80 kg · RPE 8");
+  assert.equal(compactPrescription(t as never, plan), "4 × 5 · 80 kg @ 2 RIR");
 });
 
 test("compactPrescription names mixed plans without listing every set", () => {

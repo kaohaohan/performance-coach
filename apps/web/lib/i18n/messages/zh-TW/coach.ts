@@ -13,7 +13,7 @@ import type { CoachMessages } from "../en/coach.ts";
 //   load                                             → 重量
 //   session (a performed workout)                    → 訓練
 //   invite code                                      → 邀請碼
-//   RPE, kg, lb                                      → left as-is
+//   RIR, kg, lb                                      → left as-is
 //
 // 學員 rather than 客戶: the repo's coach-facing UI deliberately says
 // "client" rather than "athlete" (docs/tasks/2026-08-24-coach-client-
@@ -131,7 +131,7 @@ export const coach: CoachMessages = {
 
   "coach.workouts.exerciseIndex": "動作 {number}",
   "coach.workouts.sets": "組數",
-  "coach.workouts.targetRpe": "目標 RPE",
+  "coach.workouts.targetRir": "目標 RIR",
   "coach.workouts.prescription": "指定方式",
   "coach.workouts.modeReps": "次數",
   "coach.workouts.modeText": "文字",
@@ -147,7 +147,7 @@ export const coach: CoachMessages = {
   "coach.workouts.repsValue": "{value} 次",
   "coach.workouts.useDefault": "使用預設",
   "coach.workouts.useDefaultLoad": "使用預設重量",
-  "coach.workouts.useDefaultRpe": "使用預設 RPE",
+  "coach.workouts.useDefaultRir": "使用預設 RIR",
   "coach.workouts.moveUp": "上移",
   "coach.workouts.moveDown": "下移",
 
@@ -156,14 +156,14 @@ export const coach: CoachMessages = {
   "coach.workouts.error.wholeNumber": "請輸入至少為 1 的整數。",
   "coach.workouts.error.noteRequired": "請輸入文字說明。",
   "coach.workouts.error.load": "重量必須為 0 或以上。",
-  "coach.workouts.error.rpe": "RPE 必須介於 1 到 10 之間。",
+  "coach.workouts.error.rir": "RIR 必須介於 0 到 9 之間。",
   "coach.workouts.error.setCountOverrides": "要減少組數前，請先移除超出新組數的個別設定。",
   "coach.workouts.error.overridePosition": "每個個別設定都必須在組數範圍內。",
   "coach.workouts.error.overrideMode": "每一組只能設定次數或文字其中一種，不能同時設定。",
   "coach.workouts.error.overrideReps": "個別次數必須是至少為 1 的整數。",
   "coach.workouts.error.overrideNote": "請輸入個別的文字說明。",
   "coach.workouts.error.overrideLoad": "個別重量必須為 0 或以上。",
-  "coach.workouts.error.overrideRpe": "個別 RPE 必須介於 1 到 10 之間。",
+  "coach.workouts.error.overrideRir": "個別 RIR 必須介於 0 到 9 之間。",
 
   "coach.picker.title": "新增動作",
   "coach.picker.startTyping": "開始輸入即可搜尋動作。",

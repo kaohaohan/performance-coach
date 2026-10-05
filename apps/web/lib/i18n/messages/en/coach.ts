@@ -141,11 +141,11 @@ export const coach = {
   "coach.workouts.save": "Save Workout",
   "coach.workouts.saving": "Saving workout…",
 
-  // Draft exercise card. "RPE" and the kg/lb units are left untranslated on
+  // Draft exercise card. "RIR" and the kg/lb units are left untranslated on
   // purpose: both are written the same way by Taiwan coaches.
   "coach.workouts.exerciseIndex": "Exercise {number}",
   "coach.workouts.sets": "Sets",
-  "coach.workouts.targetRpe": "Target RPE",
+  "coach.workouts.targetRir": "Target RIR",
   "coach.workouts.prescription": "Prescription",
   "coach.workouts.modeReps": "Reps",
   "coach.workouts.modeText": "Text",
@@ -161,7 +161,7 @@ export const coach = {
   "coach.workouts.repsValue": "{value} reps",
   "coach.workouts.useDefault": "Use default",
   "coach.workouts.useDefaultLoad": "Use default load",
-  "coach.workouts.useDefaultRpe": "Use default RPE",
+  "coach.workouts.useDefaultRir": "Use default RIR",
   "coach.workouts.moveUp": "Move Up",
   "coach.workouts.moveDown": "Move Down",
 
@@ -172,7 +172,7 @@ export const coach = {
   "coach.workouts.error.wholeNumber": "Enter a whole number of at least 1.",
   "coach.workouts.error.noteRequired": "Instruction is required.",
   "coach.workouts.error.load": "Load must be 0 or greater.",
-  "coach.workouts.error.rpe": "RPE must be between 1 and 10.",
+  "coach.workouts.error.rir": "RIR must be between 0 and 9.",
   "coach.workouts.error.setCountOverrides":
     "Remove overrides above the new set count before reducing sets.",
   "coach.workouts.error.overridePosition":
@@ -183,7 +183,7 @@ export const coach = {
     "Individual reps must be a whole number of at least 1.",
   "coach.workouts.error.overrideNote": "Individual text instruction is required.",
   "coach.workouts.error.overrideLoad": "Individual load must be 0 or greater.",
-  "coach.workouts.error.overrideRpe": "Individual RPE must be between 1 and 10.",
+  "coach.workouts.error.overrideRir": "Individual RIR must be between 0 and 9.",
 
   // Exercise picker inside the workout builder.
   "coach.picker.title": "Add Exercise",

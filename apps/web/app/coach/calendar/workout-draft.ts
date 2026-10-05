@@ -42,7 +42,7 @@ export type DraftSetOverride = {
   reps?: string;
   prescriptionNote?: string;
   load?: string;
-  rpe?: string;
+  rir?: string;
 };
 
 export type DraftExercise = {
@@ -56,7 +56,7 @@ export type DraftExercise = {
   loadIncrement: number;
   setIncrement: number;
   repsIncrement: number;
-  defaultRpe: string;
+  defaultRir: string;
   coachCue: string;
   overrides: DraftSetOverride[];
   customizationOpen: boolean;
@@ -88,7 +88,7 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
               draftOverride.prescriptionNote = override.prescriptionNote;
             }
             if (override.load !== undefined) draftOverride.load = String(override.load);
-            if (override.rpe !== undefined) draftOverride.rpe = String(override.rpe);
+            if (override.rir !== undefined) draftOverride.rir = String(override.rir);
             return draftOverride;
           });
 
@@ -106,7 +106,7 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
           loadIncrement: item.loadIncrement ?? defaultLoadIncrement(unit),
           setIncrement: item.setIncrement ?? 0,
           repsIncrement: item.repsIncrement ?? 0,
-          defaultRpe: item.plan.defaults.rpe !== undefined ? String(item.plan.defaults.rpe) : "",
+          defaultRir: item.plan.defaults.rir !== undefined ? String(item.plan.defaults.rir) : "",
           coachCue: item.coachCue ?? "",
           overrides,
           customizationOpen: false,

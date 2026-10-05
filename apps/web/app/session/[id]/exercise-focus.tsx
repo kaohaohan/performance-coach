@@ -250,7 +250,7 @@ function CompactFields({ form, onChange }: { form: SetLogFormState; onChange: (p
         <option value="lb">lb</option>
       </select>
       <input aria-label={t("athlete.session.fieldReps")} type="number" inputMode="numeric" placeholder={t("athlete.session.fieldReps")} value={form.reps} onChange={(event) => onChange({ reps: event.target.value })} className={field} />
-      <input aria-label={t("athlete.session.fieldActualRpe")} type="number" inputMode="decimal" placeholder="RPE" value={form.rpe} onChange={(event) => onChange({ rpe: event.target.value })} className={field} />
+      <input aria-label={t("athlete.session.fieldActualRir")} type="number" inputMode="decimal" placeholder="RIR" value={form.rir} onChange={(event) => onChange({ rir: event.target.value })} className={field} />
     </div>
   );
 }

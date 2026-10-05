@@ -4,7 +4,7 @@
 // standing next to the athlete logs sets on it too — so its copy is written
 // to read correctly for either person holding the phone.
 //
-// Domain vocabulary (set / rep / load / RPE) is fixed here and translated
+// Domain vocabulary (set / rep / load / RIR) is fixed here and translated
 // once. It must not be reassembled from fragments at the call site: Chinese
 // word order differs, so a phrase that reads correctly in English produces
 // nonsense when its pieces are concatenated in the same order. Every whole
@@ -13,7 +13,7 @@
 // number.
 //
 // Two exceptions are deliberately *not* keys and stay as literals in the
-// page: "RPE" (an acronym used identically by Taiwan coaches) and the kg/lb
+// page: "RIR" (an acronym used identically by Taiwan coaches) and the kg/lb
 // unit symbols. Neither has a Chinese form, and routing them through the
 // catalog would only invite someone to invent one.
 export const athlete = {
@@ -103,7 +103,7 @@ export const athlete = {
   "athlete.session.adjustSets": "Sets",
   "athlete.session.adjustReps": "Reps per set",
   "athlete.session.adjustLoad": "Load (optional, kg)",
-  "athlete.session.adjustRpe": "RPE (optional)",
+  "athlete.session.adjustRir": "RIR (optional)",
   "athlete.session.replaceAndAdd": "Replace and add",
   "athlete.session.addToWorkout": "Add to this workout",
   "athlete.session.athleteAdded": "Added by you",
@@ -126,14 +126,14 @@ export const athlete = {
   "athlete.session.showExtras": "Extra sets ({count})",
   "athlete.session.hideExtras": "Hide extra sets",
   "athlete.session.adjustSetsRepsInvalid": "Enter valid sets and reps.",
-  "athlete.session.adjustNumbersInvalid": "Check the load and RPE values.",
+  "athlete.session.adjustNumbersInvalid": "Check the load and RIR values.",
 
   // Set-log form. These labels sit above numeric inputs, so they name the
   // quantity and nothing else.
   "athlete.session.fieldLoad": "Load",
   "athlete.session.fieldUnit": "Unit",
   "athlete.session.fieldReps": "Reps",
-  "athlete.session.fieldActualRpe": "Actual RPE",
+  "athlete.session.fieldActualRir": "Actual RIR",
   "athlete.session.fieldOptional": "optional",
   "athlete.session.textPrescriptionHint": "Record the numeric reps completed.",
 
@@ -141,7 +141,7 @@ export const athlete = {
   // the rule the value broke rather than "invalid input".
   "athlete.session.repsInvalid": "Reps must be a whole number ≥ 1.",
   "athlete.session.loadInvalid": "Load must be a number ≥ 0.",
-  "athlete.session.rpeInvalid": "Actual RPE must be between 1 and 10.",
+  "athlete.session.rirInvalid": "Actual RIR must be between 0 and 9.",
   "athlete.session.editSet": "Edit set",
   "athlete.session.cancelEdit": "Cancel",
   "athlete.session.saveEdit": "Save",
