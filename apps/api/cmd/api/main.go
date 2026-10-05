@@ -6,10 +6,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -35,6 +37,7 @@ import (
 	"github.com/kaohaohan/performance-coach/apps/api/internal/migrate"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/scheduledworkout"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/traininglog"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workout"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/workoutsession"
 )
@@ -144,6 +147,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("POST /api/v1/exercises", authMiddleware(handleCreateExercise(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
+	mux.Handle("PATCH /api/v1/workouts/{workoutId}", authMiddleware(handlePatchWorkout(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts", authMiddleware(handleCreateScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts", authMiddleware(handleListScheduledWorkouts(pool)))
 	mux.Handle("GET /api/v1/scheduled-workouts/{id}", authMiddleware(handleGetScheduledWorkout(pool)))
@@ -152,6 +156,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /api/v1/me/scheduled-workouts", authMiddleware(handleListMyScheduledWorkouts(pool)))
 	mux.Handle("POST /api/v1/scheduled-workouts/{id}/session", authMiddleware(handleStartSession(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}", authMiddleware(handleGetSession(pool)))
+	mux.Handle("GET /api/v1/training-log", authMiddleware(handleTrainingLog(pool)))
 	mux.Handle("GET /api/v1/sessions/{sessionId}/exercise-options", authMiddleware(handleListSessionExerciseOptions(pool)))
 	mux.Handle("POST /api/v1/sessions/{sessionId}/exercises", authMiddleware(handleAdjustSessionExercise(pool)))
 	mux.Handle("DELETE /api/v1/sessions/{sessionId}/exercises/{exerciseId}", authMiddleware(handleRemoveSessionExercise(pool)))
@@ -713,6 +718,7 @@ type createWorkoutExerciseRequest struct {
 	Name          string                   `json:"name"`
 	LoadIncrement *float64                 `json:"loadIncrement"`
 	SetIncrement  *int                     `json:"setIncrement"`
+	RepsIncrement *int                     `json:"repsIncrement"`
 	Plan          createWorkoutPlanRequest `json:"plan"`
 	CoachCue      *string                  `json:"coachCue"`
 }
@@ -728,7 +734,7 @@ type createWorkoutDefaultsRequest struct {
 	PrescriptionNote *string  `json:"prescriptionNote"`
 	Load             *float64 `json:"load"`
 	Unit             *string  `json:"unit"`
-	RPE              *float64 `json:"rpe"`
+	RIR              *float64 `json:"rir"`
 }
 
 type createWorkoutOverrideRequest struct {
@@ -736,7 +742,7 @@ type createWorkoutOverrideRequest struct {
 	Reps             *int     `json:"reps"`
 	PrescriptionNote *string  `json:"prescriptionNote"`
 	Load             *float64 `json:"load"`
-	RPE              *float64 `json:"rpe"`
+	RIR              *float64 `json:"rir"`
 }
 
 func mapWorkoutOverrides(overrides []createWorkoutOverrideRequest) []prescription.SetOverride {
@@ -747,7 +753,7 @@ func mapWorkoutOverrides(overrides []createWorkoutOverrideRequest) []prescriptio
 			Reps:             override.Reps,
 			PrescriptionNote: override.PrescriptionNote,
 			Load:             override.Load,
-			RPE:              override.RPE,
+			RIR:              override.RIR,
 		}
 	}
 	return mapped
@@ -772,8 +778,7 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var req createWorkoutRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+		if !decodeEffortRequest(w, r, &req) {
 			return
 		}
 
@@ -786,10 +791,11 @@ func handleCreateWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 				Name:          ex.Name,
 				LoadIncrement: ex.LoadIncrement,
 				SetIncrement:  ex.SetIncrement,
+				RepsIncrement: ex.RepsIncrement,
 				CoachCue:      ex.CoachCue,
 				Plan: prescription.Plan{
 					SetCount:  ex.Plan.SetCount,
-					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RPE: ex.Plan.Defaults.RPE},
+					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RIR: ex.Plan.Defaults.RIR},
 					Overrides: mapWorkoutOverrides(ex.Plan.Overrides),
 				},
 			}
@@ -841,6 +847,46 @@ func handleListWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+type patchWorkoutRequest struct {
+	Name string `json:"name"`
+}
+
+// handlePatchWorkout renames a coach-owned workout template (§3.3 PATCH).
+func handlePatchWorkout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req patchWorkoutRequest
+		if !decodeEffortRequest(w, r, &req) {
+			return
+		}
+
+		updated, err := workout.Patch(r.Context(), pool, user, r.PathValue("workoutId"), workout.PatchInput{Name: req.Name})
+		if err != nil {
+			var validationErr *workout.ValidationError
+			switch {
+			case errors.Is(err, workout.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+			case errors.Is(err, workout.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "workout not found")
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(updated)
+	}
+}
+
 // createScheduledWorkoutRequest is the wire shape for a POST
 // /api/v1/scheduled-workouts request body
 // (docs/go-backend-api-contract-v0.1.md §3.5).
@@ -867,8 +913,7 @@ func handleCreateScheduledWorkouts(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var req createScheduledWorkoutRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+		if !decodeEffortRequest(w, r, &req) {
 			return
 		}
 
@@ -1010,8 +1055,7 @@ func handleUpdateScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 		scheduledWorkoutID := r.PathValue("id")
 
 		var req updateScheduledWorkoutRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+		if !decodeEffortRequest(w, r, &req) {
 			return
 		}
 
@@ -1024,7 +1068,7 @@ func handleUpdateScheduledWorkout(pool *pgxpool.Pool) http.HandlerFunc {
 				CoachCue: ex.CoachCue,
 				Plan: prescription.Plan{
 					SetCount:  ex.Plan.SetCount,
-					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RPE: ex.Plan.Defaults.RPE},
+					Defaults:  prescription.Defaults{Reps: ex.Plan.Defaults.Reps, PrescriptionNote: ex.Plan.Defaults.PrescriptionNote, Load: ex.Plan.Defaults.Load, Unit: ex.Plan.Defaults.Unit, RIR: ex.Plan.Defaults.RIR},
 					Overrides: mapWorkoutOverrides(ex.Plan.Overrides),
 				},
 			}
@@ -1278,6 +1322,43 @@ func handleGetSession(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// handleTrainingLog returns actual training with engine-computed events
+// (docs/go-backend-api-contract-v0.1.md §3.10). Coach (historical access) or
+// Athlete (self); an athleteId the caller cannot read is 404, not 403.
+func handleTrainingLog(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		qs := r.URL.Query()
+		resp, err := traininglog.List(r.Context(), pool, user, traininglog.Query{
+			From: qs.Get("from"), To: qs.Get("to"), AthleteID: qs.Get("athleteId"),
+			ExerciseID: qs.Get("exerciseId"), Status: qs.Get("status"),
+		})
+		if err != nil {
+			var validationErr *traininglog.ValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+			case errors.Is(err, traininglog.ErrNotFound):
+				authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "athlete not found")
+			case errors.Is(err, traininglog.ErrForbidden):
+				authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller role not allowed")
+			default:
+				authn.WriteInternalError(w, r, err)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
 type adjustSessionExerciseRequest struct {
 	ExerciseID                         string                   `json:"exerciseId"`
 	Plan                               createWorkoutPlanRequest `json:"plan"`
@@ -1290,7 +1371,7 @@ func mapSessionExercisePlan(plan createWorkoutPlanRequest) prescription.Plan {
 		SetCount: plan.SetCount,
 		Defaults: prescription.Defaults{
 			Reps: plan.Defaults.Reps, PrescriptionNote: plan.Defaults.PrescriptionNote,
-			Load: plan.Defaults.Load, Unit: plan.Defaults.Unit, RPE: plan.Defaults.RPE,
+			Load: plan.Defaults.Load, Unit: plan.Defaults.Unit, RIR: plan.Defaults.RIR,
 		},
 		Overrides: mapWorkoutOverrides(plan.Overrides),
 	}
@@ -1335,8 +1416,7 @@ func handleAdjustSessionExercise(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		var req adjustSessionExerciseRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+		if !decodeEffortRequest(w, r, &req) {
 			return
 		}
 		exercise, err := workoutsession.AdjustExercise(r.Context(), pool, user, r.PathValue("sessionId"), workoutsession.AdjustExerciseInput{
@@ -1448,7 +1528,7 @@ type createSetLogRequest struct {
 	Load                         *float64 `json:"load"`
 	Unit                         *string  `json:"unit"`
 	Reps                         *int     `json:"reps"`
-	RPE                          *float64 `json:"rpe"`
+	RIR                          *float64 `json:"rir"`
 }
 
 // handleCreateSetLog decodes the request body, delegates validation,
@@ -1467,8 +1547,7 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 		sessionID := r.PathValue("sessionId")
 
 		var req createSetLogRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+		if !decodeEffortRequest(w, r, &req) {
 			return
 		}
 
@@ -1479,7 +1558,7 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 			Load:                         req.Load,
 			Unit:                         req.Unit,
 			Reps:                         req.Reps,
-			RPE:                          req.RPE,
+			RIR:                          req.RIR,
 		}
 
 		setLog, err := workoutsession.CreateSetLog(r.Context(), pool, user, sessionID, input)
@@ -1510,9 +1589,70 @@ func handleCreateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// errLegacyRPE is returned for write requests that still carry the pre-RIR
+// `rpe` key. The handlers do not use DisallowUnknownFields, so without this
+// guard a stale client's effort value would be silently dropped. Temporary:
+// remove once no client sends `rpe` (docs/tasks/2026-10-04-rpe-to-rir.md).
+var errLegacyRPE = errors.New("rpe is no longer accepted; use rir")
+
+// containsLegacyRPEKey reports whether any object in the decoded JSON value
+// has an `rpe` key, at any depth.
+func containsLegacyRPEKey(v any) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			if k == "rpe" || containsLegacyRPEKey(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if containsLegacyRPEKey(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// decodeJSONRejectingLegacyRPE decodes the request body into dst after
+// rejecting any legacy `rpe` key.
+func decodeJSONRejectingLegacyRPE(r *http.Request, dst any) error {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	var generic any
+	if err := json.Unmarshal(body, &generic); err != nil {
+		return err
+	}
+	if containsLegacyRPEKey(generic) {
+		return errLegacyRPE
+	}
+	return json.NewDecoder(bytes.NewReader(body)).Decode(dst)
+}
+
+func writeDecodeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errLegacyRPE) {
+		authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", errLegacyRPE.Error())
+		return
+	}
+	authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+}
+
+// decodeEffortRequest decodes a write body that may carry effort (RIR)
+// fields, writing the 400 response itself on failure.
+func decodeEffortRequest(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := decodeJSONRejectingLegacyRPE(r, dst); err != nil {
+		writeDecodeError(w, err)
+		return false
+	}
+	return true
+}
+
 func decodeUpdateSetLogRequest(r *http.Request) (workoutsession.UpdateSetLogInput, error) {
 	var fields map[string]json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+	if err := decodeJSONRejectingLegacyRPE(r, &fields); err != nil {
 		return workoutsession.UpdateSetLogInput{}, err
 	}
 	var in workoutsession.UpdateSetLogInput
@@ -1536,7 +1676,7 @@ func decodeUpdateSetLogRequest(r *http.Request) (workoutsession.UpdateSetLogInpu
 	if err := decode("reps", &in.Reps, &in.RepsPresent); err != nil {
 		return in, err
 	}
-	if err := decode("rpe", &in.RPE, &in.RPEPresent); err != nil {
+	if err := decode("rir", &in.RIR, &in.RIRPresent); err != nil {
 		return in, err
 	}
 	return in, nil
@@ -1551,7 +1691,7 @@ func handleUpdateSetLog(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 		input, err := decodeUpdateSetLogRequest(r)
 		if err != nil {
-			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			writeDecodeError(w, err)
 			return
 		}
 		setLog, err := workoutsession.UpdateSetLog(r.Context(), pool, user, r.PathValue("setLogId"), input)

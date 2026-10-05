@@ -56,11 +56,11 @@ func TestGetReturnsFrozenPlannedTargetsAndActualAssociations(t *testing.T) {
 	requireIntegrationDB(t)
 	ctx := context.Background()
 	reps10, reps8 := 10, 8
-	load80, rpe8 := 80.0, 8.0
+	load80, rir8 := 80.0, 8.0
 	amap, kg := "AMAP", "kg"
 	setup := newSession(t, []workout.CreateExerciseInput{{
 		Name: integrationPrefix + " frozen",
-		Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RPE: &rpe8}, Overrides: []prescription.SetOverride{
+		Plan: prescription.Plan{SetCount: 3, Defaults: prescription.Defaults{Reps: &reps10, Load: &load80, Unit: &kg, RIR: &rir8}, Overrides: []prescription.SetOverride{
 			{Position: 2, Reps: &reps8},
 			{Position: 3, PrescriptionNote: &amap},
 		}},
@@ -68,8 +68,8 @@ func TestGetReturnsFrozenPlannedTargetsAndActualAssociations(t *testing.T) {
 	exercise := setup.created.Exercises[0]
 	plannedOne, plannedThree := exercise.Plan.Sets[0], exercise.Plan.Sets[2]
 
-	actualLoad, actualRPE, actualReps, actualUnit := 82.5, 9.0, 7, "lb"
-	first, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedThree.ScheduledWorkoutPlannedSetID, &actualLoad, &actualUnit, &actualReps, &actualRPE))
+	actualLoad, actualRIR, actualReps, actualUnit := 82.5, 9.0, 7, "lb"
+	first, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedThree.ScheduledWorkoutPlannedSetID, &actualLoad, &actualUnit, &actualReps, &actualRIR))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestGetReturnsFrozenPlannedTargetsAndActualAssociations(t *testing.T) {
 		t.Fatalf("detail exercises = %#v", detail.Exercises)
 	}
 	sets := detail.Exercises[0].Plan.Sets
-	if sets[0].Position != 1 || valueInt(sets[0].Reps) != 10 || valueFloat(sets[0].Load) != 80 || valueString(sets[0].Unit) != "kg" || valueFloat(sets[0].RPE) != 8 {
+	if sets[0].Position != 1 || valueInt(sets[0].Reps) != 10 || valueFloat(sets[0].Load) != 80 || valueString(sets[0].Unit) != "kg" || valueFloat(sets[0].RIR) != 8 {
 		t.Fatalf("first frozen target = %#v", sets[0])
 	}
 	if sets[1].Position != 2 || valueInt(sets[1].Reps) != 8 || sets[1].PrescriptionNote != nil {
@@ -198,21 +198,21 @@ func TestCreateSetLogValidationClaimsAuthorizationAndCompletion(t *testing.T) {
 func TestUpdateSetLogActiveSessionAuthorizationAndMergedValidation(t *testing.T) {
 	requireIntegrationDB(t)
 	ctx := context.Background()
-	reps, load, rpe, unit := 5, 80.0, 7.0, "kg"
-	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " patch", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe}}}})
+	reps, load, rir, unit := 5, 80.0, 7.0, "kg"
+	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " patch", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir}}}})
 	exercise := setup.created.Exercises[0]
 	plannedID := exercise.Plan.Sets[0].ScheduledWorkoutPlannedSetID
-	logged, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedID, &load, &unit, &reps, &rpe))
+	logged, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedID, &load, &unit, &reps, &rir))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	newReps, newRPE := 6, 8.0
-	updated, err := workoutsession.UpdateSetLog(ctx, integrationPool, setup.athlete, logged.ID, workoutsession.UpdateSetLogInput{Reps: &newReps, RepsPresent: true, RPE: &newRPE, RPEPresent: true})
+	newReps, newRIR := 6, 8.0
+	updated, err := workoutsession.UpdateSetLog(ctx, integrationPool, setup.athlete, logged.ID, workoutsession.UpdateSetLogInput{Reps: &newReps, RepsPresent: true, RIR: &newRIR, RIRPresent: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Reps != newReps || updated.RPE == nil || *updated.RPE != newRPE || updated.Kind != logged.Kind || updated.SetNumber != logged.SetNumber || updated.LoggedByUserID != logged.LoggedByUserID || updated.ScheduledWorkoutPlannedSetID == nil || *updated.ScheduledWorkoutPlannedSetID != plannedID {
+	if updated.Reps != newReps || updated.RIR == nil || *updated.RIR != newRIR || updated.Kind != logged.Kind || updated.SetNumber != logged.SetNumber || updated.LoggedByUserID != logged.LoggedByUserID || updated.ScheduledWorkoutPlannedSetID == nil || *updated.ScheduledWorkoutPlannedSetID != plannedID {
 		t.Fatalf("updated log changed unexpected fields: %#v", updated)
 	}
 
@@ -234,11 +234,11 @@ func TestUpdateSetLogActiveSessionAuthorizationAndMergedValidation(t *testing.T)
 func TestUpdateSetLogCompletedSessionIsReadOnly(t *testing.T) {
 	requireIntegrationDB(t)
 	ctx := context.Background()
-	reps, load, rpe, unit := 5, 80.0, 7.0, "kg"
-	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " patch completed", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe}}}})
+	reps, load, rir, unit := 5, 80.0, 7.0, "kg"
+	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " patch completed", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir}}}})
 	exercise := setup.created.Exercises[0]
 	plannedID := exercise.Plan.Sets[0].ScheduledWorkoutPlannedSetID
-	logged, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedID, &load, &unit, &reps, &rpe))
+	logged, err := workoutsession.CreateSetLog(ctx, integrationPool, setup.athlete, setup.session.ID, plannedInput(exercise.ScheduledWorkoutExerciseID, plannedID, &load, &unit, &reps, &rir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestGetClassifiesLegacyLinkedAndExtraLogs(t *testing.T) {
 	setup := newSession(t, []workout.CreateExerciseInput{{Name: integrationPrefix + " legacy", Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}}}})
 	exercise := setup.created.Exercises[0]
 	plannedID := exercise.Plan.Sets[0].ScheduledWorkoutPlannedSetID
-	if _, err := integrationPool.Exec(ctx, `INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rpe, logged_by_user_id, created_at) VALUES ($1, $2, $3, $4, 1, NULL, NULL, 5, NULL, $5, now()), ($6, $2, $3, NULL, 2, NULL, NULL, 4, NULL, $5, now())`, uuid.NewString(), setup.session.ID, exercise.ScheduledWorkoutExerciseID, plannedID, setup.athlete.ID, uuid.NewString()); err != nil {
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO set_logs (id, session_id, scheduled_workout_exercise_id, scheduled_workout_planned_set_id, set_number, load, unit, reps, rir, logged_by_user_id, created_at) VALUES ($1, $2, $3, $4, 1, NULL, NULL, 5, NULL, $5, now()), ($6, $2, $3, NULL, 2, NULL, NULL, 4, NULL, $5, now())`, uuid.NewString(), setup.session.ID, exercise.ScheduledWorkoutExerciseID, plannedID, setup.athlete.ID, uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := workoutsession.Get(ctx, integrationPool, setup.athlete, setup.session.ID)
@@ -454,8 +454,8 @@ func newSession(t *testing.T, exercises []workout.CreateExerciseInput) sessionSe
 	return sessionSetup{coach: coach, athlete: athlete, workout: w, created: created[0], session: session}
 }
 
-func plannedInput(exerciseID, plannedSetID string, load *float64, unit *string, reps *int, rpe *float64) workoutsession.CreateSetLogInput {
-	return workoutsession.CreateSetLogInput{Kind: "PLANNED", ScheduledWorkoutExerciseID: exerciseID, ScheduledWorkoutPlannedSetID: &plannedSetID, Load: load, Unit: unit, Reps: reps, RPE: rpe}
+func plannedInput(exerciseID, plannedSetID string, load *float64, unit *string, reps *int, rir *float64) workoutsession.CreateSetLogInput {
+	return workoutsession.CreateSetLogInput{Kind: "PLANNED", ScheduledWorkoutExerciseID: exerciseID, ScheduledWorkoutPlannedSetID: &plannedSetID, Load: load, Unit: unit, Reps: reps, RIR: rir}
 }
 
 func extraInput(exerciseID string, reps *int) workoutsession.CreateSetLogInput {
@@ -540,6 +540,7 @@ func cleanupIntegration(ctx context.Context) {
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM scheduled_workouts WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM workout_exercise_set_overrides WHERE workout_exercise_id IN (SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id WHERE w.coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1))`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1))`, pattern)
+	_, _ = integrationPool.Exec(ctx, `DELETE FROM exercises WHERE owner_coach_id IS NULL AND name LIKE $1`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM workouts WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM exercises WHERE owner_coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM coach_athletes WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1) OR athlete_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)

@@ -9,7 +9,7 @@
 //   Sets               組數        one set is 第 N 組
 //   Reps               次數        a count of reps reads "{n} 次"
 //   Load               重量
-//   RPE                RPE         left in Latin — Taiwan coaches say "RPE"
+//   RIR                RIR         left in Latin — Taiwan coaches say "RIR"
 //   Unit               單位        kg / lb themselves stay untranslated
 //   Prescription       指定方式    the Reps-vs-Text choice
 //   Instruction        指示        the free-text prescription
@@ -166,6 +166,8 @@ export const calendar: CalendarMessages = {
   "calendar.field.loadIncrementHint": "僅在為一位運動員複製或重複課表時套用；有完成紀錄時優先使用上次實際重量。",
   "calendar.field.setIncrement": "每週 +1 組",
   "calendar.field.setIncrementHint": "為一位運動員複製或重複課表時多加一組。",
+  "calendar.field.repsIncrement": "每週加幾次",
+  "calendar.field.repsIncrementHint": "為一位運動員複製或重複課表時要加上的次數，空白表示不加。與每週 +1 組互不影響。",
   "calendar.field.unit": "單位",
   "calendar.prescription.reps": "次數",
   "calendar.prescription.text": "自訂目標",
@@ -174,7 +176,7 @@ export const calendar: CalendarMessages = {
   "calendar.setSummaryReps": "{reps} 次",
   "calendar.useDefault": "使用預設值",
   "calendar.useDefaultLoad": "使用預設重量",
-  "calendar.useDefaultRpe": "使用預設 RPE",
+  "calendar.useDefaultRir": "使用預設 RIR",
   "calendar.moveUp": "往前移動",
   "calendar.moveDown": "往後移動",
 
@@ -209,7 +211,7 @@ export const calendar: CalendarMessages = {
   "calendar.validation.repsMin": "次數至少為 1。",
   "calendar.validation.instructionRequired": "指示為必填。",
   "calendar.validation.loadMin": "重量必須大於或等於 0。",
-  "calendar.validation.rpeRange": "RPE 必須介於 1 到 10 之間。",
+  "calendar.validation.rirRange": "RIR 必須介於 0 到 9 之間。",
   "calendar.validation.setOutsideCount": "第 {position} 組超出目前的組數範圍。",
   "calendar.validation.setBothRepsAndText": "這一組同時有次數和文字 — 請擇一。",
   "calendar.validation.removeOverridesFirst": "請先移除超過新組數的個別設定，再減少組數。",
@@ -282,6 +284,7 @@ export const calendar: CalendarMessages = {
   "calendar.repeatWeek.dateShift": "{source} 移至 {target}",
   "calendar.repeatWeek.conflict": "目標日期已有課表",
   "calendar.repeatWeek.setsPreview": "{name}：{sourceSets} → {suggestedSets} 組",
+  "calendar.repeatWeek.repsPreview": "{sourceReps} → {suggestedReps} 次",
   "calendar.repeatWeek.loadPreview": "重量 {load}",
   "calendar.repeatWeek.noLoad": "無重量",
   "calendar.repeatWeek.success": "已將 {count} 份課表重複到下週。",

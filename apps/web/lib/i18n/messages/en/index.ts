@@ -23,6 +23,7 @@ import { athlete } from "./athlete.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { settings } from "./settings.ts";
+import { progress } from "./progress.ts";
 
 export const en = {
   ...auth,
@@ -32,6 +33,7 @@ export const en = {
   ...common,
   ...errors,
   ...settings,
+  ...progress,
 } as const;
 
 // MessageKey is every key the app may ask for; Catalog is a complete

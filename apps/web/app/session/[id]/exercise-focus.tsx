@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { useLocale, useT } from "@/lib/i18n";
@@ -21,6 +22,7 @@ import {
   type SetLogFormState,
   type SetLogKind,
 } from "./session-model";
+import { lastSummary, prFor, prHeading, provisionalBadge, shortDate } from "./history";
 
 export function ExerciseFocus({
   exercise,
@@ -37,6 +39,7 @@ export function ExerciseFocus({
   savingCue,
   cueError,
   adjusting,
+  progressHref,
   canRemove,
   hasPrev,
   hasNext,
@@ -71,6 +74,9 @@ export function ExerciseFocus({
   savingCue: boolean;
   cueError: string | null;
   adjusting: boolean;
+  // Exercise Progress page for this exercise and athlete; undefined until the
+  // caller's role is known.
+  progressHref?: string;
   canRemove: boolean;
   hasPrev: boolean;
   hasNext: boolean;
@@ -98,6 +104,7 @@ export function ExerciseFocus({
   const extraKey = extraFormKey(exercise);
   const extraInitial = emptyForm();
   const extraForm = getForm(extraKey, extraInitial);
+  const latestLog = isActive ? exercise.setLogs.reduce<SetLog | undefined>((latest, log) => latest === undefined || log.setNumber > latest.setNumber ? log : latest, undefined) : undefined;
 
   return (
     <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-950/5">
@@ -111,7 +118,7 @@ export function ExerciseFocus({
       </div>
       <div className="px-4 pb-2">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold tracking-tight">{localizeExerciseName(exercise.name, locale)}</h2>
+          <h2 className="text-lg font-semibold tracking-tight">{progressHref ? <Link href={progressHref} className="underline decoration-slate-300 decoration-2 underline-offset-4 hover:decoration-teal-600">{localizeExerciseName(exercise.name, locale)}</Link> : localizeExerciseName(exercise.name, locale)}</h2>
           {exercise.origin === "ATHLETE_ADDED" && <span className="text-[11px] font-medium text-slate-500">{t("athlete.session.athleteAdded")}</span>}
           {exercise.origin === "COACH_ADDED" && <span className="text-[11px] font-medium text-slate-500">{t("athlete.session.coachAdded")}</span>}
         </div>
@@ -120,6 +127,8 @@ export function ExerciseFocus({
       </div>
 
       {(exercise.coachCue || canEditCoachCue) && <CueBlock exercise={exercise} canEdit={canEditCoachCue} editing={editingCueId === exercise.scheduledWorkoutExerciseId} cueDraft={cueDraft} saving={savingCue} error={cueError} onDraft={onCueDraft} onBegin={onBeginCue} onCancel={onCancelCue} onSave={onSaveCue} />}
+
+      <HistoryCards exercise={exercise} currentTarget={currentTarget} />
 
       <div className="px-4 pb-2">
         <div className="grid grid-cols-[2rem_minmax(0,1fr)_auto] gap-2 border-b border-slate-200 pb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
@@ -135,7 +144,7 @@ export function ExerciseFocus({
               <>
                 <span className="text-sm font-bold text-slate-700">{target.position}</span>
                 <span className="truncate text-sm text-slate-500">{targetSummary(t, target)}</span>
-                <span className="text-sm font-semibold text-emerald-800">{actualSummary(t, actual)}</span>
+                <span className="text-sm font-semibold text-emerald-800">{actualSummary(t, actual)}{latestLog?.id === actual.id && <SetBadge exercise={exercise} log={actual} />}</span>
               </>
             );
             return (
@@ -185,7 +194,7 @@ export function ExerciseFocus({
           <div className="mt-3">
             {extras.map((log) => (
               <div key={log.id} className="mb-2 rounded-xl bg-stone-50 px-3 py-2">
-                {isActive && editingLogId === log.id ? <EditLog form={getForm(editKey(log), emptyForm())} onChange={(patch) => updateForm(editKey(log), getForm(editKey(log), emptyForm()), patch)} onSave={() => onSaveEdit(log, exercise.scheduledWorkoutExerciseId)} onCancel={() => onCancelEdit(log)} /> : isActive ? <button type="button" className="block w-full text-left" onClick={() => onBeginEdit(log)}><p className="text-xs font-bold text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold">{actualSummary(t, log)}</p></button> : <><p className="text-xs font-bold text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold">{actualSummary(t, log)}</p></>}
+                {isActive && editingLogId === log.id ? <EditLog form={getForm(editKey(log), emptyForm())} onChange={(patch) => updateForm(editKey(log), getForm(editKey(log), emptyForm()), patch)} onSave={() => onSaveEdit(log, exercise.scheduledWorkoutExerciseId)} onCancel={() => onCancelEdit(log)} /> : isActive ? <button type="button" className="block w-full text-left" onClick={() => onBeginEdit(log)}><p className="text-xs font-bold text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold">{actualSummary(t, log)}{latestLog?.id === log.id && <SetBadge exercise={exercise} log={log} />}</p></button> : <><p className="text-xs font-bold text-slate-500">{t("athlete.session.extraLoggedNumber", { number: log.setNumber })}</p><p className="mt-1 text-sm font-semibold">{actualSummary(t, log)}</p></>}
               </div>
             ))}
             {isActive && (
@@ -201,6 +210,37 @@ export function ExerciseFocus({
       </div>
     </section>
   );
+}
+
+function HistoryCards({ exercise, currentTarget }: { exercise: SessionExercise; currentTarget: PlannedSet | undefined }) {
+  const t = useT();
+  const history = exercise.history;
+  if (history === undefined || history.last === null) return null;
+  const pr = prFor(history, currentTarget?.load, currentTarget?.unit);
+  return (
+    <div className="mx-4 mb-3 grid gap-2 sm:grid-cols-2">
+      <div className="rounded-xl bg-stone-50 px-3 py-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{t("athlete.history.last", { date: shortDate(history.last.date) })}</p>
+        <p className="mt-0.5 text-sm font-semibold tabular-nums text-slate-800">{lastSummary(history.last)}</p>
+      </div>
+      {pr !== null && (
+        <div className="rounded-xl bg-stone-50 px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{prHeading(t, pr)}</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-slate-800">{t("athlete.set.reps", { count: pr.reps })}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Provisional: judged only against earlier sessions. The saved result is
+// computed by the server (docs/tasks/2026-10-04-training-history.md).
+function SetBadge({ exercise, log }: { exercise: SessionExercise; log: SetLog }) {
+  const t = useT();
+  const badge = provisionalBadge(exercise.history, log);
+  if (badge === null) return null;
+  const repPr = badge === "REP_PR";
+  return <span title={t("athlete.history.badgeHint")} className={`ml-2 inline-block rounded-full px-2 py-0.5 align-middle text-[11px] font-bold ${repPr ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>{t(repPr ? "athlete.history.badgeRepPr" : "athlete.history.badgeMatched")}</span>;
 }
 
 function CueBlock({
@@ -250,7 +290,7 @@ function CompactFields({ form, onChange }: { form: SetLogFormState; onChange: (p
         <option value="lb">lb</option>
       </select>
       <input aria-label={t("athlete.session.fieldReps")} type="number" inputMode="numeric" placeholder={t("athlete.session.fieldReps")} value={form.reps} onChange={(event) => onChange({ reps: event.target.value })} className={field} />
-      <input aria-label={t("athlete.session.fieldActualRpe")} type="number" inputMode="decimal" placeholder="RPE" value={form.rpe} onChange={(event) => onChange({ rpe: event.target.value })} className={field} />
+      <input aria-label={t("athlete.session.fieldActualRir")} type="number" inputMode="decimal" placeholder="RIR" value={form.rir} onChange={(event) => onChange({ rir: event.target.value })} className={field} />
     </div>
   );
 }

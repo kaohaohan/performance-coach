@@ -42,7 +42,7 @@ export type DraftSetOverride = {
   reps?: string;
   prescriptionNote?: string;
   load?: string;
-  rpe?: string;
+  rir?: string;
 };
 
 export type DraftExercise = {
@@ -55,7 +55,8 @@ export type DraftExercise = {
   unit: PlannedUnit;
   loadIncrement: number;
   setIncrement: number;
-  defaultRpe: string;
+  repsIncrement: number;
+  defaultRir: string;
   coachCue: string;
   overrides: DraftSetOverride[];
   customizationOpen: boolean;
@@ -87,7 +88,7 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
               draftOverride.prescriptionNote = override.prescriptionNote;
             }
             if (override.load !== undefined) draftOverride.load = String(override.load);
-            if (override.rpe !== undefined) draftOverride.rpe = String(override.rpe);
+            if (override.rir !== undefined) draftOverride.rir = String(override.rir);
             return draftOverride;
           });
 
@@ -104,7 +105,8 @@ export function savedWorkoutToDraft(workout: Workout): { name: string; exercises
           unit,
           loadIncrement: item.loadIncrement ?? defaultLoadIncrement(unit),
           setIncrement: item.setIncrement ?? 0,
-          defaultRpe: item.plan.defaults.rpe !== undefined ? String(item.plan.defaults.rpe) : "",
+          repsIncrement: item.repsIncrement ?? 0,
+          defaultRir: item.plan.defaults.rir !== undefined ? String(item.plan.defaults.rir) : "",
           coachCue: item.coachCue ?? "",
           overrides,
           customizationOpen: false,
@@ -123,6 +125,7 @@ export type DraftEditTarget = {
   scheduledWorkoutId: string;
   athleteId: string;
   athleteName: string;
+  workoutId: string;
   workoutName: string;
 };
 

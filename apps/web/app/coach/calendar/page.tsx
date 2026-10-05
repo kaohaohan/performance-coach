@@ -92,7 +92,7 @@ type ScheduledWorkoutPlannedSetDTO = {
   prescriptionNote?: string;
   load?: number;
   unit?: PlannedUnit;
-  rpe?: number;
+  rir?: number;
 };
 type ScheduledWorkoutExerciseDTO = {
   scheduledWorkoutExerciseId: string;
@@ -113,8 +113,8 @@ type ScheduledWorkoutDetail = {
 // ExerciseFieldName enumerates the per-exercise "default" fields that can be
 // validated on their own, so blur-time and submit-time validation can share
 // one rule per field (validateExerciseField) instead of drifting apart.
-type ExerciseFieldName = "sets" | "reps" | "note" | "load" | "rpe";
-const EXERCISE_FIELDS: readonly ExerciseFieldName[] = ["sets", "reps", "note", "load", "rpe"];
+type ExerciseFieldName = "sets" | "reps" | "note" | "load" | "rir";
+const EXERCISE_FIELDS: readonly ExerciseFieldName[] = ["sets", "reps", "note", "load", "rir"];
 
 // ExerciseFieldErrors keys per-set problems by set position rather than
 // collapsing every override problem into one string: a bad value on set 7 of 8
@@ -194,7 +194,7 @@ function validateRepsValue(t: Translate, raw: string): string | undefined {
   return undefined;
 }
 
-// Blank is valid — load and RPE are both optional. Only a present-but-unusable
+// Blank is valid — load and RIR are both optional. Only a present-but-unusable
 // value is an error.
 function validateOptionalNumber(raw: string, min: number, max: number | undefined, message: string): string | undefined {
   if (raw.trim() === "") return undefined;
@@ -220,8 +220,8 @@ function validateExerciseField(t: Translate, item: DraftExercise, field: Exercis
       return item.prescriptionMode === "TEXT" && item.defaultPrescriptionNote.trim() === "" ? t("calendar.validation.instructionRequired") : undefined;
     case "load":
       return validateOptionalNumber(item.defaultLoad, 0, undefined, t("calendar.validation.loadMin"));
-    case "rpe":
-      return validateOptionalNumber(item.defaultRpe, 1, 10, t("calendar.validation.rpeRange"));
+    case "rir":
+      return validateOptionalNumber(item.defaultRir, 0, 9, t("calendar.validation.rirRange"));
   }
 }
 
@@ -243,8 +243,8 @@ function validateExerciseOverrides(t: Translate, item: DraftExercise): Record<nu
       errors[override.position] = load;
       return;
     }
-    const rpe = validateOptionalNumber(override.rpe ?? "", 1, 10, t("calendar.validation.rpeRange"));
-    if (rpe !== undefined) errors[override.position] = rpe;
+    const rir = validateOptionalNumber(override.rir ?? "", 0, 9, t("calendar.validation.rirRange"));
+    if (rir !== undefined) errors[override.position] = rir;
   });
 
   for (let position = 1; position <= setCount; position += 1) {
@@ -273,7 +273,7 @@ const ERRORS_CLEARED_BY: Partial<Record<keyof DraftExercise, readonly (ExerciseF
   defaultReps: ["reps", "overrides"],
   defaultPrescriptionNote: ["note", "overrides"],
   defaultLoad: ["load", "overrides"],
-  defaultRpe: ["rpe", "overrides"],
+  defaultRir: ["rir", "overrides"],
   overrides: ["overrides"],
 };
 
@@ -294,7 +294,7 @@ function compactOverride(override: DraftSetOverride): DraftSetOverride | null {
   if (override.reps !== undefined && override.reps !== "") next.reps = override.reps;
   if (override.prescriptionNote !== undefined && override.prescriptionNote.trim() !== "") next.prescriptionNote = override.prescriptionNote;
   if (override.load !== undefined && override.load.trim() !== "") next.load = override.load;
-  if (override.rpe !== undefined && override.rpe.trim() !== "") next.rpe = override.rpe;
+  if (override.rir !== undefined && override.rir.trim() !== "") next.rir = override.rir;
   return Object.keys(next).length === 1 ? null : next;
 }
 
@@ -306,7 +306,7 @@ function updateDraftOverride(overrides: DraftSetOverride[], position: number, up
     : [...overrides.filter((override) => override.position !== position), next].sort((left, right) => left.position - right.position);
 }
 
-function clearDraftOverrideProperty(overrides: DraftSetOverride[], position: number, property: "prescription" | "load" | "rpe"): DraftSetOverride[] {
+function clearDraftOverrideProperty(overrides: DraftSetOverride[], position: number, property: "prescription" | "load" | "rir"): DraftSetOverride[] {
   if (property === "prescription") return updateDraftOverride(overrides, position, { prescriptionMode: undefined, reps: undefined, prescriptionNote: undefined });
   return updateDraftOverride(overrides, position, { [property]: undefined });
 }
@@ -346,6 +346,7 @@ function buildExercisesPayload(items: DraftExercise[]) {
     name: item.exercise.name,
     loadIncrement: item.loadIncrement,
     setIncrement: item.setIncrement,
+    repsIncrement: item.repsIncrement,
     ...(item.coachCue.trim() === "" ? {} : { coachCue: item.coachCue.trim() }),
     plan: {
       setCount: Number(item.setCount),
@@ -353,14 +354,14 @@ function buildExercisesPayload(items: DraftExercise[]) {
         ...(item.prescriptionMode === "REPS" ? { reps: Number(item.defaultReps) } : { prescriptionNote: item.defaultPrescriptionNote.trim() }),
         ...(item.defaultLoad.trim() === "" ? {} : { load: Number(item.defaultLoad) }),
         ...(item.defaultLoad.trim() === "" && !item.overrides.some((override) => override.load !== undefined) ? {} : { unit: item.unit }),
-        ...(item.defaultRpe.trim() === "" ? {} : { rpe: Number(item.defaultRpe) }),
+        ...(item.defaultRir.trim() === "" ? {} : { rir: Number(item.defaultRir) }),
       },
       overrides: item.overrides.map((override) => ({
         position: override.position,
         ...(override.reps === undefined ? {} : { reps: Number(override.reps) }),
         ...(override.prescriptionNote === undefined ? {} : { prescriptionNote: override.prescriptionNote.trim() }),
         ...(override.load === undefined ? {} : { load: Number(override.load) }),
-        ...(override.rpe === undefined ? {} : { rpe: Number(override.rpe) }),
+        ...(override.rir === undefined ? {} : { rir: Number(override.rir) }),
       })),
     },
   }));
@@ -385,8 +386,8 @@ function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise
     const setMode: PrescriptionMode = set.reps !== undefined ? "REPS" : "TEXT";
     const prescriptionDiffers = setMode !== baseMode || (setMode === "REPS" ? set.reps !== base?.reps : set.prescriptionNote !== base?.prescriptionNote);
     const loadDiffers = (set.load ?? null) !== (base?.load ?? null);
-    const rpeDiffers = (set.rpe ?? null) !== (base?.rpe ?? null);
-    if (!prescriptionDiffers && !loadDiffers && !rpeDiffers) continue;
+    const rirDiffers = (set.rir ?? null) !== (base?.rir ?? null);
+    if (!prescriptionDiffers && !loadDiffers && !rirDiffers) continue;
 
     const override: DraftSetOverride = { position: set.position };
     if (prescriptionDiffers) {
@@ -395,7 +396,7 @@ function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise
       else override.prescriptionNote = set.prescriptionNote ?? "";
     }
     if (loadDiffers) override.load = set.load !== undefined && set.load !== null ? String(set.load) : "";
-    if (rpeDiffers) override.rpe = set.rpe !== undefined && set.rpe !== null ? String(set.rpe) : "";
+    if (rirDiffers) override.rir = set.rir !== undefined && set.rir !== null ? String(set.rir) : "";
     overrides.push(override);
   }
 
@@ -412,7 +413,8 @@ function snapshotExerciseToDraft(ex: ScheduledWorkoutExerciseDTO): DraftExercise
     unit: base?.unit ?? "kg",
     loadIncrement: defaultLoadIncrement(base?.unit === "lb" ? "lb" : "kg"),
     setIncrement: 0,
-    defaultRpe: base?.rpe !== undefined && base?.rpe !== null ? String(base.rpe) : "",
+    repsIncrement: 0,
+    defaultRir: base?.rir !== undefined && base?.rir !== null ? String(base.rir) : "",
     coachCue: ex.coachCue ?? "",
     overrides,
     customizationOpen: false,
@@ -1202,7 +1204,8 @@ export default function CoachCalendarPage() {
       unit: "kg",
       loadIncrement: defaultLoadIncrement("kg"),
       setIncrement: 0,
-      defaultRpe: "",
+      repsIncrement: 0,
+      defaultRir: "",
       coachCue: "",
       overrides: [],
       customizationOpen: false,
@@ -2213,7 +2216,7 @@ export default function CoachCalendarPage() {
         return;
       }
 
-      setDraftName("");
+      setDraftName(detail.workout.name);
       setDraftExercises(detail.exercises.map(snapshotExerciseToDraft));
       setExpandedExerciseId(null);
       setExtraAthleteIds([]);
@@ -2226,6 +2229,7 @@ export default function CoachCalendarPage() {
         scheduledWorkoutId: detail.id,
         athleteId: detail.athlete.id,
         athleteName: detail.athlete.name,
+        workoutId: detail.workout.id,
         workoutName: detail.workout.name,
       });
       setProgrammingMode("BUILD");
@@ -2260,6 +2264,13 @@ export default function CoachCalendarPage() {
     buildInFlight.current = true;
     setBuildStatus("savingChanges");
     try {
+      const trimmedName = draftName.trim() || editTarget.workoutName;
+      if (trimmedName !== editTarget.workoutName) {
+        await apiFetch(idToken, `/api/v1/workouts/${editTarget.workoutId}`, {
+          method: "PATCH",
+          body: { name: trimmedName },
+        });
+      }
       await apiFetch(idToken, `/api/v1/scheduled-workouts/${editTarget.scheduledWorkoutId}`, {
         method: "PUT",
         body: { exercises: buildExercisesPayload(draftExercises) },
@@ -2347,10 +2358,13 @@ export default function CoachCalendarPage() {
                   {draftRestoredNotice && <Notice tone="success">{editTarget ? t("calendar.draft.restored") : t("calendar.draft.restoredRecheck")}</Notice>}
                   {copiedFromWorkoutName !== null && <Notice tone="success">{t("calendar.assign.copyNotice", { name: copiedFromWorkoutName })}</Notice>}
 
-                  {!editTarget && <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.workoutNameLabel")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-slate-700">
+                      {t("calendar.workoutNameLabel")}{" "}
+                      {!editTarget && <span className="font-normal text-slate-500">{t("calendar.optional")}</span>}
+                    </span>
                     <input value={draftName} onChange={(event) => setDraftName(event.target.value)} placeholder={t("calendar.workoutNamePlaceholder")} disabled={programmingControlsDisabled} className="min-h-14 w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 text-base font-medium outline-none placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:cursor-not-allowed disabled:bg-slate-100" />
-                  </label>}
+                  </label>
 
                   <div>
                     <div className="flex items-baseline justify-between gap-3">
@@ -2644,6 +2658,12 @@ export default function CoachCalendarPage() {
                   {item.exercises.map((exercise) => (
                     <li key={`${item.sourceAssignmentId}-${exercise.name}`}>
                       {t("calendar.repeatWeek.setsPreview", { name: exercise.name, sourceSets: exercise.sourceSets, suggestedSets: exercise.suggestedSets })}
+                      {exercise.sourceReps !== null && exercise.suggestedReps !== null && (
+                        <>
+                          {" · "}
+                          {t("calendar.repeatWeek.repsPreview", { sourceReps: exercise.sourceReps, suggestedReps: exercise.suggestedReps })}
+                        </>
+                      )}
                       {" · "}
                       {exercise.suggestedLoad ?? t("calendar.repeatWeek.noLoad")}
                     </li>
@@ -2753,12 +2773,12 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
       ? { mode: "REPS" as const, value: effective.reps }
       : { mode: "TEXT" as const, value: effective.prescriptionNote ?? "" };
   };
-  const effectiveValue = (position: number, property: "load" | "rpe") => item.overrides.find((candidate) => candidate.position === position)?.[property] ?? (property === "load" ? item.defaultLoad : item.defaultRpe);
+  const effectiveValue = (position: number, property: "load" | "rir") => item.overrides.find((candidate) => candidate.position === position)?.[property] ?? (property === "load" ? item.defaultLoad : item.defaultRir);
   const updateOverride = (position: number, update: Partial<DraftSetOverride>) => onChange({ overrides: updateDraftOverride(item.overrides, position, update) });
-  const clearOverride = (position: number, property: "prescription" | "load" | "rpe") => onChange({ overrides: clearDraftOverrideProperty(item.overrides, position, property) });
+  const clearOverride = (position: number, property: "prescription" | "load" | "rir") => onChange({ overrides: clearDraftOverrideProperty(item.overrides, position, property) });
   const toggleSetEditor = (position: number) => onChange({ editingPositions: item.editingPositions.includes(position) ? [] : [position] });
 
-  const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRpe === "" ? "" : `RPE ${item.defaultRpe}`].filter(Boolean).join(" · ");
+  const summary = [item.setCount === "" ? "—" : `${item.setCount} ${t("calendar.field.sets").toLowerCase()}`, textMode ? item.defaultPrescriptionNote : item.defaultReps === "" ? "—" : t("calendar.setSummaryReps", { reps: item.defaultReps }), item.defaultLoad === "" ? "" : `${item.defaultLoad} ${item.unit}`, item.defaultRir === "" ? "" : `RIR ${item.defaultRir}`].filter(Boolean).join(" · ");
   const cardClass = `relative rounded-2xl border bg-white ${disabled ? "" : "cursor-grab active:cursor-grabbing"} ${dropPlacement !== null ? "border-teal-500 ring-2 ring-teal-500/30 ring-offset-2" : "border-slate-200"} ${dragActive && !dragging ? "z-[41] pointer-events-none opacity-45" : ""} ${dragging ? "z-50 scale-[1.02] rotate-[0.3deg] border-teal-500 opacity-95 shadow-2xl ring-4 ring-teal-500/20" : ""}`;
   const dragStyle: CSSProperties | undefined = dragging && dragMetrics !== null
     ? { position: "fixed", left: dragMetrics.x - dragMetrics.offsetX, top: dragMetrics.y - dragMetrics.offsetY, width: dragMetrics.width, pointerEvents: "none", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", transition: "none", willChange: "left, top, transform" }
@@ -2773,7 +2793,7 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
     <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="min-w-0 text-left"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("calendar.exercise.number", { number: index + 1 })}</p><h3 className="mt-1 text-lg font-semibold tracking-tight">{localizeExerciseName(item.exercise.name, locale)}</h3></button></div><div className="flex items-center gap-2"><button type="button" onClick={onToggle} aria-expanded="true" aria-controls={`${baseId}-details`} className="shrink-0 rounded-lg px-2 py-1 text-sm font-semibold text-teal-700 hover:bg-teal-50">{t("calendar.exercise.collapse")} <span aria-hidden="true">▴</span></button>{item.exercise.scope === "PRIVATE" && <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold tracking-wide text-teal-700">{t("calendar.exercise.mine")}</span>}</div></div>
     <div className="mt-4 grid gap-4 sm:grid-cols-2">
       <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.sets")}</span><input ref={setsInputRef} type="number" inputMode="numeric" min="1" step="1" value={item.setCount} onChange={(event) => onSetCountChange(event.target.value)} onBlur={() => onValidateField("sets")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.sets && <FieldError>{errors.sets}</FieldError>}</label>
-      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={item.defaultRpe} onChange={(event) => onChange({ defaultRpe: event.target.value })} onBlur={() => onValidateField("rpe")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rpe && <FieldError>{errors.rpe}</FieldError>}</label>
+      <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RIR <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="0" max="9" step="0.5" value={item.defaultRir} onChange={(event) => onChange({ defaultRir: event.target.value })} onBlur={() => onValidateField("rir")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.rir && <FieldError>{errors.rir}</FieldError>}</label>
     </div>
     <fieldset className="mt-4"><legend className="text-sm font-semibold text-slate-700">{t("calendar.field.prescription")}</legend><div className="mt-2 flex flex-wrap gap-2"><PrescriptionModeButton active={!textMode} onClick={() => onChange({ prescriptionMode: "REPS" })} disabled={disabled}>{t("calendar.prescription.reps")}</PrescriptionModeButton><PrescriptionModeButton active={textMode} onClick={() => onChange({ prescriptionMode: "TEXT" })} disabled={disabled}>{t("calendar.prescription.text")}</PrescriptionModeButton></div></fieldset>
     {textMode
@@ -2796,19 +2816,20 @@ function DraftExerciseCard({ item, index, total, errors, disabled, expanded, dra
     <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_8rem]"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="number" inputMode="decimal" min="0" step="0.5" value={item.defaultLoad} onChange={(event) => onChange({ defaultLoad: event.target.value })} onBlur={() => onValidateField("load")} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{errors?.load && <FieldError>{errors.load}</FieldError>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.unit")}</span><select value={item.unit} onChange={(event) => { const unit = event.target.value as PlannedUnit; onChange({ unit, loadIncrement: normalizeLoadIncrement(unit, item.loadIncrement) }); }} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value="kg">kg</option><option value="lb">lb</option></select></label></div>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.loadIncrement")}</span><select value={item.loadIncrement} onChange={(event) => onChange({ loadIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100">{allowedLoadIncrements(item.unit).map((option) => <option key={option} value={option}>{option === 0 ? t("calendar.optional") : `+${option} ${item.unit}`}</option>)}</select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.loadIncrementHint")}</p></label>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.setIncrement")}</span><select value={item.setIncrement} onChange={(event) => onChange({ setIncrement: Number(event.target.value) })} disabled={disabled} className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100"><option value={0}>{t("calendar.optional")}</option><option value={1}>+1 {t("calendar.field.sets").toLowerCase()}</option></select><p className="mt-1 text-xs text-slate-500">{t("calendar.field.setIncrementHint")}</p></label>
+    <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.repsIncrement")} <span className="font-normal text-slate-500">{t("calendar.optional")}</span></span><input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" value={item.repsIncrement === 0 ? "" : String(item.repsIncrement)} onChange={(event) => { const raw = event.target.value.trim(); if (raw === "") { onChange({ repsIncrement: 0 }); return; } if (!/^\d+$/.test(raw)) return; const next = Number(raw); if (next > 20) return; onChange({ repsIncrement: next }); }} disabled={disabled} placeholder="0" className="min-h-12 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100 placeholder:text-slate-400" /><p className="mt-1 text-xs text-slate-500">{t("calendar.field.repsIncrementHint")}</p></label>
     <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.coachCue")}</span><textarea value={item.coachCue} maxLength={500} rows={2} onChange={(event) => onChange({ coachCue: event.target.value })} disabled={disabled} placeholder={t("calendar.field.coachCuePlaceholder")} className="min-h-20 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 py-2 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100 placeholder:text-slate-400" /></label>
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{t("calendar.plannedSets")}</p>
       {setCount > 0 && <div className="mt-3 grid gap-2">{Array.from({ length: setCount }, (_, offset) => offset + 1).map((position) => {
         const prescription = effectivePrescription(position);
         const load = effectiveValue(position, "load");
-        const rpe = effectiveValue(position, "rpe");
+        const rir = effectiveValue(position, "rir");
         const override = item.overrides.find((candidate) => candidate.position === position);
         const editing = item.editingPositions.includes(position);
         const positionError = errors?.overrides?.[position];
-        return <div key={position} className={`rounded-xl border p-3 ${positionError === undefined ? "border-slate-200" : "border-red-300 bg-red-50/40"}`}><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="font-semibold text-slate-800">{t("calendar.setNumber", { position })}</p><p className="mt-0.5 text-sm text-slate-600">{prescription.mode === "REPS" ? t("calendar.setSummaryReps", { reps: prescription.value }) : prescription.value}{load !== "" && ` · ${load} ${item.unit}`}{rpe !== "" && ` · RPE ${rpe}`}</p></div><button type="button" onClick={() => toggleSetEditor(position)} disabled={disabled} className="min-h-10 rounded-lg px-3 text-sm font-bold text-teal-700 hover:bg-teal-50 disabled:opacity-50">{editing ? t("common.done") : t("common.edit")}</button></div>
+        return <div key={position} className={`rounded-xl border p-3 ${positionError === undefined ? "border-slate-200" : "border-red-300 bg-red-50/40"}`}><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="font-semibold text-slate-800">{t("calendar.setNumber", { position })}</p><p className="mt-0.5 text-sm text-slate-600">{prescription.mode === "REPS" ? t("calendar.setSummaryReps", { reps: prescription.value }) : prescription.value}{load !== "" && ` · ${load} ${item.unit}`}{rir !== "" && ` · RIR ${rir}`}</p></div><button type="button" onClick={() => toggleSetEditor(position)} disabled={disabled} className="min-h-10 rounded-lg px-3 text-sm font-bold text-teal-700 hover:bg-teal-50 disabled:opacity-50">{editing ? t("common.done") : t("common.edit")}</button></div>
           {editing && <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3"><fieldset><legend className="text-sm font-semibold text-slate-700">{t("calendar.field.prescription")}</legend><div className="mt-2 flex gap-2"><PrescriptionModeButton active={prescription.mode === "REPS"} onClick={() => updateOverride(position, { prescriptionMode: "REPS", reps: prescription.mode === "REPS" ? prescription.value : "", prescriptionNote: undefined })} disabled={disabled}>{t("calendar.prescription.reps")}</PrescriptionModeButton><PrescriptionModeButton active={prescription.mode === "TEXT"} onClick={() => updateOverride(position, { prescriptionMode: "TEXT", reps: undefined, prescriptionNote: prescription.mode === "TEXT" ? prescription.value : "" })} disabled={disabled}>{t("calendar.prescription.text")}</PrescriptionModeButton>{(override?.reps !== undefined || override?.prescriptionNote !== undefined || override?.prescriptionMode !== undefined) && <button type="button" onClick={() => clearOverride(position, "prescription")} disabled={disabled} className="min-h-11 rounded-xl px-3 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">{t("calendar.useDefault")}</button>}</div></fieldset>
             {prescription.mode === "REPS" ? <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.reps")}</span><input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" value={prescription.value} onChange={(event) => updateOverride(position, { prescriptionMode: "REPS", reps: event.target.value, prescriptionNote: undefined })} onBlur={onValidateOverrides} disabled={disabled} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" /></label> : <label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.instruction")}</span><input value={prescription.value} onChange={(event) => updateOverride(position, { prescriptionMode: "TEXT", reps: undefined, prescriptionNote: event.target.value })} onBlur={onValidateOverrides} disabled={disabled} placeholder={t("calendar.field.instructionPlaceholder")} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100 placeholder:text-slate-400" /></label>}
-            <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")}</span><input type="number" inputMode="decimal" min="0" step="0.5" value={load} onChange={(event) => updateOverride(position, { load: event.target.value })} onBlur={onValidateOverrides} disabled={disabled} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{override?.load !== undefined && <button type="button" onClick={() => clearOverride(position, "load")} disabled={disabled} className="mt-1 text-sm font-bold text-slate-600 hover:text-teal-700 disabled:opacity-50">{t("calendar.useDefaultLoad")}</button>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RPE</span><input type="number" inputMode="decimal" min="1" max="10" step="0.5" value={rpe} onChange={(event) => updateOverride(position, { rpe: event.target.value })} onBlur={onValidateOverrides} disabled={disabled} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{override?.rpe !== undefined && <button type="button" onClick={() => clearOverride(position, "rpe")} disabled={disabled} className="mt-1 text-sm font-bold text-slate-600 hover:text-teal-700 disabled:opacity-50">{t("calendar.useDefaultRpe")}</button>}</label></div></div>}
+            <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">{t("calendar.field.load")}</span><input type="number" inputMode="decimal" min="0" step="0.5" value={load} onChange={(event) => updateOverride(position, { load: event.target.value })} onBlur={onValidateOverrides} disabled={disabled} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{override?.load !== undefined && <button type="button" onClick={() => clearOverride(position, "load")} disabled={disabled} className="mt-1 text-sm font-bold text-slate-600 hover:text-teal-700 disabled:opacity-50">{t("calendar.useDefaultLoad")}</button>}</label><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">RIR</span><input type="number" inputMode="decimal" min="0" max="9" step="0.5" value={rir} onChange={(event) => updateOverride(position, { rir: event.target.value })} onBlur={onValidateOverrides} disabled={disabled} className="min-h-11 w-full rounded-xl border border-slate-200 bg-stone-50 px-3 text-base font-medium outline-none focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />{override?.rir !== undefined && <button type="button" onClick={() => clearOverride(position, "rir")} disabled={disabled} className="mt-1 text-sm font-bold text-slate-600 hover:text-teal-700 disabled:opacity-50">{t("calendar.useDefaultRir")}</button>}</label></div></div>}
           {positionError !== undefined && <FieldError>{positionError}</FieldError>}</div>;
       })}</div>}
       {/* Overrides pointing past the current set count have no row to render

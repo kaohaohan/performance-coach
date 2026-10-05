@@ -5,7 +5,7 @@ import type { AthleteMessages } from "../en/athlete.ts";
 // Strength-training terminology follows what Taiwan coaches actually say on
 // the gym floor, not a literal rendering of the English:
 //   set  → 組        reps → 次（欄位標題用「次數」）
-//   load → 重量      RPE  → RPE（原文照用，教練圈通行）
+//   load → 重量      RIR  → RIR（原文照用，教練圈通行）
 //   exercise → 動作  workout / session → 訓練、課表
 //   planned → 預定   actual → 實際      extra set → 額外組
 //   bodyweight → 徒手
@@ -59,6 +59,13 @@ export const athlete: AthleteMessages = {
   "athlete.set.reps": "{count} 次",
   "athlete.set.bodyweight": "徒手",
 
+  "athlete.history.last": "上次 · {date}",
+  "athlete.history.prAt": "{load} {unit} 的 PR",
+  "athlete.history.prBodyweight": "PR 紀錄",
+  "athlete.history.badgeRepPr": "次數 PR",
+  "athlete.history.badgeMatched": "持平",
+  "athlete.history.badgeHint": "與先前訓練比較；最終結果於課程儲存後計算。",
+
   "athlete.status.active": "進行中",
   "athlete.status.completed": "已完成",
 
@@ -97,7 +104,7 @@ export const athlete: AthleteMessages = {
   "athlete.session.adjustSets": "組數",
   "athlete.session.adjustReps": "每組次數",
   "athlete.session.adjustLoad": "重量（選填，kg）",
-  "athlete.session.adjustRpe": "RPE（選填）",
+  "athlete.session.adjustRir": "RIR（選填）",
   "athlete.session.replaceAndAdd": "取代並加入",
   "athlete.session.addToWorkout": "加入本次訓練",
   "athlete.session.athleteAdded": "自行新增",
@@ -120,18 +127,18 @@ export const athlete: AthleteMessages = {
   "athlete.session.showExtras": "額外組（{count}）",
   "athlete.session.hideExtras": "收合額外組",
   "athlete.session.adjustSetsRepsInvalid": "請輸入有效的組數與次數。",
-  "athlete.session.adjustNumbersInvalid": "請確認重量與 RPE 格式。",
+  "athlete.session.adjustNumbersInvalid": "請確認重量與 RIR 格式。",
 
   "athlete.session.fieldLoad": "重量",
   "athlete.session.fieldUnit": "單位",
   "athlete.session.fieldReps": "次數",
-  "athlete.session.fieldActualRpe": "實際 RPE",
+  "athlete.session.fieldActualRir": "實際 RIR",
   "athlete.session.fieldOptional": "選填",
   "athlete.session.textPrescriptionHint": "請填入實際完成的次數。",
 
   "athlete.session.repsInvalid": "次數必須是大於或等於 1 的整數。",
   "athlete.session.loadInvalid": "重量必須是大於或等於 0 的數字。",
-  "athlete.session.rpeInvalid": "實際 RPE 必須介於 1 到 10 之間。",
+  "athlete.session.rirInvalid": "實際 RIR 必須介於 0 到 9 之間。",
   "athlete.session.editSet": "編輯組數",
   "athlete.session.cancelEdit": "取消",
   "athlete.session.saveEdit": "儲存",

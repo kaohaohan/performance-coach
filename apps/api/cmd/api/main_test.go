@@ -15,13 +15,13 @@ import (
 
 func TestCreateWorkoutRequestDecodesCanonicalPlan(t *testing.T) {
 	var req createWorkoutRequest
-	if err := json.Unmarshal([]byte(`{"name":"Lower","exercises":[{"name":"Back Squat","plan":{"setCount":5,"defaults":{"reps":10,"load":80,"unit":"kg","rpe":8},"overrides":[{"position":3,"reps":8}]}}]}`), &req); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"Lower","exercises":[{"name":"Back Squat","plan":{"setCount":5,"defaults":{"reps":10,"load":80,"unit":"kg","rir":8},"overrides":[{"position":3,"reps":8}]}}]}`), &req); err != nil {
 		t.Fatal(err)
 	}
 	if len(req.Exercises) != 1 || req.Exercises[0].Plan.SetCount != 5 {
 		t.Fatalf("decoded request = %#v", req)
 	}
-	plan := prescription.Plan{SetCount: req.Exercises[0].Plan.SetCount, Defaults: prescription.Defaults{Reps: req.Exercises[0].Plan.Defaults.Reps, Load: req.Exercises[0].Plan.Defaults.Load, Unit: req.Exercises[0].Plan.Defaults.Unit, RPE: req.Exercises[0].Plan.Defaults.RPE}, Overrides: mapWorkoutOverrides(req.Exercises[0].Plan.Overrides)}
+	plan := prescription.Plan{SetCount: req.Exercises[0].Plan.SetCount, Defaults: prescription.Defaults{Reps: req.Exercises[0].Plan.Defaults.Reps, Load: req.Exercises[0].Plan.Defaults.Load, Unit: req.Exercises[0].Plan.Defaults.Unit, RIR: req.Exercises[0].Plan.Defaults.RIR}, Overrides: mapWorkoutOverrides(req.Exercises[0].Plan.Overrides)}
 	if _, err := prescription.Resolve(plan); err != nil {
 		t.Fatalf("canonical plan should resolve: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestCreateSetLogRequestDecodesExtraWithoutPlannedAssociation(t *testing.T) 
 }
 
 func TestUpdateSetLogRequestPreservesOmittedAndNullFields(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/set-logs/id", strings.NewReader(`{"reps":9,"load":null,"rpe":null}`))
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/set-logs/id", strings.NewReader(`{"reps":9,"load":null,"rir":null}`))
 	in, err := decodeUpdateSetLogRequest(req)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestUpdateSetLogRequestPreservesOmittedAndNullFields(t *testing.T) {
 	if !in.RepsPresent || in.Reps == nil || *in.Reps != 9 {
 		t.Fatalf("reps = %#v", in)
 	}
-	if !in.LoadPresent || in.Load != nil || !in.RPEPresent || in.RPE != nil {
+	if !in.LoadPresent || in.Load != nil || !in.RIRPresent || in.RIR != nil {
 		t.Fatalf("null fields = %#v", in)
 	}
 	if in.UnitPresent {
@@ -140,5 +140,63 @@ func TestHandleCoachSignupRejectsMissingOrInvalidFirebaseToken(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 			}
 		})
+	}
+}
+
+func TestDecodeEffortRequestRejectsLegacyRPEKey(t *testing.T) {
+	cases := map[string]string{
+		"top level":        `{"reps":5,"rpe":8}`,
+		"plan defaults":    `{"exercises":[{"plan":{"setCount":3,"defaults":{"reps":5,"rpe":8}}}]}`,
+		"override":         `{"exercises":[{"plan":{"overrides":[{"position":1,"rpe":8}]}}]}`,
+		"null still a key": `{"reps":5,"rpe":null}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			var dst map[string]any
+			if decodeEffortRequest(rec, req, &dst) {
+				t.Fatalf("decode accepted legacy rpe body %s", body)
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			var resp struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v (%s)", err, rec.Body.String())
+			}
+			if resp.Error.Code != "INVALID_ARGUMENT" || resp.Error.Message != "rpe is no longer accepted; use rir" {
+				t.Fatalf("error = %+v", resp.Error)
+			}
+		})
+	}
+}
+
+func TestDecodeEffortRequestAcceptsRIRAndMalformedStaysMalformed(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"reps":5,"rir":2}`))
+	var dst struct {
+		RIR *float64 `json:"rir"`
+	}
+	if !decodeEffortRequest(rec, req, &dst) || dst.RIR == nil || *dst.RIR != 2 {
+		t.Fatalf("rir body not decoded: ok body=%s dst=%+v", rec.Body.String(), dst)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`))
+	if decodeEffortRequest(rec, req, &dst) || !strings.Contains(rec.Body.String(), "malformed JSON body") {
+		t.Fatalf("malformed body: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateSetLogRequestRejectsLegacyRPEKey(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"rpe":8}`))
+	if _, err := decodeUpdateSetLogRequest(req); !errors.Is(err, errLegacyRPE) {
+		t.Fatalf("err = %v, want errLegacyRPE", err)
 	}
 }

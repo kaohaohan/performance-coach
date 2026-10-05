@@ -10,11 +10,11 @@ func TestResolveUniformFiveSetPlan(t *testing.T) {
 	reps := 10
 	load := 80.0
 	unit := UnitKG
-	rpe := 8.0
+	rir := 8.0
 
 	resolved, err := Resolve(Plan{
 		SetCount: 5,
-		Defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe},
+		Defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestResolveUniformFiveSetPlan(t *testing.T) {
 		assertIntPointer(t, set.Reps, 10, "reps")
 		assertFloatPointer(t, set.Load, 80, "load")
 		assertStringPointer(t, set.Unit, UnitKG, "unit")
-		assertFloatPointer(t, set.RPE, 8, "rpe")
+		assertFloatPointer(t, set.RIR, 8, "rir")
 		if set.PrescriptionNote != nil {
 			t.Fatalf("position %d prescriptionNote = %q, want nil", position, *set.PrescriptionNote)
 		}
@@ -41,10 +41,10 @@ func TestResolveIndependentOverrides(t *testing.T) {
 	reps := 10
 	load := 80.0
 	unit := UnitKG
-	rpe := 8.0
+	rir := 8.0
 	altReps := 8
 	altLoad := 90.0
-	altRPE := 9.0
+	altRIR := 9.0
 	amap := "AMAP"
 
 	tests := []struct {
@@ -54,8 +54,8 @@ func TestResolveIndependentOverrides(t *testing.T) {
 		assert    func(*testing.T, []ResolvedPlannedSet)
 	}{
 		{
-			name:     "reps only override preserves load and rpe",
-			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe},
+			name:     "reps only override preserves load and rir",
+			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir},
 			overrides: []SetOverride{{
 				Position: 3,
 				Reps:     &altReps,
@@ -63,13 +63,13 @@ func TestResolveIndependentOverrides(t *testing.T) {
 			assert: func(t *testing.T, sets []ResolvedPlannedSet) {
 				assertIntPointer(t, sets[2].Reps, 8, "set 3 reps")
 				assertFloatPointer(t, sets[2].Load, 80, "set 3 load")
-				assertFloatPointer(t, sets[2].RPE, 8, "set 3 rpe")
+				assertFloatPointer(t, sets[2].RIR, 8, "set 3 rir")
 				assertIntPointer(t, sets[0].Reps, 10, "set 1 inherited reps")
 			},
 		},
 		{
-			name:     "load only override preserves prescription and rpe",
-			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe},
+			name:     "load only override preserves prescription and rir",
+			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir},
 			overrides: []SetOverride{{
 				Position: 2,
 				Load:     &altLoad,
@@ -78,36 +78,36 @@ func TestResolveIndependentOverrides(t *testing.T) {
 				assertIntPointer(t, sets[1].Reps, 10, "set 2 reps")
 				assertFloatPointer(t, sets[1].Load, 90, "set 2 load")
 				assertStringPointer(t, sets[1].Unit, UnitKG, "set 2 unit")
-				assertFloatPointer(t, sets[1].RPE, 8, "set 2 rpe")
+				assertFloatPointer(t, sets[1].RIR, 8, "set 2 rir")
 			},
 		},
 		{
-			name:     "rpe only override preserves prescription and load",
-			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe},
+			name:     "rir only override preserves prescription and load",
+			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir},
 			overrides: []SetOverride{{
 				Position: 4,
-				RPE:      &altRPE,
+				RIR:      &altRIR,
 			}},
 			assert: func(t *testing.T, sets []ResolvedPlannedSet) {
 				assertIntPointer(t, sets[3].Reps, 10, "set 4 reps")
 				assertFloatPointer(t, sets[3].Load, 80, "set 4 load")
-				assertFloatPointer(t, sets[3].RPE, 9, "set 4 rpe")
+				assertFloatPointer(t, sets[3].RIR, 9, "set 4 rir")
 			},
 		},
 		{
 			name:     "combined independent overrides",
-			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe},
+			defaults: Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir},
 			overrides: []SetOverride{
 				{Position: 3, Reps: &altReps},
-				{Position: 5, Load: &altLoad, RPE: &altRPE},
+				{Position: 5, Load: &altLoad, RIR: &altRIR},
 			},
 			assert: func(t *testing.T, sets []ResolvedPlannedSet) {
 				assertIntPointer(t, sets[2].Reps, 8, "set 3 reps")
 				assertFloatPointer(t, sets[2].Load, 80, "set 3 inherited load")
-				assertFloatPointer(t, sets[2].RPE, 8, "set 3 inherited rpe")
+				assertFloatPointer(t, sets[2].RIR, 8, "set 3 inherited rir")
 				assertIntPointer(t, sets[4].Reps, 10, "set 5 inherited reps")
 				assertFloatPointer(t, sets[4].Load, 90, "set 5 load")
-				assertFloatPointer(t, sets[4].RPE, 9, "set 5 rpe")
+				assertFloatPointer(t, sets[4].RIR, 9, "set 5 rir")
 			},
 		},
 		{
@@ -180,12 +180,12 @@ func TestResolveValidation(t *testing.T) {
 	validReps := 10
 	validUnit := UnitKG
 	validLoad := 80.0
-	validRPE := 8.0
+	validRIR := 8.0
 	validNote := "AMAP"
 	invalidReps := 0
 	negativeLoad := -1.0
-	belowRPE := 0.5
-	aboveRPE := 10.5
+	belowRIR := -0.5
+	aboveRIR := 9.5
 	invalidUnit := "stone"
 	blank := ""
 	spaces := " \t "
@@ -206,20 +206,20 @@ func TestResolveValidation(t *testing.T) {
 		{"default load requires unit", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, Load: &validLoad}}, "load requires unit"},
 		{"invalid unit", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, Load: &validLoad, Unit: &invalidUnit}}, "unit must be kg or lb"},
 		{"unit without any load", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, Unit: &validUnit}}, "unit requires a default or override load"},
-		{"rpe below one", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, RPE: &belowRPE}}, "defaults.rpe must be between 1 and 10"},
-		{"rpe above ten", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, RPE: &aboveRPE}}, "defaults.rpe must be between 1 and 10"},
-		{"position zero", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 0, RPE: &validRPE}}}, "override position 0 must be at least 1"},
-		{"negative position", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: -1, RPE: &validRPE}}}, "override position -1 must be at least 1"},
-		{"position exceeds set count", Plan{SetCount: 3, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 5, RPE: &validRPE}}}, "override position 5 exceeds setCount 3"},
-		{"duplicate override positions", Plan{SetCount: 2, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, RPE: &validRPE}, {Position: 1, Load: &validLoad}}}, "override position 1 is duplicated"},
+		{"rir below zero", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, RIR: &belowRIR}}, "defaults.rir must be between 0 and 9"},
+		{"rir above nine", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, RIR: &aboveRIR}}, "defaults.rir must be between 0 and 9"},
+		{"position zero", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 0, RIR: &validRIR}}}, "override position 0 must be at least 1"},
+		{"negative position", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: -1, RIR: &validRIR}}}, "override position -1 must be at least 1"},
+		{"position exceeds set count", Plan{SetCount: 3, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 5, RIR: &validRIR}}}, "override position 5 exceeds setCount 3"},
+		{"duplicate override positions", Plan{SetCount: 2, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, RIR: &validRIR}, {Position: 1, Load: &validLoad}}}, "override position 1 is duplicated"},
 		{"empty override", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1}}}, "override at position 1 must specify at least one property"},
 		{"override reps and text", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, Reps: &validReps, PrescriptionNote: &validNote}}}, "override at position 1 must not specify both"},
 		{"invalid override reps", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, Reps: &invalidReps}}}, "override at position 1 reps must be at least 1"},
 		{"blank override text", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, PrescriptionNote: &spaces}}}, "override at position 1 prescriptionNote must be nonblank"},
 		{"negative override load", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps, Unit: &validUnit}, Overrides: []SetOverride{{Position: 1, Load: &negativeLoad}}}, "override at position 1 load must be at least 0"},
 		{"override load requires exercise unit", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, Load: &validLoad}}}, "load requires unit"},
-		{"override rpe below one", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, RPE: &belowRPE}}}, "override at position 1 rpe must be between 1 and 10"},
-		{"override rpe above ten", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, RPE: &aboveRPE}}}, "override at position 1 rpe must be between 1 and 10"},
+		{"override rir below zero", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, RIR: &belowRIR}}}, "override at position 1 rir must be between 0 and 9"},
+		{"override rir above nine", Plan{SetCount: 1, Defaults: Defaults{Reps: &validReps}, Overrides: []SetOverride{{Position: 1, RIR: &aboveRIR}}}, "override at position 1 rir must be between 0 and 9"},
 	}
 
 	for _, tt := range tests {
@@ -243,12 +243,12 @@ func TestResolveDoesNotMutateInputOrAliasCallerValues(t *testing.T) {
 	reps := 10
 	load := 80.0
 	unit := UnitKG
-	rpe := 8.0
+	rir := 8.0
 	overrideReps := 8
 	overrideLoad := 90.0
 	plan := Plan{
 		SetCount:  2,
-		Defaults:  Defaults{Reps: &reps, Load: &load, Unit: &unit, RPE: &rpe},
+		Defaults:  Defaults{Reps: &reps, Load: &load, Unit: &unit, RIR: &rir},
 		Overrides: []SetOverride{{Position: 2, Reps: &overrideReps, Load: &overrideLoad}},
 	}
 	before := clonePlan(plan)
@@ -306,7 +306,7 @@ func clonePlan(plan Plan) Plan {
 			PrescriptionNote: cloneString(plan.Defaults.PrescriptionNote),
 			Load:             cloneFloat64(plan.Defaults.Load),
 			Unit:             cloneString(plan.Defaults.Unit),
-			RPE:              cloneFloat64(plan.Defaults.RPE),
+			RIR:              cloneFloat64(plan.Defaults.RIR),
 		},
 		Overrides: make([]SetOverride, len(plan.Overrides)),
 	}
@@ -316,7 +316,7 @@ func clonePlan(plan Plan) Plan {
 			Reps:             cloneInt(override.Reps),
 			PrescriptionNote: cloneString(override.PrescriptionNote),
 			Load:             cloneFloat64(override.Load),
-			RPE:              cloneFloat64(override.RPE),
+			RIR:              cloneFloat64(override.RIR),
 		}
 	}
 	return cloned

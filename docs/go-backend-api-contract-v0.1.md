@@ -10,6 +10,10 @@ Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
 
+> V0.12 變更（Training History & Exercise Progress，見 `docs/tasks/2026-10-04-training-history.md`）：**API 端 `history` 與 `GET /training-log`（含 events、exposures）已實作**（migration `0012` 僅新增 index）。`GET /sessions/{id}` 每個 exercise 新增 additive `history`（LAST / PR baseline）；新增唯讀 `GET /training-log`（Coach 或 Athlete）回傳實際訓練、server 計算的 progress events 與單一動作的 per-exposure metrics。Coach 讀取範圍沿用 `GET /sessions/{id}` 的 **historical access**，**不限於自己排的課**（跨教練可見）；他教練的 session 一律遮蔽 id、課表名稱、cue 與處方。不打分數、不回傳任何 grade 或 status 判斷。
+
+> V0.11 變更（RPE → RIR，見 `docs/tasks/2026-10-04-rpe-to-rir.md`）：所有強度欄位由 RPE 改為 **RIR**（reps in reserve），範圍 0–9、可為小數。JSON 欄位 `rpe` → `rir`（`plan.defaults`、`overrides[]`、`plan.sets[]`、`setLogs[]`、`POST /sessions/{id}/set-logs` 與 `PATCH /set-logs/{id}` body）。既有資料以 `rir = 10 − rpe` 轉換（migration `0011_rpe_to_rir`）。過渡期內，任何寫入 request 若仍帶 `rpe` 鍵，回 `400 INVALID_ARGUMENT`（`rpe is no longer accepted; use rir`），不得靜默忽略；此 guard 於確認無 client 送 `rpe` 後移除。route、status code、授權不變。
+
 > V0.10 變更（App Review Guideline 5.1.1(v) — in-app account deletion）：新增 `DELETE /api/v1/me`；`users.deleted_at` tombstone；`account_deletion_jobs` 作為 Firebase / Apple 外部清理的 durable recovery；active relationship vs historical access 拆開 `coach_athletes` 的授權語意；signup/redeem 碰上 tombstone 回 `409 ACCOUNT_DELETED`。實作見 `docs/tasks/2026-08-26-account-deletion.md`。落地前現行程式尚未提供本 endpoint。
 >
 
@@ -82,7 +86,7 @@ Firebase-authenticated (app account optional) 的 route **不得**因為 `users`
 
 | 語意 | 判定 | 用於 |
 | --- | --- | --- |
-| **Historical access** | 存在 `coach_athletes (coach_id, athlete_id)` row | 已發生訓練的讀取：`GET /sessions/{id}`、`GET /scheduled-workouts`（含 `athleteId`）、`GET /scheduled-workouts/{id}` |
+| **Historical access** | 存在 `coach_athletes (coach_id, athlete_id)` row | 已發生訓練的讀取：`GET /sessions/{id}`、`GET /scheduled-workouts`（含 `athleteId`）、`GET /scheduled-workouts/{id}`、`GET /training-log`（V0.12） |
 | **Active relationship** | 上列 row 存在，**且**雙方 `users.deleted_at IS NULL` | 名冊與寫入：`GET /athletes`、`DELETE /athletes/{athleteId}`、`POST /scheduled-workouts`、`POST .../session`、`POST /sessions/{id}/complete`、`POST /sessions/{id}/set-logs`、`PATCH/DELETE /set-logs/{id}` |
 
 Tombstone 後的 athlete 從名冊與排程 picker 消失，但不能被「解除關係」以摧毀 historical ACL：`DELETE /athletes/{athleteId}` 對 tombstoned athlete 回 `404 NOT_FOUND`。Calendar 仍顯示其歷史列，名稱為 `Deleted Athlete`。
@@ -137,22 +141,22 @@ CoachAthlete              { coachId, athleteId }              // N:N
 Exercise                  { id, name, ownerCoachId? }         // null = 系統公用動作
 Workout                   { id, coachId, name }                // 課表模板
 WorkoutExercise           { id, workoutId, exerciseId, setCount, defaults, loadUnit?, coachCue?, position }
-WorkoutExerciseSetOverride { id, workoutExerciseId, plannedPosition, reps?|prescriptionNote?|load?|rpe? }
+WorkoutExerciseSetOverride { id, workoutExerciseId, plannedPosition, reps?|prescriptionNote?|load?|rir? }
 ScheduledWorkout          { id, workoutId, coachId, athleteId, scheduledDate }
 ScheduledWorkoutExercise  { id, scheduledWorkoutId, exerciseId, exerciseName, targetLoadUnit?, coachCue?, position }  // snapshot parent
-ScheduledWorkoutPlannedSet { id, scheduledWorkoutExerciseId, plannedPosition, reps?|prescriptionNote?, load?, rpe? } // resolved snapshot
+ScheduledWorkoutPlannedSet { id, scheduledWorkoutExerciseId, plannedPosition, reps?|prescriptionNote?, load?, rir? } // resolved snapshot
 WorkoutSession            { id, scheduledWorkoutId, athleteId, status: ACTIVE|COMPLETED, startedAt, completedAt }
-SetLog                    { id, sessionId, scheduledWorkoutExerciseId, scheduledWorkoutPlannedSetId?, setNumber, load?, unit?, reps, rpe, loggedByUserId, createdAt }
+SetLog                    { id, sessionId, scheduledWorkoutExerciseId, scheduledWorkoutPlannedSetId?, setNumber, load?, unit?, reps, rir, loggedByUserId, createdAt }
 ```
 
 ### 2.1 Approved planned-set semantics and representation
 
 - For an exercise with `N` sets, its **effective** plan contains exactly `N` ordered planned positions, numbered `1..N`.
-- The **authoring model** has exercise-level property defaults plus sparse, property-specific per-position overrides. A position with no override for a property inherits that default. Builder defaults are uniform shorthand: one reps value or text prescription, one load plus unit, and one RPE may apply to every position. The Coach must not be required to enter N repeated values for uniform work.
-- An individual position may override one or more inherited default values without becoming an all-or-nothing override object. For example, it can override reps while inheriting load and RPE. Planned-set position is separate from `WorkoutExercise.position`, which orders exercises within a Workout.
+- The **authoring model** has exercise-level property defaults plus sparse, property-specific per-position overrides. A position with no override for a property inherits that default. Builder defaults are uniform shorthand: one reps value or text prescription, one load plus unit, and one RIR may apply to every position. The Coach must not be required to enter N repeated values for uniform work.
+- An individual position may override one or more inherited default values without becoming an all-or-nothing override object. For example, it can override reps while inheriting load and RIR. Planned-set position is separate from `WorkoutExercise.position`, which orders exercises within a Workout.
 - Entering individual-set editing for an inherited property starts from that position's current effective value; changing it creates an explicit override. Changing a default updates only positions inheriting that property. Clearing an override restores inheritance from the current default.
 - V0.1 supports only inherited or explicit-value override states. It has no explicit-none override. An omitted override property inherits; an override property with a value replaces only that property.
-- An effective planned position expresses numeric reps **or** text prescription, optional numeric planned load, and optional planned RPE. One optional `kg`/`lb` planned load unit belongs to the WorkoutExercise and is shared by its default load and every load override. Per-position unit overrides and mixed planned units are not supported. Changing the exercise unit changes the unit of every effective planned load without numeric conversion. Actual SetLog unit remains independent.
+- An effective planned position expresses numeric reps **or** text prescription, optional numeric planned load, and optional planned RIR. One optional `kg`/`lb` planned load unit belongs to the WorkoutExercise and is shared by its default load and every load override. Per-position unit overrides and mixed planned units are not supported. Changing the exercise unit changes the unit of every effective planned load without numeric conversion. Actual SetLog unit remains independent.
 - Template persistence keeps defaults plus sparse overrides. Scheduling resolves all `1..N` positions and persists normalized `ScheduledWorkoutPlannedSet` snapshot rows; Athlete-facing reads use these rows and do not expose authoring provenance.
 - Scheduling freezes the **effective** planned positions for every athlete snapshot. A later Workout-template default or override edit must not change an existing ScheduledWorkout.
 - A normal SetLog explicitly references one frozen `ScheduledWorkoutPlannedSet`. `setNumber` is still generated by the server as actual logging chronology and is not inferred to equal planned position. At most one SetLog in a session may reference a given planned set.
@@ -165,7 +169,7 @@ The target wire shapes are defined below. No migration or code change is authori
 **Exercise vs WorkoutExercise**
 
 - `Exercise` = 「Back Squat」這個動作本身
-- `WorkoutExercise` = Back Squat 在某份課表裡的 prescription（4×5 @ RPE 8）與可選 Coach cue。cue 是 workout-context technique/tempo/safety guidance，不是 `prescriptionNote` 的替代品；trim 後空值省略、最長 500 字元。
+- `WorkoutExercise` = Back Squat 在某份課表裡的 prescription（4×5 @ RIR 2）與可選 Coach cue。cue 是 workout-context technique/tempo/safety guidance，不是 `prescriptionNote` 的替代品；trim 後空值省略、最長 500 字元。
 
 **動作庫的擁有權**
 
@@ -411,12 +415,13 @@ Request：
       "name": "Back Squat",
       "loadIncrement": 2.5,
       "setIncrement": 1,
+      "repsIncrement": 1,
       "plan": {
         "setCount": 5,
-        "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+        "defaults": { "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
         "overrides": [
           { "position": 3, "reps": 8 },
-          { "position": 5, "load": 90, "rpe": 9 }
+          { "position": 5, "load": 90, "rir": 1 }
         ]
       }
     },
@@ -439,12 +444,13 @@ Request：
 - `plan.defaults.reps` 與 `plan.defaults.prescriptionNote` **恰好一個存在**；reps 為正整數，note trim 後非空
 - `plan.defaults.load` 選填且需 `>= 0`；任何 default/override load 存在時，`plan.defaults.unit` 必填且只能是 `kg` 或 `lb`
 - `plan.defaults.unit` 是整個 WorkoutExercise 的 planned unit；override 不接受 `unit`
-- default/override `rpe` 選填，範圍 1–10
+- default/override `rir` 選填，範圍 0–9（RIR = reps in reserve；0 = 力竭）
 - `overrides[].position` 必須唯一且介於 `1..setCount`
-- 一筆 override 至少包含 `reps`、`prescriptionNote`、`load`、`rpe` 之一；若覆寫 prescription，`reps` 與 `prescriptionNote` 恰好一個存在
+- 一筆 override 至少包含 `reps`、`prescriptionNote`、`load`、`rir` 之一；若覆寫 prescription，`reps` 與 `prescriptionNote` 恰好一個存在
 - override 欄位省略或為 null 都代表 inheritance/clear-override；null **不**代表 explicit no-target。Response 省略 inherited properties，空 override row 必須移除
 - `loadIncrement` 選填，每個 WorkoutExercise 一個值；省略時依 `plan.defaults.unit` 預設 `2.5`（`kg`）或 `5`（`lb`），無 unit 時預設 `2.5`。允許值：`kg` → `0`、`2.5`、`5`、`10`；`lb` → `0`、`5`、`10`。僅影響 Coach 下次 copy/build/repeat 時的建議負重；已排程 snapshot 不帶此欄位、也不會被回溯修改
 - `setIncrement` 選填，每個 WorkoutExercise 一個值；省略時預設 `0`。允許值：`0` 或 `1`。僅影響 Coach 下次 copy/build/repeat 時的建議組數（`setCount + setIncrement`；新增位置繼承 uniform defaults）；已排程 snapshot 不帶此欄位、也不會被回溯修改
+- `repsIncrement` 選填，每個 WorkoutExercise 一個值；省略時預設 `0`。允許值：整數 `0`–`20`。僅影響 Coach 下次 copy/build/repeat 時的建議次數（REPS 模式下 `defaultReps + repsIncrement` 與 explicit `overrides[].reps`；TEXT 模式 no-op）；與 `setIncrement` 獨立；已排程 snapshot 不帶此欄位、也不會被回溯修改
 
 Service 於單一 transaction 內：find-or-create exercises → 建 workouts → 依陣列順序建 workout_exercises（`position` 由 server 給定）。
 
@@ -461,12 +467,13 @@ Response `201`：
       "name": "Back Squat",
       "loadIncrement": 2.5,
       "setIncrement": 1,
+      "repsIncrement": 1,
       "plan": {
         "setCount": 5,
-        "defaults": { "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
+        "defaults": { "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
         "overrides": [
           { "position": 3, "reps": 8 },
-          { "position": 5, "load": 90, "rpe": 9 }
+          { "position": 5, "load": 90, "rir": 1 }
         ]
       },
       "position": 1
@@ -497,6 +504,18 @@ Coach-facing Workout responses return authoring metadata (`defaults + overrides`
 ### PATCH /workouts/{workoutId} — Coach only（owner）
 
 **可自由修改**，包含已被排程過的 workout。因為 prescription 已 snapshot，歷史不受影響。
+
+V0.1 實作範圍：**僅支援重新命名** reusable template。已指派課表的處方編輯仍走 `PUT /scheduled-workouts/{id}`；Coach Calendar 的「編輯已指派課表」在儲存處方前可選擇性呼叫本 endpoint 更新顯示名稱。
+
+Request：
+
+```json
+{ "name": "Rehabs Week 2 — Full Body" }
+```
+
+Response `200`：更新後的 `{ "id", "name", "exercises": [] }`（`exercises` 省略展開；需要完整處方時走 `GET /workouts`）。
+
+Validation：`name` 必填、trim 後非空。非 owner / 已封存 / 不存在 → `404 NOT_FOUND`。
 
 ### DELETE /workouts/{workoutId} — Coach only（owner）
 
@@ -673,11 +692,11 @@ Response `201`：ScheduledWorkout 陣列（每人一筆，各含展開的 snapsh
         "name": "Back Squat",
         "plan": {
           "sets": [
-            { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
-            { "scheduledWorkoutPlannedSetId": "...", "position": 2, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
-            { "scheduledWorkoutPlannedSetId": "...", "position": 3, "reps": 8, "load": 80, "unit": "kg", "rpe": 8 },
-            { "scheduledWorkoutPlannedSetId": "...", "position": 4, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
-            { "scheduledWorkoutPlannedSetId": "...", "position": 5, "reps": 10, "load": 90, "unit": "kg", "rpe": 9 }
+            { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 2, "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 3, "reps": 8, "load": 80, "unit": "kg", "rir": 2 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 4, "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 5, "reps": 10, "load": 90, "unit": "kg", "rir": 1 }
           ]
         },
         "position": 1
@@ -741,7 +760,7 @@ Request body 沿用 POST /workouts 的 per-exercise 形狀（`exercises[].name` 
       "name": "Back Squat",
       "plan": {
         "setCount": 4,
-        "defaults": { "reps": 8, "load": 100, "unit": "kg", "rpe": 8 },
+        "defaults": { "reps": 8, "load": 100, "unit": "kg", "rir": 2 },
         "overrides": []
       }
     }
@@ -819,9 +838,9 @@ Response `204 No Content`，無 body。
         "youtubeUrl": "https://www.youtube.com/watch?v=example",
         "plan": {
           "sets": [
-            { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
-            { "scheduledWorkoutPlannedSetId": "...", "position": 2, "reps": 10, "load": 80, "unit": "kg", "rpe": 8 },
-            { "scheduledWorkoutPlannedSetId": "...", "position": 3, "reps": 8, "load": 80, "unit": "kg", "rpe": 8 }
+            { "scheduledWorkoutPlannedSetId": "...", "position": 1, "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 2, "reps": 10, "load": 80, "unit": "kg", "rir": 2 },
+            { "scheduledWorkoutPlannedSetId": "...", "position": 3, "reps": 8, "load": 80, "unit": "kg", "rir": 2 }
           ]
         },
         "position": 1
@@ -914,14 +933,14 @@ Session and ScheduledWorkout detail Exercise objects additionally expose `origin
       "youtubeUrl": "https://www.youtube.com/watch?v=example",
       "plan": {
         "sets": [
-          { "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "position": 1, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 },
-          { "scheduledWorkoutPlannedSetId": "22222222-2222-4222-8222-222222222222", "position": 2, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 },
-          { "scheduledWorkoutPlannedSetId": "33333333-3333-4333-8333-333333333333", "position": 3, "reps": 5, "load": 100, "unit": "kg", "rpe": 8 }
+          { "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "position": 1, "reps": 5, "load": 100, "unit": "kg", "rir": 2 },
+          { "scheduledWorkoutPlannedSetId": "22222222-2222-4222-8222-222222222222", "position": 2, "reps": 5, "load": 100, "unit": "kg", "rir": 2 },
+          { "scheduledWorkoutPlannedSetId": "33333333-3333-4333-8333-333333333333", "position": 3, "reps": 5, "load": 100, "unit": "kg", "rir": 2 }
         ]
       },
       "setLogs": [
-        { "id": "...", "kind": "PLANNED", "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "plannedPosition": 1, "setNumber": 1, "load": 100, "unit": "kg", "reps": 5, "rpe": 7, "loggedByUserId": "..." },
-        { "id": "...", "kind": "EXTRA", "setNumber": 4, "load": 90, "unit": "kg", "reps": 5, "rpe": 8, "loggedByUserId": "..." }
+        { "id": "...", "kind": "PLANNED", "scheduledWorkoutPlannedSetId": "11111111-1111-4111-8111-111111111111", "plannedPosition": 1, "setNumber": 1, "load": 100, "unit": "kg", "reps": 5, "rir": 3, "loggedByUserId": "..." },
+        { "id": "...", "kind": "EXTRA", "setNumber": 4, "load": 90, "unit": "kg", "reps": 5, "rir": 2, "loggedByUserId": "..." }
       ]
     }
   ]
@@ -931,6 +950,21 @@ Session and ScheduledWorkout detail Exercise objects additionally expose `origin
 `plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Optional `youtubeUrl` is a live catalog join (`exercises.youtube_url`), omitted when null; it is not snapshotted. Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
 
 授權：athlete 本人，或其有 **historical access** 的 coach；其他人 `404`。Tombstoned athlete 的名稱為 `Deleted Athlete`。此為唯讀路徑，不要求 active relationship。
+
+**V0.12 additive — `history`（已實作）。** 每個 exercise 物件新增：
+
+```json
+"history": {
+  "last": { "date": "2026-09-29", "setLogs": [ { "setNumber": 1, "load": 32.5, "unit": "kg", "reps": 9, "rir": 1 } ] },
+  "maxLoad": { "load": 32.5, "unit": "kg", "reps": 9, "date": "2026-09-29" },
+  "bestRepsByLoad": [ { "load": 30, "unit": "kg", "reps": 12, "date": "2026-09-22" }, { "load": 32.5, "unit": "kg", "reps": 9, "date": "2026-09-29" } ]
+}
+```
+
+- 範圍：同一 athlete、同一 `exercise_id`、`scheduled_date` 早於本 session 的 **COMPLETED** session，**不限 Coach**。ACTIVE 不計。
+- `last` = 最近一次（無則 `null`），單位照記錄。`maxLoad` / `bestRepsByLoad` 只看本 exercise 計畫單位（`target_load_unit`；無則 `last` 的單位）的紀錄，不換算；bodyweight（無 load）紀錄列在 `load: null`。
+- 不回傳任何 session id / SetLog id（見 §3.10 跨教練遮蔽）。
+- 前端可用此 baseline 對「剛記錄的一組」顯示暫時性徽章（Rep PR / Matched）；正式事件以 §3.10 engine 為準。
 
 ---
 
@@ -956,7 +990,7 @@ Request（有負重）：
   "load": 100,
   "unit": "kg",
   "reps": 5,
-  "rpe": 7
+  "rir": 3
 }
 ```
 
@@ -968,7 +1002,7 @@ Request（bodyweight，如 push-up）：
   "kind": "PLANNED",
   "scheduledWorkoutPlannedSetId": "...",
   "reps": 12,
-  "rpe": 8
+  "rir": 2
 }
 ```
 
@@ -981,7 +1015,7 @@ Request（extra actual set）：
   "load": 90,
   "unit": "kg",
   "reps": 5,
-  "rpe": 8
+  "rir": 2
 }
 ```
 
@@ -996,7 +1030,7 @@ Service 層規則：
 5. 驗證 actual fields：
     - `reps >= 1` 整數，**必填**（V0.1 僅支援 reps-based logging）
     - `load` **選填**；有值時 `load >= 0` 且 `unit` 必填 ∈ {kg, lb}；`load` 為 null 時 `unit` 必須也是 null
-    - `rpe` 選填，1–10
+    - `rir` 選填，0–9
 6. `setNumber` 由 server 計算（見下），只代表同 session + exercise 的 actual logging chronology，不信任 client，也不等同 planned position
 7. `loggedByUserId = caller.id`
 
@@ -1012,12 +1046,12 @@ Response `201`：完整 SetLog，欄位固定為：
   "load": 100,
   "unit": "kg",
   "reps": 5,
-  "rpe": 7,
+  "rir": 3,
   "loggedByUserId": "..."
 }
 ```
 
-EXTRA response 回傳 `kind: "EXTRA"`，省略 `scheduledWorkoutPlannedSetId` 與 `plannedPosition`。`load`/`unit`/`rpe` 仍為選填。不回傳 `createdAt`、`sessionId`、`scheduledWorkoutExerciseId` — 呼叫端已知道這三者（分別來自 URL 與 request body），不重複於 response。
+EXTRA response 回傳 `kind: "EXTRA"`，省略 `scheduledWorkoutPlannedSetId` 與 `plannedPosition`。`load`/`unit`/`rir` 仍為選填。不回傳 `createdAt`、`sessionId`、`scheduledWorkoutExerciseId` — 呼叫端已知道這三者（分別來自 URL 與 request body），不重複於 response。
 
 ### setNumber 併發處理
 
@@ -1039,7 +1073,7 @@ Normal SetLog insert 另外受 partial unique `(session_id, scheduled_workout_pl
 
 ### PATCH /set-logs/{setLogId}
 
-部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rpe`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上（athlete 本人或 **active relationship** coach），且 session 必須 `ACTIVE`。COMPLETED → `409 CONFLICT`。PATCH 不改 session status/`completed_at`。
+部分更新。V0.1 只允許更新 actual `load`/`unit`/`reps`/`rir`；`kind`、planned-set association、exercise association、`setNumber`、`loggedByUserId` 不可變。未提及 actual 欄位不動；更新後仍須滿足 load/unit 配對規則。授權同上（athlete 本人或 **active relationship** coach），且 session 必須 `ACTIVE`。COMPLETED → `409 CONFLICT`。PATCH 不改 session status/`completed_at`。
 
 ### DELETE /set-logs/{setLogId}
 
@@ -1057,7 +1091,7 @@ STT + LLM 解析放在 Next.js route handler；Go 只接收結構化結果。
 LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`），多一個欄位就拒絕**：
 
 ```json
-{ "action": "CREATE_SET_LOG", "load": 100, "unit": "kg", "reps": 5, "rpe": 7 }
+{ "action": "CREATE_SET_LOG", "load": 100, "unit": "kg", "reps": 5, "rir": 3 }
 ```
 
 ```json
@@ -1078,6 +1112,74 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 - schema 驗證失敗 → 顯示原文讓使用者手動修正，**不落地**（LLM never writes directly to the database）
 
 「previous set」= 目前 active session + active exercise 中 `createdAt` 最新的一筆，僅存在於 client context。AI 無法指定任意歷史紀錄。
+
+---
+
+## 3.10 Training Log & Exercise Progress（V0.12 — implemented）
+
+### GET /training-log?from=&to=&athleteId=&exerciseId=&status= — Coach or Athlete
+
+唯讀，回傳**實際訓練**（session + SetLog），newest first。
+
+Query：
+
+- `from`/`to`：必填，inclusive `scheduled_date`，`from ≤ to`，跨度 ≤ 184 天；否則 `400 INVALID_ARGUMENT`。All Time 由 client 往前分頁。
+- `athleteId`：Coach 選填（省略 = 所有有 historical access 的 athlete）；Athlete 必須省略或等於自己，否則 `404 NOT_FOUND`。Coach 對無 historical access 的 athlete → `404`。
+- `exerciseId`：選填 UUID；有值時每個 session 只含該 exercise，沒有該 exercise 的 session 不回傳，並加回 `exposures`。
+- `status`：選填 `ACTIVE` | `COMPLETED`；省略 = 兩者。尚未開始的 ScheduledWorkout 不是 session，永不回傳（History 仍由 `GET /scheduled-workouts` 取得 Not started）。
+
+授權 / 可見範圍：
+
+- Athlete：自己的所有 session，**不限 Coach**。
+- Coach：任何其有 **historical access**（`coach_athletes` row）的 athlete 的 session，**不限是誰排的**（與 `GET /sessions/{id}` 同一規則）。
+- 每個 session 帶 `source`：`OWN`（`scheduled_workouts.coach_id = caller` 或 caller 為 athlete 本人）或 `OTHER_COACH`。`OTHER_COACH` 的 `sessionId`、`scheduledWorkoutId`、`workoutName` 為 `null`，不回傳 `coachCue` 與 `plan`，也不透露排課 Coach 身分。
+- 任何回應都不含 SetLog id。原因：Coach 寫入目前只檢查 active relationship、未檢查排課 Coach（已知缺口，另案修正），id 不可跨教練外流。
+
+Response `200`：
+
+```json
+{
+  "sessions": [
+    {
+      "sessionId": "...", "scheduledWorkoutId": "...", "status": "COMPLETED",
+      "date": "2026-09-29", "source": "OWN",
+      "athlete": { "id": "...", "name": "Jason" },
+      "workoutName": "Arm Day",
+      "exercises": [
+        {
+          "exerciseId": "...", "name": "Preacher Curl", "position": 2,
+          "setLogs": [ { "setNumber": 1, "kind": "PLANNED", "load": 32.5, "unit": "kg", "reps": 9, "rir": 1 } ],
+          "events": [ { "type": "LOAD_PR", "load": 32.5, "unit": "kg" }, { "type": "LOAD_CHANGE", "delta": 2.5, "unit": "kg" } ]
+        }
+      ]
+    }
+  ],
+  "exposures": {
+    "kg": [
+      { "date": "2026-09-29", "source": "OWN", "topSet": { "load": 32.5, "reps": 9, "rir": 1 }, "estimated1rm": 43.33, "maxLoad": 32.5, "totalReps": 26, "volumeLoad": 845, "setCount": 3, "position": 2, "events": [ { "type": "LOAD_PR", "load": 32.5, "unit": "kg" } ] }
+    ]
+  }
+}
+```
+
+`exposures` 只在帶 `exerciseId` **且回應只涵蓋單一 athlete**（Athlete 本人，或 Coach 帶 `athleteId`）時出現，依單位（`kg` / `lb`）分組、oldest first，只含 COMPLETED；Coach 帶 `exerciseId` 但省略 `athleteId` 時不回 `exposures`（跨 athlete 的 series 無意義）；自體重（無 load）的 exposure 不列入 `exposures`，其 sets 與 `events` 仍在 `sessions` 內。Events 與 exposures 比較的是 `to` 以前的**所有**更早 COMPLETED 紀錄（含 `from` 之前），不只範圍內。`events` 只對 COMPLETED session 計算；ACTIVE session 的 `events` 為 `[]`。
+
+### Progress events（comparison engine，server 端唯一實作）
+
+比較對象：同一 athlete、同一 `exercise_id`、**同一單位**、日期更早的所有 COMPLETED exposure（不限 Coach）。第一次 exposure 無事件。
+
+- **Top set**：該次最重的一組；同重量取次數多；再相同取 set number 小。無 load（自體重）只比次數。
+
+| `type` | 規則 | 欄位 |
+| --- | --- | --- |
+| `LOAD_PR` | top-set load > 所有更早紀錄的 load | `load`, `unit` |
+| `REP_PR` | 在 load X，次數 > 所有更早紀錄在 X 的最多次數 | `load`, `unit`, `reps` |
+| `LOAD_CHANGE` | top-set load ≠ 上一次 exposure 的 top-set load | `delta`, `unit` |
+| `MATCHED` | top-set load 與 reps 皆等於上一次 | — |
+| `REPS_DOWN` | top-set load 等於上一次、reps 較少，且 RIR **未較高**（RIR 較高 = 刻意輕做，不算下降） | `reps`, `previousReps` |
+
+- `estimated1rm = load × (1 + (reps + rir) / 30)`，以 top set 計算，`rir` 缺值時省略此欄。只作為圖表可切換的指標，**不是評分**。
+- 本 API 不提供任何 grade、score 或 Progressing / Stable / Needs review 之類的狀態判斷。
 
 ---
 
@@ -1109,6 +1211,7 @@ LLM 輸出必須符合以下 schema，**strict decode（`DisallowUnknownFields`�
 | `POST .../session (start)` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 重複呼叫 resume 既有 ACTIVE session，不建立第二個 |
 | `POST /sessions/{id}/complete` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | Athlete 刪帳號不把 ACTIVE 改成 COMPLETED |
 | `GET /sessions/{id}` | ❌ 401 | ❌ 401 | ✅ **historical access**；否則 ❌ 404 | ✅ | tombstoned athlete 名稱 `Deleted Athlete` |
+| `GET /training-log` | ❌ 401 | ❌ 401 | ✅ **historical access**（不限排課 Coach）；指定無權 athlete ❌ 404 | ✅ 僅自己（不限 Coach）；指定他人 ❌ 404 | `OTHER_COACH` 遮蔽 id/課表名/cue/plan；不回 SetLog id；range ≤ 184 天，見 §3.10 |
 | `GET /sessions/{id}/exercise-options` | ❌ 401 | ❌ 401 | ✅ **active relationship**；否則 ❌ 404 | ✅ | 僅 ACTIVE session；SYSTEM + assignment Coach private exercises |
 | `POST /sessions/{id}/exercises` | ❌ 401 | ❌ 401 | ✅ add / remove / replace active exercises | ✅ add only | Athlete request carrying `replacesScheduledWorkoutExerciseId` → `409 CONFLICT` |
 | `DELETE /sessions/{id}/exercises/{exerciseId}` | ❌ 401 | ❌ 401 | ✅ any active exercise | ✅ only own `ATHLETE_ADDED` | soft remove; no plan or SetLog deletion |

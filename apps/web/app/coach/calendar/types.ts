@@ -30,7 +30,7 @@ export type WorkoutSetOverride = {
   reps?: number;
   prescriptionNote?: string;
   load?: number;
-  rpe?: number;
+  rir?: number;
 };
 
 export type WorkoutPlan = {
@@ -40,7 +40,7 @@ export type WorkoutPlan = {
     prescriptionNote?: string;
     load?: number;
     unit?: string;
-    rpe?: number;
+    rir?: number;
   };
   overrides: WorkoutSetOverride[];
 };
@@ -51,6 +51,7 @@ export type WorkoutExercise = {
   name: string;
   loadIncrement?: number;
   setIncrement?: number;
+  repsIncrement?: number;
   plan: WorkoutPlan;
   coachCue?: string;
   position: number;

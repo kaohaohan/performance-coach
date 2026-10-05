@@ -236,5 +236,5 @@ export const zhTWExerciseNames: Readonly<Record<string, string>> = ZH_TW;
 // Note this is NOT the hatch for brand names: the founder's rule is brand in
 // English, movement translated ("Hammer Strength 單邊划船"), which already
 // contains Han and needs no exception. Precedent for genuinely untranslated
-// terms is in messages/zh-TW/coach.ts, which documents RPE / kg / lb as-is.
+// terms is in messages/zh-TW/coach.ts, which documents RIR / kg / lb as-is.
 export const KEPT_ENGLISH: Readonly<Record<string, string>> = {};

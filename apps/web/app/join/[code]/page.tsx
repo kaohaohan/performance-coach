@@ -7,6 +7,7 @@
 // Google sign-in uses a popup for the same reason: the invite code never
 // has to survive a navigation, so it cannot be lost or mixed up with
 // another one.
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth, usesPasswordProvider } from "@/lib/auth-context";
@@ -409,6 +410,7 @@ export default function JoinCodePage() {
         </div>
       </div>
       {preview.description && <p className="mt-3 rounded-2xl bg-stone-50 px-4 py-3 text-sm leading-6 text-slate-600">{preview.description}</p>}
+      <p className="mt-3 text-xs leading-5 text-slate-500">{t("progress.disclosure.join")} <Link href="/privacy" className="font-semibold text-teal-700 underline underline-offset-2">{t("progress.disclosure.privacyLink")}</Link></p>
 
       {step === "confirming" && (
         <>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -8,6 +9,8 @@ import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
 import { monthDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { AppHeader } from "@/components/app-header";
+import { distinctExercises, localToday, windowBounds, type ExerciseSummary, type TrainingLog } from "@/lib/exercise-progress";
+import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 
 type Role = "COACH" | "ATHLETE";
 type Athlete = { id: string; name: string; role: "ATHLETE" };
@@ -78,6 +81,8 @@ export default function CoachClientDetailPage() {
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [exercises, setExercises] = useState<{ athleteId: string; list: ExerciseSummary[] } | null>(null);
+  const exercisesRequestId = useRef(0);
   const roleRequestId = useRef(0);
   const athleteRequestId = useRef(0);
   const timelineRequestId = useRef(0);
@@ -155,6 +160,28 @@ export default function CoachClientDetailPage() {
     return () => { cancelled = true; };
   }, [idToken, selectedAthlete, t]);
 
+  // Exercises trained in the last 184 days (the API's maximum span), each
+  // linking to its Exercise Progress page. Failure just hides the section:
+  // the timeline above is the page's primary content.
+  useEffect(() => {
+    if (!idToken || !selectedAthlete) return;
+    const requestId = ++exercisesRequestId.current;
+    const { from, to } = windowBounds(localToday(), 0);
+    let cancelled = false;
+    (async () => {
+      try {
+        const log = await apiFetch<TrainingLog>(
+          idToken,
+          `/api/v1/training-log?athleteId=${encodeURIComponent(selectedAthlete.id)}&from=${from}&to=${to}&status=COMPLETED`,
+        );
+        if (!cancelled && requestId === exercisesRequestId.current) setExercises({ athleteId: selectedAthlete.id, list: distinctExercises(log.sessions) });
+      } catch {
+        if (!cancelled && requestId === exercisesRequestId.current) setExercises({ athleteId: selectedAthlete.id, list: [] });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [idToken, selectedAthlete]);
+
   async function handleStart(scheduledWorkoutId: string) {
     if (!idToken || startingRef.current !== null) return;
     startingRef.current = scheduledWorkoutId;
@@ -197,6 +224,21 @@ export default function CoachClientDetailPage() {
       </AppHeader>
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-4 px-4">
+        <section>
+          <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("progress.clients.heading")}</p></div>
+          {exercises === null || exercises.athleteId !== selectedAthlete?.id ? <LoadingCard label={t("progress.clients.loading")} /> : exercises.list.length === 0 ? <EmptyCard title={t("progress.clients.empty")} /> : (
+            <ul className="divide-y divide-slate-100 overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
+              {exercises.list.map((exercise) => (
+                <li key={exercise.exerciseId}>
+                  <Link href={`/coach/clients/${athleteId}/exercises/${exercise.exerciseId}`} className="flex min-h-12 items-center justify-between gap-3 px-4 py-3">
+                    <span className="min-w-0 truncate text-sm font-bold text-slate-900">{localizeExerciseName(exercise.name, locale)}</span>
+                    <span className="shrink-0 text-xs font-medium text-slate-500">{t("progress.clients.lastTrained", { date: displayDate(locale, exercise.lastDate) })}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
         <section>
           <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("coach.clientDetail.trainingHeading")}</p></div>
           {startError && <Notice>{startError}</Notice>}
