@@ -951,7 +951,7 @@ Session and ScheduledWorkout detail Exercise objects additionally expose `origin
 
 授權：athlete 本人，或其有 **historical access** 的 coach；其他人 `404`。Tombstoned athlete 的名稱為 `Deleted Athlete`。此為唯讀路徑，不要求 active relationship。
 
-**V0.12 additive — `history`（尚未實作）。** 每個 exercise 物件新增：
+**V0.12 additive — `history`（已實作）。** 每個 exercise 物件新增：
 
 ```json
 "history": {

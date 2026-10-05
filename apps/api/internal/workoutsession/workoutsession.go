@@ -35,6 +35,7 @@ import (
 
 	"github.com/kaohaohan/performance-coach/apps/api/internal/authn"
 	"github.com/kaohaohan/performance-coach/apps/api/internal/prescription"
+	"github.com/kaohaohan/performance-coach/apps/api/internal/progress"
 )
 
 // Session is the response shape for POST /scheduled-workouts/{id}/session
@@ -317,6 +318,9 @@ type Exercise struct {
 	RemovedAt                          *string  `json:"removedAt,omitempty"`
 	RemovedByUserID                    *string  `json:"removedByUserId,omitempty"`
 	ReplacesScheduledWorkoutExerciseID *string  `json:"replacesScheduledWorkoutExerciseId,omitempty"`
+	// History is the LAST / PR baseline from the athlete's earlier COMPLETED
+	// sessions (§3.7 V0.12). Only GET /sessions/{id} fills it.
+	History *progress.Baseline `json:"history,omitempty"`
 }
 
 // ExerciseOption is a visible Exercise usable in an active-session addition.
@@ -384,6 +388,9 @@ func Get(ctx context.Context, pool *pgxpool.Pool, caller authn.User, sessionID s
 
 	exercises, err := loadExercisesWithSetLogs(ctx, pool, sessionID, header.scheduledWorkoutID)
 	if err != nil {
+		return SessionDetail{}, err
+	}
+	if err := attachHistory(ctx, pool, header, exercises); err != nil {
 		return SessionDetail{}, err
 	}
 
