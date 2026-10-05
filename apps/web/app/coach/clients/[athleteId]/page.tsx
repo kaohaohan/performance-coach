@@ -9,7 +9,7 @@ import { useLocale, useT, type Locale, type MessageKey } from "@/lib/i18n";
 import { monthDay } from "@/lib/i18n/dates";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { AppHeader } from "@/components/app-header";
-import { distinctExercises, localToday, windowBounds, type ExerciseSummary, type TrainingLog } from "@/lib/exercise-progress";
+import { completionText, eventChips, layoutSparkline, prCount, topSetText, type OverviewExercise, type ProgressOverview } from "@/lib/progress-overview";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 
 type Role = "COACH" | "ATHLETE";
@@ -81,8 +81,8 @@ export default function CoachClientDetailPage() {
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
-  const [exercises, setExercises] = useState<{ athleteId: string; list: ExerciseSummary[] } | null>(null);
-  const exercisesRequestId = useRef(0);
+  const [overview, setOverview] = useState<{ athleteId: string; data: ProgressOverview | null } | null>(null);
+  const overviewRequestId = useRef(0);
   const roleRequestId = useRef(0);
   const athleteRequestId = useRef(0);
   const timelineRequestId = useRef(0);
@@ -160,23 +160,19 @@ export default function CoachClientDetailPage() {
     return () => { cancelled = true; };
   }, [idToken, selectedAthlete, t]);
 
-  // Exercises trained in the last 184 days (the API's maximum span), each
-  // linking to its Exercise Progress page. Failure just hides the section:
-  // the timeline above is the page's primary content.
+  // Objective N-week overview (GET /athletes/{athleteId}/progress-overview).
+  // Failure shows a small notice: the timeline below is the page's primary
+  // content.
   useEffect(() => {
     if (!idToken || !selectedAthlete) return;
-    const requestId = ++exercisesRequestId.current;
-    const { from, to } = windowBounds(localToday(), 0);
+    const requestId = ++overviewRequestId.current;
     let cancelled = false;
     (async () => {
       try {
-        const log = await apiFetch<TrainingLog>(
-          idToken,
-          `/api/v1/training-log?athleteId=${encodeURIComponent(selectedAthlete.id)}&from=${from}&to=${to}&status=COMPLETED`,
-        );
-        if (!cancelled && requestId === exercisesRequestId.current) setExercises({ athleteId: selectedAthlete.id, list: distinctExercises(log.sessions) });
+        const data = await apiFetch<ProgressOverview>(idToken, `/api/v1/athletes/${encodeURIComponent(selectedAthlete.id)}/progress-overview`);
+        if (!cancelled && requestId === overviewRequestId.current) setOverview({ athleteId: selectedAthlete.id, data });
       } catch {
-        if (!cancelled && requestId === exercisesRequestId.current) setExercises({ athleteId: selectedAthlete.id, list: [] });
+        if (!cancelled && requestId === overviewRequestId.current) setOverview({ athleteId: selectedAthlete.id, data: null });
       }
     })();
     return () => { cancelled = true; };
@@ -225,19 +221,8 @@ export default function CoachClientDetailPage() {
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-4 px-4">
         <section>
-          <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("progress.clients.heading")}</p></div>
-          {exercises === null || exercises.athleteId !== selectedAthlete?.id ? <LoadingCard label={t("progress.clients.loading")} /> : exercises.list.length === 0 ? <EmptyCard title={t("progress.clients.empty")} /> : (
-            <ul className="divide-y divide-slate-100 overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
-              {exercises.list.map((exercise) => (
-                <li key={exercise.exerciseId}>
-                  <Link href={`/coach/clients/${athleteId}/exercises/${exercise.exerciseId}`} className="flex min-h-12 items-center justify-between gap-3 px-4 py-3">
-                    <span className="min-w-0 truncate text-sm font-bold text-slate-900">{localizeExerciseName(exercise.name, locale)}</span>
-                    <span className="shrink-0 text-xs font-medium text-slate-500">{t("progress.clients.lastTrained", { date: displayDate(locale, exercise.lastDate) })}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("progress.overview.heading")}</p></div>
+          {overview === null || overview.athleteId !== selectedAthlete?.id ? <LoadingCard label={t("progress.overview.loading")} /> : overview.data === null ? <EmptyCard title={t("progress.overview.error")} /> : <OverviewSection athleteId={athleteId} data={overview.data} />}
         </section>
         <section>
           <div className="mb-3 px-1"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("coach.clientDetail.trainingHeading")}</p></div>
@@ -268,6 +253,74 @@ export default function CoachClientDetailPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function OverviewSection({ athleteId, data }: { athleteId: string; data: ProgressOverview }) {
+  const t = useT();
+  const { locale } = useLocale();
+  const { assignments: a } = data;
+  const weeks = data.window.weeks;
+  return (
+    <div className="grid gap-3">
+      <div className="grid grid-cols-3 gap-2">
+        <StripCell label={t("progress.overview.completion")} value={completionText(a.completionRate)} detail={a.scheduled === 0 ? t("progress.overview.noAssignments") : t("progress.overview.completionDetail", { completed: a.completed, scheduled: a.scheduled })} />
+        <StripCell label={t("progress.overview.sets")} value={t("progress.overview.setsValue", { completed: a.completedPlannedSets, planned: a.plannedSets })} detail={a.extraSets > 0 ? t("progress.overview.extraSets", { count: a.extraSets }) : undefined} />
+        <StripCell label={t("progress.overview.prs")} value={String(prCount(data.exercises))} detail={t("progress.overview.prsDetail")} />
+      </div>
+      <p className="px-1 text-xs text-slate-500">{t("progress.overview.scopeNote")}</p>
+      {data.exercises.length === 0 ? <EmptyCard title={t("progress.overview.empty", { weeks })} /> : (
+        <ul className="divide-y divide-slate-100 overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-950/5">
+          {data.exercises.map((exercise) => (
+            <li key={`${exercise.exerciseId}-${exercise.unit}`}>
+              <ExerciseRow athleteId={athleteId} exercise={exercise} weeks={weeks} locale={locale} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function StripCell({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-950/5">
+      <p className="text-[11px] font-semibold leading-tight text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-xl font-semibold tracking-tight text-slate-900">{value}</p>
+      {detail && <p className="mt-0.5 text-[11px] leading-tight text-slate-500">{detail}</p>}
+    </div>
+  );
+}
+
+function ExerciseRow({ athleteId, exercise, weeks, locale }: { athleteId: string; exercise: OverviewExercise; weeks: number; locale: Locale }) {
+  const t = useT();
+  const chips = eventChips(t, exercise.recentEvents);
+  return (
+    <Link href={`/coach/clients/${athleteId}/exercises/${exercise.exerciseId}`} className="flex min-h-14 items-center justify-between gap-3 px-4 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-bold text-slate-900">{localizeExerciseName(exercise.name, locale)}</p>
+        <p className="mt-0.5 text-xs font-medium text-slate-600">{topSetText(exercise.latest.topSet, exercise.unit)}</p>
+        {chips.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {chips.map((chip) => <span key={chip.key} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{chip.label}</span>)}
+          </div>
+        )}
+      </div>
+      <Sparkline exercise={exercise} caption={t("progress.overview.trendLabel", { weeks })} />
+    </Link>
+  );
+}
+
+// Inline SVG, same series color for every exercise. Weeks without data break
+// the line; nothing is interpolated.
+function Sparkline({ exercise, caption }: { exercise: OverviewExercise; caption: string }) {
+  const s = layoutSparkline(exercise.trend);
+  return (
+    <svg viewBox={`0 0 ${s.width} ${s.height}`} role="img" aria-label={`${caption}: ${exercise.name}`} className="h-7 w-24 shrink-0">
+      {s.runs.map((run, i) => run.length > 1 && <polyline key={i} fill="none" className="stroke-teal-600" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" points={run.map((p) => `${p.x},${p.y}`).join(" ")} />)}
+      {s.runs.map((run, i) => run.length === 1 && <circle key={`d${i}`} cx={run[0].x} cy={run[0].y} r={1.5} className="fill-teal-600" />)}
+      {s.last && <circle cx={s.last.x} cy={s.last.y} r={2.5} className="fill-teal-600" />}
+    </svg>
   );
 }
 

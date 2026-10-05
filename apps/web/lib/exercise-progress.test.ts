@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  addDays, buildTimeline, distinctExercises, eventLabel, filterSince, initialWindows, layoutChart, mergeWindows, metricValue, niceTicks, pointLabel, rangeCutoff, windowBounds,
+  addDays, buildTimeline, eventLabel, filterSince, initialWindows, layoutChart, mergeWindows, metricValue, niceTicks, pointLabel, rangeCutoff, windowBounds,
   type Exposure, type LogSession,
 } from "./exercise-progress";
 
@@ -121,10 +121,4 @@ test("timeline pairs exposures with sets per unit, newest first, never mixing un
   // A date mismatch drops the sets instead of showing someone else's.
   const mismatch = buildTimeline("kg", sessions, [exposure("2026-01-01", 80, 8)], "ex");
   assert.deepEqual(mismatch[0].sets, []);
-});
-
-test("distinctExercises lists each exercise once, most recent first", () => {
-  const a = logSession("2026-09-01", "s", [{ load: 1, unit: "kg", reps: 1 }]);
-  const b = { ...logSession("2026-09-08", "s", [{ load: 1, unit: "kg", reps: 1 }]), exercises: [{ ...a.exercises[0], exerciseId: "ex2", name: "Squat" }, a.exercises[0]] };
-  assert.deepEqual(distinctExercises([a, b]).map((e) => [e.exerciseId, e.lastDate]), [["ex2", "2026-09-08"], ["ex", "2026-09-08"]]);
 });

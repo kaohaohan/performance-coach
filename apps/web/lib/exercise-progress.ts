@@ -219,15 +219,3 @@ export function exerciseNameFrom(sessions: LogSession[], exerciseId: string): st
   }
   return null;
 }
-
-export type ExerciseSummary = { exerciseId: string; name: string; lastDate: string };
-
-// Distinct exercises in a training log, most recently trained first. Used by
-// client detail to link into Exercise Progress.
-export function distinctExercises(sessions: LogSession[]): ExerciseSummary[] {
-  const seen = new Map<string, ExerciseSummary>();
-  for (const s of [...sessions].sort((a, b) => b.date.localeCompare(a.date))) {
-    for (const e of s.exercises) if (!seen.has(e.exerciseId)) seen.set(e.exerciseId, { exerciseId: e.exerciseId, name: e.name, lastDate: s.date });
-  }
-  return [...seen.values()];
-}

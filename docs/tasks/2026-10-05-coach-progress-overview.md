@@ -78,7 +78,7 @@
 | --- | --- | --- |
 | 1. Contract + spec docs | Done | 2026-10-05 |
 | 2. Backend | Done | 2026-10-05. `internal/progressoverview` + route; 7 integration tests. No migration: EXPLAIN on seeded data (301 athletes, 45k sessions, 136k set logs) uses `workout_sessions_athlete_status_idx`, `scheduled_workouts_coach_athlete_date_idx` and `set_logs` session index; no sequential scan on `workout_sessions`/`set_logs` with an 8-week window. Known: the planned-sets count scans `scheduled_workout_exercises` (only a partial `removed_at IS NULL` index exists), about 7 ms at 45k rows; revisit if it grows. Window = N full ISO weeks + current week, so `trend` has N+1 entries (matches the §3.11 example `from`). "Today" is the UTC date (no per-user time zone in the schema). `completedPlannedSets`/`extraSets` count SetLogs of any session status (Active included) of the caller's in-window assignments. Bodyweight (no-load) exercises are not listed. |
-| 3. Web | Not Started | |
+| 3. Web | Done | 2026-10-05. Overview section replaces the plain exercise list on `/coach/clients/[athleteId]` (strip, rows, inline SVG sparkline, chips, en + zh-TW); helpers in `lib/progress-overview.ts` with unit tests. The now-unused `distinctExercises` helper and `progress.clients.*` strings were removed. The "PRs · last 28 days" number is counted client-side from `recentEvents` (max 5 per row), so a very busy exercise can undercount; a server-side count would need a contract field. Checked in headless Chromium against the local API and Auth Emulator (en and zh-TW). |
 | 4. Staging deploy + smoke | Not Started | Production excluded until explicitly approved. |
 
 ## 5. Outcome (filled at completion)

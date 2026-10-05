@@ -1,7 +1,7 @@
 import type { ProgressMessages } from "../en/progress.ts";
 
 // 動作進度：圖表、所選紀錄卡與歷史時間軸，以及 /coach/clients/[athleteId]
-// 的動作清單。用字保持中性：只呈現數字與系統算出的事件，不打分數、不貼
+// 的總覽。用字保持中性：只呈現數字與系統算出的事件，不打分數、不貼
 // 「進步中／持平／需檢視」之類標籤。PR、RIR、1RM 沿用英文。
 export const progress: ProgressMessages = {
   "progress.title": "動作進度",
@@ -48,10 +48,22 @@ export const progress: ProgressMessages = {
   "progress.event.matched": "與上次相同",
   "progress.event.repsDown": "次數 ↓ {from}→{to}",
 
-  "progress.clients.heading": "動作進度",
-  "progress.clients.loading": "載入動作中…",
-  "progress.clients.empty": "近 6 個月沒有已完成的動作。",
-  "progress.clients.lastTrained": "最近 {date}",
+  "progress.overview.heading": "總覽",
+  "progress.overview.loading": "載入總覽中…",
+  "progress.overview.error": "無法載入總覽。",
+  "progress.overview.empty": "近 {weeks} 週沒有已完成且有重量的動作。",
+  "progress.overview.scopeNote": "完成率與組數只計算你排的課；動作數據包含任何教練期間的訓練。",
+  "progress.overview.completion": "完成率",
+  "progress.overview.completionDetail": "{scheduled} 堂中完成 {completed} 堂",
+  "progress.overview.noAssignments": "你沒有排課",
+  "progress.overview.sets": "計畫組數 vs 完成組數",
+  "progress.overview.setsValue": "{completed} / {planned} 組",
+  "progress.overview.extraSets": "另加 {count} 組",
+  "progress.overview.prs": "PR · 近 28 天",
+  "progress.overview.prsDetail": "次數 PR 與重量 PR",
+  "progress.overview.trendLabel": "每週預估 1RM，近 {weeks} 週",
+  "progress.overview.chip.repPr": "次數 PR",
+  "progress.overview.chip.loadUp": "↑ 重量",
   "progress.viewProgress": "查看進度",
 
   // 跨教練可見性揭露（加入流程與隱私權政策）。

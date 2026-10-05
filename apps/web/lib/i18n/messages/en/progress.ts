@@ -1,7 +1,7 @@
 // Exercise Progress (docs/tasks/2026-10-04-training-history.md, sub-task 4):
-// the chart, selected-point card and history timeline, plus the exercise list
-// on /coach/clients/[athleteId]. Wording is neutral on purpose: raw numbers
-// and engine events, never a grade, score, or Progressing / Stable / Review
+// the chart, selected-point card and history timeline, plus the Overview
+// on /coach/clients/[athleteId] (docs/tasks/2026-10-05-coach-progress-overview.md).
+// Wording is neutral on purpose: raw numbers and engine events, never a grade, score, or Progressing / Stable / Review
 // label. "PR", "RIR" and "1RM" are gym vocabulary and stay in Latin letters.
 export const progress = {
   "progress.title": "Exercise progress",
@@ -48,10 +48,22 @@ export const progress = {
   "progress.event.matched": "Matched",
   "progress.event.repsDown": "Reps ↓ {from}→{to}",
 
-  "progress.clients.heading": "Exercise progress",
-  "progress.clients.loading": "Loading exercises…",
-  "progress.clients.empty": "No completed exercises in the last 6 months.",
-  "progress.clients.lastTrained": "Last {date}",
+  "progress.overview.heading": "Overview",
+  "progress.overview.loading": "Loading overview…",
+  "progress.overview.error": "Could not load the overview.",
+  "progress.overview.empty": "No completed exercises with a load in the last {weeks} weeks.",
+  "progress.overview.scopeNote": "Completion and sets count only workouts you scheduled. Exercise data includes training under any Coach.",
+  "progress.overview.completion": "Completion",
+  "progress.overview.completionDetail": "{completed} of {scheduled} workouts",
+  "progress.overview.noAssignments": "None scheduled by you",
+  "progress.overview.sets": "Planned vs completed sets",
+  "progress.overview.setsValue": "{completed} / {planned}",
+  "progress.overview.extraSets": "+{count} extra",
+  "progress.overview.prs": "PRs · last 28 days",
+  "progress.overview.prsDetail": "Rep PR and Load PR",
+  "progress.overview.trendLabel": "Estimated 1RM by week, last {weeks} weeks",
+  "progress.overview.chip.repPr": "Rep PR",
+  "progress.overview.chip.loadUp": "↑ load",
   "progress.viewProgress": "View progress",
 
   // Cross-coach visibility disclosure (join flow + Privacy page). Must ship
