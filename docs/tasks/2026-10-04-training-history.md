@@ -131,7 +131,7 @@
 | Design review — grades rejected | Done | 2026-10-05: A+–D grades prototyped and dropped; events + trends adopted; Overview deferred. |
 | 0. RPE → RIR | Not Started | Separate Task Doc. |
 | 1. Contract + spec docs | Done | 2026-10-05: contract V0.12 (`history`, §3.10 `/training-log`, event rules, auth rows), UI routes, MVP section. |
-| 2. Comparison engine | Not Started | |
+| 2. Comparison engine | Done | 2026-10-05: `internal/progress` (pure, no I/O): top set, per-exposure metrics, 5 events. Table tests cover each rule, ties, bodyweight, unit separation (incl. mixed units in one exposure), first exposure, RIR-higher-is-not-a-drop, unknown RIR. Decisions where §3.10 was silent: REP_PR needs an earlier record at that load (a never-done load is not a rep record), one per load, from any set; bodyweight sets form their own `""` series; unknown RIR on either side is not "higher"; `delta` is signed. |
 | 3. LAST / PR in workout | Not Started | |
 | 4. Exercise history + progress chart | Not Started | |
 | 5. Training history events | Not Started | |
