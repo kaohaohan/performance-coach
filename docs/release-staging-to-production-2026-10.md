@@ -2,7 +2,7 @@
 
 Status: **not started**. Nothing here has been run against production.
 
-Scope: everything on `staging` that is not on `main` (30 commits as of `ccaad04`). Production is a separate runtime: Vercel Production (`dontworkout.vercel.app`) → Cloud Run `performance-coach-api` → Neon `main`. See `docs/deployment-targets.md` and `docs/ios-release-runbook.md` (Public App Store 1.0) for the full production rules.
+Scope: everything on `staging` that is not on `main` (30 commits as of `ccaad04`, plus the coach exercise video work through `a93ca7f`, which adds migration `0013`). Production is a separate runtime: Vercel Production (`dontworkout.vercel.app`) → Cloud Run `performance-coach-api` → Neon `main`. See `docs/deployment-targets.md` and `docs/ios-release-runbook.md` (Public App Store 1.0) for the full production rules.
 
 ## What this release contains
 
@@ -11,6 +11,7 @@ Scope: everything on `staging` that is not on `main` (30 commits as of `ccaad04`
 - Coach Progress Overview: `GET /athletes/{athleteId}/progress-overview`.
 - Exercise Progress UI work (comparison table, collapsed paginated history).
 - Migration `0012` (index on `workout_sessions`).
+- Migration `0013` (`coach_exercise_media`): coaches set their own exercise demo-video link. **After it runs, grant the runtime role DML on the new table, or every session, Today and exercise-library request returns 500:** `GRANT SELECT, INSERT, UPDATE, DELETE ON coach_exercise_media TO performance_coach_api;` (the staging runtime role is `performance_coach_api`; confirm the production role name first). This already bit staging on 2026-10-06.
 - Backend: 26 files changed. Web-only fixes are mixed in.
 
 This is a full-stack release (database, API, web), not a web-only one.
@@ -29,8 +30,8 @@ Real students are on production, so: release outside their training hours, tell 
 
 ## B. Release (order matters)
 
-1. [ ] Run migrations `0011`, `0012` on production Neon.
-2. [ ] Verify with `apps/api/migrations/verify_0011_rpe_to_rir.sql`.
+1. [ ] Run migrations `0011`, `0012`, `0013` on production Neon, then run the `0013` GRANT above (as the table owner / Neon project owner).
+2. [ ] Verify with `apps/api/migrations/verify_0011_rpe_to_rir.sql` and `verify_0013_coach_exercise_media.sql`; confirm the runtime role can `SELECT` from `coach_exercise_media`.
 3. [ ] Deploy production Cloud Run API from the staging-verified build. CI deploys only staging on push to `staging`; production is a manual step.
 4. [ ] Check `/health` on the production API and read its startup log (`migration_version` should be `0012...`).
 5. [ ] Merge `staging` → `main` (updates the Vercel Production frontend).
