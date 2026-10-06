@@ -11,7 +11,7 @@ import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { AppHeader } from "@/components/app-header";
 import {
-  MAX_WINDOWS, METRICS, RANGES, buildTimeline, compareToPrevious, comparisonRows, describeComparison, eventLabel, exerciseNameFrom, filterSince, initialWindows, layoutChart, mergeWindows,
+  MAX_WINDOWS, RANGES, buildTimeline, compareToPrevious, comparisonRows, describeComparison, eventLabel, exerciseNameFrom, filterSince, initialWindows, layoutChart, mergeWindows,
   localToday, pointText, rangeCutoff, setSummary, setsText, visibleLabels, windowBounds,
   type Chart, type Comparison, type Exposure, type LogSession, type Metric, type ProgressEvent, type RangeKey, type TimelineEntry, type TrainingLog,
 } from "@/lib/exercise-progress";
@@ -38,7 +38,8 @@ export function ExerciseProgressView({ mode, exerciseId, athleteId }: { mode: "c
   const [fetching, setFetching] = useState(false);
   const [target, setTarget] = useState(initialWindows("3m"));
   const [range, setRange] = useState<RangeKey>("3m");
-  const [metric, setMetric] = useState<Metric>("performance");
+  // Estimated strength is hidden for now; its helpers stay in lib/exercise-progress.
+  const metric: Metric = "performance";
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [today] = useState(localToday);
   const requestId = useRef(0);
@@ -119,14 +120,7 @@ export function ExerciseProgressView({ mode, exerciseId, athleteId }: { mode: "c
 
       <div className="mx-auto -mt-3 flex max-w-lg flex-col gap-4 px-4">
         <section className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-950/5">
-          <Switch label={t("progress.metricLabel")} options={METRICS.map((m) => ({ value: m, text: t(`progress.metric.${m}` as MessageKey) }))} value={metric} onChange={setMetric} />
-          <div className="mt-3"><Switch label={t("progress.rangeLabel")} options={RANGES.map((r) => ({ value: r, text: t(`progress.range.${r}` as MessageKey) }))} value={range} onChange={chooseRange} /></div>
-          {metric === "estimated1rm" && (
-            <div className="mt-3 text-xs leading-5 text-slate-500">
-              <p className="font-semibold text-slate-700">{t("progress.metric.estimated1rmSubtitle")}</p>
-              <p>ⓘ {t("progress.estimated1rmNote")}</p>
-            </div>
-          )}
+          <Switch label={t("progress.rangeLabel")} options={RANGES.map((r) => ({ value: r, text: t(`progress.range.${r}` as MessageKey) }))} value={range} onChange={chooseRange} />
         </section>
 
         {!loadedFirst || (fetching && windows.length < initialWindows(range)) ? (
