@@ -11,12 +11,14 @@ export const progress = {
   "progress.unknownExercise": "Exercise",
 
   "progress.metricLabel": "Metric",
-  "progress.metric.topSet": "Top set",
-  "progress.metric.estimated1rm": "Est. 1RM",
-  "progress.metric.load": "Load",
-  "progress.metric.reps": "Reps",
-  "progress.metric.volume": "Volume",
-  "progress.estimated1rmNote": "Estimated from the top set: load × (1 + (reps + RIR) / 30). A calculation, not a tested max.",
+  "progress.metric.performance": "Performance",
+  "progress.metric.estimated1rm": "Estimated strength",
+  "progress.metric.workingSets": "Sets completed",
+  "progress.metric.estimated1rmSubtitle": "Estimated 1RM (e1RM)",
+  "progress.estimated1rmNote": "Estimated from load, reps and RIR to watch long-term trends. It is not a measured 1RM.",
+  "progress.point.estimated1rm": "Estimated 1RM {value} {unit} · from {top}",
+  "progress.point.sets": "{count} sets",
+  "progress.point.volume": "{volume} {unit} volume",
 
   "progress.rangeLabel": "Range",
   "progress.range.3m": "3 months",
@@ -30,7 +32,15 @@ export const progress = {
   "progress.empty": "No completed sets with a load in this range.",
 
   "progress.selected.heading": "Selected session",
-  "progress.selected.previous": "Previous session",
+  "progress.compare.heading": "Compared with last time · {date}",
+  "progress.compare.load": "Load",
+  "progress.compare.reps": "Reps",
+  "progress.compare.rir": "Reps in reserve",
+  "progress.compare.notLogged": "Not logged",
+  "progress.compare.effortDown": "↓ lower effort",
+  "progress.compare.effortUp": "↑ higher effort",
+  "progress.compare.effortLower": "Same load and reps, done at lower effort",
+  "progress.compare.effortHigher": "Same load and reps, done at higher effort",
   "progress.selected.firstTime": "First time on record in {unit}.",
 
   "progress.timeline.heading": "History",
@@ -63,7 +73,6 @@ export const progress = {
   "progress.overview.prsDetail": "Rep PR and Load PR",
   "progress.overview.trendLabel": "Estimated 1RM by week, last {weeks} weeks",
   "progress.overview.chip.repPr": "Rep PR",
-  "progress.overview.chip.loadUp": "↑ load",
   "progress.viewProgress": "View progress",
 
   // Cross-coach visibility disclosure (join flow + Privacy page). Must ship

@@ -47,7 +47,8 @@ export function completionText(rate: number | null): string {
 export type Chip = { key: "loadPr" | "repPr" | "loadUp"; label: string };
 
 // Distinct chips for one row, newest-first order of first appearance:
-// Load PR, Rep PR, and "↑ load" for a load increase. Other engine events
+// Load PR, Rep PR, and the load-increase delta ("+20 lb", newest positive
+// LOAD_CHANGE wins since events are newest-first). Other engine events
 // (matched, reps down, load down) are not chips.
 export function eventChips(t: Translate, events: OverviewEvent[]): Chip[] {
   const chips: Chip[] = [];
@@ -57,7 +58,7 @@ export function eventChips(t: Translate, events: OverviewEvent[]): Chip[] {
   for (const e of events) {
     if (e.type === "LOAD_PR") add("loadPr", t("progress.event.loadPr"));
     else if (e.type === "REP_PR") add("repPr", t("progress.overview.chip.repPr"));
-    else if (e.type === "LOAD_CHANGE" && (e.delta ?? 0) > 0) add("loadUp", t("progress.overview.chip.loadUp"));
+    else if (e.type === "LOAD_CHANGE" && (e.delta ?? 0) > 0) add("loadUp", `+${formatNumber(e.delta ?? 0)}${e.unit ? ` ${e.unit}` : ""}`);
   }
   return chips;
 }

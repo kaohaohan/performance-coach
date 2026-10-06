@@ -37,8 +37,10 @@ export type Exposure = {
 };
 export type TrainingLog = { sessions: LogSession[]; exposures?: Record<string, Exposure[]> };
 
-export type Metric = "topSet" | "estimated1rm" | "load" | "reps" | "volume";
-export const METRICS: Metric[] = ["topSet", "estimated1rm", "load", "reps", "volume"];
+// Performance = the top set's load (point labels carry reps @ RIR); Estimated
+// strength = the server's estimated 1RM; Working sets = logged set count.
+export type Metric = "performance" | "estimated1rm" | "workingSets";
+export const METRICS: Metric[] = ["performance", "estimated1rm", "workingSets"];
 export type RangeKey = "3m" | "1y" | "all";
 export const RANGES: RangeKey[] = ["3m", "1y", "all"];
 
@@ -107,11 +109,9 @@ export function filterSince<T extends { date: string }>(list: T[], cutoff: strin
 
 export function metricValue(e: Exposure, metric: Metric): number | null {
   switch (metric) {
-    case "topSet": return e.topSet.load;
+    case "performance": return e.topSet.load;
     case "estimated1rm": return e.estimated1rm ?? null;
-    case "load": return e.maxLoad ?? null;
-    case "reps": return e.totalReps;
-    case "volume": return e.volumeLoad ?? null;
+    case "workingSets": return e.setCount;
   }
 }
 
@@ -119,14 +119,97 @@ export function formatNumber(value: number): string {
   return String(Number(value.toFixed(2)));
 }
 
-// "9@1" — the top set's reps and RIR; RIR is left out when it was not logged.
-export function pointLabel(e: Exposure): string {
-  return e.topSet.rir === undefined ? String(e.topSet.reps) : `${e.topSet.reps}@${formatNumber(e.topSet.rir)}`;
+function repsAtRir(reps: number, rir: number | undefined): string {
+  return rir === undefined ? String(reps) : `${reps} @${formatNumber(rir)}`;
 }
 
+function loadText(t: Translate, load: number | null | undefined, unit: string | undefined): string {
+  return load === null || load === undefined ? t("athlete.set.bodyweight") : `${formatNumber(load)} ${unit ?? ""}`.trim();
+}
+
+// Short chart label: "12 @2" (reps only when RIR was not logged); the sets
+// metric labels with the count.
+export function pointLabel(e: Exposure, metric: Metric = "performance"): string {
+  return metric === "workingSets" ? String(e.setCount) : repsAtRir(e.topSet.reps, e.topSet.rir);
+}
+
+// Full text for tooltips, aria-labels and the card: "350 lb × 12 @2".
+export function pointText(t: Translate, e: Exposure, metric: Metric, unit: string): string {
+  const top = `${loadText(t, e.topSet.load, unit)} × ${repsAtRir(e.topSet.reps, e.topSet.rir)}`;
+  switch (metric) {
+    case "performance": return top;
+    case "estimated1rm": return e.estimated1rm === undefined ? top : t("progress.point.estimated1rm", { value: formatNumber(e.estimated1rm), unit, top });
+    case "workingSets": return setsText(t, e, unit);
+  }
+}
+
+// "3 sets · 12,600 lb volume"; volume only when the server computed one.
+export function setsText(t: Translate, e: Exposure, unit: string): string {
+  const parts = [t("progress.point.sets", { count: e.setCount })];
+  if (e.volumeLoad !== undefined) parts.push(t("progress.point.volume", { volume: e.volumeLoad.toLocaleString("en-US", { maximumFractionDigits: 2 }), unit }));
+  return parts.join(" · ");
+}
+
+// "350 lb × 12 · RIR 2"; bodyweight reads "Bodyweight × 12 · RIR 2".
 export function setSummary(t: Translate, set: { load?: number | null; unit?: Unit; reps: number; rir?: number }): string {
-  const load = set.load === null || set.load === undefined ? t("athlete.set.bodyweight") : `${formatNumber(set.load)} ${set.unit ?? ""}`.trim();
-  return [load, t("athlete.set.reps", { count: set.reps }), set.rir === undefined ? "" : `RIR ${formatNumber(set.rir)}`].filter(Boolean).join(" · ");
+  return [`${loadText(t, set.load, set.unit)} × ${set.reps}`, set.rir === undefined ? "" : `RIR ${formatNumber(set.rir)}`].filter(Boolean).join(" · ");
+}
+
+export type FieldDiff = { from: number | null; to: number | null; delta: number | null };
+export type Comparison = {
+  previousDate: string;
+  load: FieldDiff;
+  reps: FieldDiff;
+  rir: FieldDiff;
+  effort: "lower" | "higher" | null;
+};
+
+function diff(from: number | null | undefined, to: number | null | undefined): FieldDiff {
+  const f = from ?? null;
+  const t = to ?? null;
+  return { from: f, to: t, delta: f !== null && t !== null ? Number((t - f).toFixed(6)) : null };
+}
+
+// Current top set vs the previous exposure's top set (same unit; the caller
+// passes exposures[index - 1]). Effort is only inferred when load and reps are
+// equal and both RIRs were logged; nothing is graded.
+export function compareToPrevious(current: Exposure, previous: Exposure | undefined): Comparison | null {
+  if (!previous) return null;
+  const load = diff(previous.topSet.load, current.topSet.load);
+  const reps = diff(previous.topSet.reps, current.topSet.reps);
+  const rir = diff(previous.topSet.rir, current.topSet.rir);
+  const sameLoad = load.from === load.to;
+  let effort: Comparison["effort"] = null;
+  if (sameLoad && reps.delta === 0 && rir.delta !== null && rir.delta !== 0) effort = rir.delta > 0 ? "lower" : "higher";
+  return { previousDate: previous.date, load, reps, rir, effort };
+}
+
+export type ComparisonRow = { key: "load" | "reps" | "rir"; values: string; direction: string };
+
+function signed(delta: number, suffix = ""): string {
+  return `${delta > 0 ? "+" : "−"}${formatNumber(Math.abs(delta))}${suffix}`;
+}
+
+// Display rows for the "vs. last time" block. Direction is arrows and signs
+// only; for RIR it describes effort (RIR up = lower effort), not good or bad.
+export function comparisonRows(t: Translate, c: Comparison, unit: string): ComparisonRow[] {
+  const num = (v: number | null, missing: string, suffix = "") => (v === null ? missing : `${formatNumber(v)}${suffix}`);
+  const arrow = (delta: number | null) => (delta === null || delta === 0 ? null : delta > 0 ? "↑" : "↓");
+  const bodyweight = t("athlete.set.bodyweight");
+  const mixed = c.load.from === null || c.load.to === null;
+  const loadSuffix = mixed ? ` ${unit}` : "";
+  const loadValues = mixed
+    ? `${num(c.load.from, bodyweight, loadSuffix)} → ${num(c.load.to, bodyweight, loadSuffix)}`
+    : `${formatNumber(c.load.from as number)} → ${formatNumber(c.load.to as number)} ${unit}`;
+  const loadDir = c.load.delta === null || c.load.delta === 0 ? "—" : `${arrow(c.load.delta)} ${signed(c.load.delta, ` ${unit}`)}`;
+  const repsDir = c.reps.delta === null || c.reps.delta === 0 ? "—" : `${arrow(c.reps.delta)} ${signed(c.reps.delta)}`;
+  const notLogged = t("progress.compare.notLogged");
+  const rirDir = c.rir.delta === null || c.rir.delta === 0 ? "—" : t(c.rir.delta > 0 ? "progress.compare.effortDown" : "progress.compare.effortUp");
+  return [
+    { key: "load", values: loadValues, direction: loadDir },
+    { key: "reps", values: `${num(c.reps.from, "—")} → ${num(c.reps.to, "—")}`, direction: repsDir },
+    { key: "rir", values: `${num(c.rir.from, notLogged)} → ${num(c.rir.to, notLogged)}`, direction: rirDir },
+  ];
 }
 
 export function eventLabel(t: Translate, event: ProgressEvent): string {
@@ -148,18 +231,19 @@ export function eventLabel(t: Translate, event: ProgressEvent): string {
 export type ChartPoint = { index: number; x: number; y: number; value: number; exposure: Exposure; label: string; hollow: boolean; loadChange: boolean };
 export type Chart = { points: ChartPoint[]; yTicks: { y: number; label: string }[]; xTicks: { x: number; date: string }[]; width: number; height: number; plot: { left: number; right: number; top: number; bottom: number } };
 
-export function niceTicks(min: number, max: number, count = 4): number[] {
+export function niceTicks(min: number, max: number, count = 4, integer = false): number[] {
   if (!(max > min)) return [min];
   const raw = (max - min) / count;
   const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? raw;
+  let step = (integer ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10]).map((m) => m * pow).find((s) => s >= raw) ?? raw;
+  if (integer) step = Math.max(1, Math.round(step));
   const ticks: number[] = [];
   for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) ticks.push(Number(v.toFixed(6)));
   return ticks;
 }
 
 // Time-proportional x axis; y axis padded 10%. Exposures without a value for
-// the metric (no RIR for est. 1RM, bodyweight volume) are skipped. A dashed
+// the metric (no RIR for est. 1RM, bodyweight load) are skipped. A dashed
 // guide is flagged on points whose engine events include a load change.
 export function layoutChart(exposures: Exposure[], metric: Metric, width = 320, height = 200): Chart {
   const plot = { left: 40, right: width - 14, top: 16, bottom: height - 26 };
@@ -184,13 +268,26 @@ export function layoutChart(exposures: Exposure[], metric: Metric, width = 320, 
     y: y(p.value),
     value: p.value,
     exposure: p.exposure,
-    label: pointLabel(p.exposure),
+    label: pointLabel(p.exposure, metric),
     hollow: p.exposure.source === "OTHER_COACH",
-    loadChange: p.exposure.events.some((e) => e.type === "LOAD_CHANGE"),
+    loadChange: metric !== "workingSets" && p.exposure.events.some((e) => e.type === "LOAD_CHANGE"),
   }));
-  const yTicks = niceTicks(lo, hi).map((v) => ({ y: y(v), label: formatNumber(v) }));
+  const yTicks = niceTicks(lo, hi, 4, metric === "workingSets").map((v) => ({ y: y(v), label: formatNumber(v) }));
   const xTicks = t1 === t0 ? [{ x: x(t0), date: usable[0].exposure.date }] : [{ x: x(t0), date: usable[0].exposure.date }, { x: x(t1), date: usable[usable.length - 1].exposure.date }];
   return { points, yTicks, xTicks, width, height, plot };
+}
+
+// Which point labels to draw: the selected one always, then the others newest
+// to oldest, each only if at least minGap px (viewBox units) from every label
+// already kept. selectedIndex is a position in `points`.
+export function visibleLabels(points: { x: number }[], selectedIndex: number, minGap = 30): Set<number> {
+  const kept = new Set<number>();
+  if (selectedIndex >= 0 && selectedIndex < points.length) kept.add(selectedIndex);
+  for (let i = points.length - 1; i >= 0; i--) {
+    if (kept.has(i)) continue;
+    if ([...kept].every((k) => Math.abs(points[k].x - points[i].x) >= minGap)) kept.add(i);
+  }
+  return kept;
 }
 
 export type TimelineEntry = { exposure: Exposure; sets: LogSet[]; sessionId: string | null; index: number };

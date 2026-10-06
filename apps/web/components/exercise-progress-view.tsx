@@ -11,9 +11,9 @@ import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { AppHeader } from "@/components/app-header";
 import {
-  MAX_WINDOWS, METRICS, RANGES, buildTimeline, eventLabel, exerciseNameFrom, filterSince, formatNumber, initialWindows, layoutChart, mergeWindows,
-  localToday, rangeCutoff, setSummary, windowBounds,
-  type Chart, type Exposure, type LogSession, type Metric, type ProgressEvent, type RangeKey, type TimelineEntry, type TrainingLog,
+  MAX_WINDOWS, METRICS, RANGES, buildTimeline, compareToPrevious, comparisonRows, eventLabel, exerciseNameFrom, filterSince, initialWindows, layoutChart, mergeWindows,
+  localToday, pointText, rangeCutoff, setSummary, setsText, visibleLabels, windowBounds,
+  type Chart, type Comparison, type Exposure, type LogSession, type Metric, type ProgressEvent, type RangeKey, type TimelineEntry, type TrainingLog,
 } from "@/lib/exercise-progress";
 
 type Role = "COACH" | "ATHLETE";
@@ -38,7 +38,7 @@ export function ExerciseProgressView({ mode, exerciseId, athleteId }: { mode: "c
   const [fetching, setFetching] = useState(false);
   const [target, setTarget] = useState(initialWindows("3m"));
   const [range, setRange] = useState<RangeKey>("3m");
-  const [metric, setMetric] = useState<Metric>("topSet");
+  const [metric, setMetric] = useState<Metric>("performance");
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [today] = useState(localToday);
   const requestId = useRef(0);
@@ -121,7 +121,12 @@ export function ExerciseProgressView({ mode, exerciseId, athleteId }: { mode: "c
         <section className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-950/5">
           <Switch label={t("progress.metricLabel")} options={METRICS.map((m) => ({ value: m, text: t(`progress.metric.${m}` as MessageKey) }))} value={metric} onChange={setMetric} />
           <div className="mt-3"><Switch label={t("progress.rangeLabel")} options={RANGES.map((r) => ({ value: r, text: t(`progress.range.${r}` as MessageKey) }))} value={range} onChange={chooseRange} /></div>
-          {metric === "estimated1rm" && <p className="mt-3 text-xs leading-5 text-slate-500">{t("progress.estimated1rmNote")}</p>}
+          {metric === "estimated1rm" && (
+            <div className="mt-3 text-xs leading-5 text-slate-500">
+              <p className="font-semibold text-slate-700">{t("progress.metric.estimated1rmSubtitle")}</p>
+              <p>ⓘ {t("progress.estimated1rmNote")}</p>
+            </div>
+          )}
         </section>
 
         {!loadedFirst || (fetching && windows.length < initialWindows(range)) ? (
@@ -181,7 +186,7 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
 
   const current = selectedIndex !== undefined && visible.some((v) => v.index === selectedIndex) ? selectedIndex : visible[visible.length - 1].index;
   const entry = timeline.find((e) => e.index === current);
-  const previous = timeline.find((e) => e.index === current - 1);
+  const comparison = compareToPrevious(exposures[current], exposures[current - 1]);
   const visibleTimeline = timeline.filter((e) => visible.some((v) => v.index === e.index));
   const anyOtherCoach = visible.some((v) => v.exposure.source === "OTHER_COACH");
 
@@ -190,15 +195,15 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("progress.unitHeading", { unit })}</p>
       <div className="mt-3">
         {chart.points.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">{t("progress.noPoints")}</p> : (
-          <ProgressChart chart={chart} caption={t("progress.chartLabel", { metric: t(`progress.metric.${metric}` as MessageKey), unit })} selected={current} indexMap={visible.map((v) => v.index)} onSelect={onSelect} locale={locale} />
+          <ProgressChart chart={chart} unit={unit} metric={metric} caption={t("progress.chartLabel", { metric: t(`progress.metric.${metric}` as MessageKey), unit })} selected={current} indexMap={visible.map((v) => v.index)} onSelect={onSelect} locale={locale} />
         )}
       </div>
       {anyOtherCoach && <p className="mt-2 flex items-center gap-2 text-xs text-slate-500"><span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full border-2 border-teal-700 bg-white" />{t("progress.legend.otherCoach")}</p>}
 
       {entry && (
         <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4">
-          <SessionCard heading={t("progress.selected.heading")} entry={entry} locale={locale} />
-          {previous ? <SessionCard heading={t("progress.selected.previous")} entry={previous} locale={locale} compact /> : <p className="text-sm text-slate-500">{t("progress.selected.firstTime", { unit })}</p>}
+          <SessionCard heading={t("progress.selected.heading")} entry={entry} locale={locale} unit={unit} />
+          {comparison ? <ComparisonBlock comparison={comparison} unit={unit} locale={locale} /> : <p className="text-sm text-slate-500">{t("progress.selected.firstTime", { unit })}</p>}
         </div>
       )}
 
@@ -216,11 +221,35 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
   );
 }
 
-function SessionCard({ heading, entry, locale, compact }: { heading: string; entry: TimelineEntry; locale: Parameters<typeof monthDay>[0]; compact?: boolean }) {
+function SessionCard({ heading, entry, locale, unit }: { heading: string; entry: TimelineEntry; locale: Parameters<typeof monthDay>[0]; unit: string }) {
+  const t = useT();
   return (
-    <div className={`rounded-2xl ${compact ? "bg-stone-50" : "bg-teal-50"} p-3 ring-1 ${compact ? "ring-slate-950/5" : "ring-teal-600/20"}`}>
+    <div className="rounded-2xl bg-teal-50 p-3 ring-1 ring-teal-600/20">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{heading}</p>
       <TimelineBody entry={entry} locale={locale} />
+      <p className="mt-2 text-xs text-slate-500">{setsText(t, entry.exposure, unit)}</p>
+    </div>
+  );
+}
+
+// "vs. last time": raw from → to per field with arrows and signs only, in
+// neutral slate. RIR direction describes effort, never good or bad.
+function ComparisonBlock({ comparison, unit, locale }: { comparison: Comparison; unit: string; locale: Parameters<typeof monthDay>[0] }) {
+  const t = useT();
+  const rows = comparisonRows(t, comparison, unit);
+  return (
+    <div className="rounded-2xl bg-stone-50 p-3 ring-1 ring-slate-950/5">
+      <p className="text-sm font-bold">{t("progress.compare.heading", { date: monthDay(locale, comparison.previousDate) })}</p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-1 text-sm text-slate-700">
+        {rows.map((row) => (
+          <div key={row.key} className="contents">
+            <dt className="text-slate-500">{t(`progress.compare.${row.key}` as MessageKey)}</dt>
+            <dd className="tabular-nums">{row.values}</dd>
+            <dd className="text-right tabular-nums">{row.direction}</dd>
+          </div>
+        ))}
+      </dl>
+      {comparison.effort && <p className="mt-2 text-sm text-slate-700">{t(comparison.effort === "lower" ? "progress.compare.effortLower" : "progress.compare.effortHigher")}</p>}
     </div>
   );
 }
@@ -256,12 +285,13 @@ function EventChip({ event }: { event: ProgressEvent }) {
   return <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${pr ? "bg-teal-50 text-teal-700 ring-teal-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/10"}`}>{eventLabel(t, event)}</span>;
 }
 
-// Inline SVG: no chart library. Points are labelled reps@RIR (all of them
-// while there are few, otherwise only the selected one); other-Coach points
-// are hollow; a dashed vertical line marks every load change.
-function ProgressChart({ chart, caption, selected, indexMap, onSelect, locale }: { chart: Chart; caption: string; selected: number; indexMap: number[]; onSelect: (index: number) => void; locale: Parameters<typeof monthDay>[0] }) {
+// Inline SVG: no chart library. The selected point's label is strong, others
+// are light and thinned out so they never overlap; other-Coach points are
+// hollow; a dashed vertical line marks every load change (not on Sets).
+function ProgressChart({ chart, unit, metric, caption, selected, indexMap, onSelect, locale }: { chart: Chart; unit: string; metric: Metric; caption: string; selected: number; indexMap: number[]; onSelect: (index: number) => void; locale: Parameters<typeof monthDay>[0] }) {
   const { points, yTicks, xTicks, width, height, plot } = chart;
-  const labelAll = points.length <= 14;
+  const t = useT();
+  const labelled = visibleLabels(points, points.findIndex((p) => indexMap[p.index] === selected));
   return (
     <svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label={caption} className="h-auto w-full touch-manipulation select-none">
       {yTicks.map((tick) => (
@@ -274,21 +304,22 @@ function ProgressChart({ chart, caption, selected, indexMap, onSelect, locale }:
         <line key={`lc-${p.index}`} x1={p.x} x2={p.x} y1={plot.top} y2={plot.bottom} className="stroke-slate-400" strokeWidth={1} strokeDasharray="3 3" />
       ))}
       <polyline fill="none" className="stroke-teal-600" strokeWidth={1.5} points={points.map((p) => `${p.x},${p.y}`).join(" ")} />
-      {points.map((p) => {
+      {points.map((p, pi) => {
         const fullIndex = indexMap[p.index];
         const isSelected = fullIndex === selected;
+        const full = pointText(t, p.exposure, metric, unit);
         return (
           <g key={p.index}>
             {isSelected && <circle cx={p.x} cy={p.y} r={8} className="fill-none stroke-slate-900" strokeWidth={1.5} />}
             <circle cx={p.x} cy={p.y} r={4} strokeWidth={2} className={`stroke-teal-700 ${p.hollow ? "fill-white" : "fill-teal-700"}`} />
-            {(labelAll || isSelected) && <text x={p.x} y={p.y - 11} textAnchor="middle" className="fill-slate-700" fontSize={9} fontWeight={600}>{p.label}</text>}
+            {labelled.has(pi) && <text x={p.x} y={p.y - 11} textAnchor="middle" className={isSelected ? "fill-slate-900" : "fill-slate-400"} fontSize={9} fontWeight={isSelected ? 700 : 500}>{p.label}</text>}
             <circle
               cx={p.x} cy={p.y} r={14} fill="transparent" role="button" tabIndex={0}
-              aria-pressed={isSelected} aria-label={`${monthDay(locale, p.exposure.date)} ${formatNumber(p.value)} ${p.label}`}
+              aria-pressed={isSelected} aria-label={`${monthDay(locale, p.exposure.date)} ${full}`}
               className="cursor-pointer outline-none focus-visible:stroke-slate-900"
               onClick={() => onSelect(fullIndex)}
               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(fullIndex); } }}
-            />
+            ><title>{full}</title></circle>
           </g>
         );
       })}

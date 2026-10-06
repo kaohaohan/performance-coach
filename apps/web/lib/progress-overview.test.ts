@@ -31,6 +31,21 @@ test("eventChips lists distinct PR and load-up chips only", () => {
   assert.deepEqual(eventChips(t, []), []);
 });
 
+test("eventChips load-up chip shows the delta of the newest positive load change", () => {
+  const chip = (events: OverviewEvent[]) => eventChips(t, events).find((c) => c.key === "loadUp")?.label;
+  assert.equal(chip([{ date: "2026-10-05", type: "LOAD_CHANGE", delta: 20, unit: "lb" }]), "+20 lb");
+  assert.equal(chip([{ date: "2026-10-05", type: "LOAD_CHANGE", delta: 2.5, unit: "kg" }]), "+2.5 kg");
+  assert.equal(chip([{ date: "2026-10-05", type: "LOAD_CHANGE", delta: -5, unit: "kg" }]), undefined);
+  assert.equal(
+    chip([
+      { date: "2026-10-05", type: "LOAD_CHANGE", delta: -5, unit: "kg" },
+      { date: "2026-09-28", type: "LOAD_CHANGE", delta: 5, unit: "kg" },
+      { date: "2026-09-21", type: "LOAD_CHANGE", delta: 10, unit: "kg" },
+    ]),
+    "+5 kg",
+  );
+});
+
 test("layoutSparkline breaks the line at empty weeks instead of interpolating", () => {
   const trend = [10, null, 20, 30, null].map((v, i) => ({ weekStart: `w${i}`, estimated1rm: v }));
   const s = layoutSparkline(trend, 100, 30);

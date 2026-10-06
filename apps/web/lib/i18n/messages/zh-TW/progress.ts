@@ -11,12 +11,14 @@ export const progress: ProgressMessages = {
   "progress.unknownExercise": "動作",
 
   "progress.metricLabel": "指標",
-  "progress.metric.topSet": "最重組",
-  "progress.metric.estimated1rm": "預估 1RM",
-  "progress.metric.load": "重量",
-  "progress.metric.reps": "次數",
-  "progress.metric.volume": "訓練量",
-  "progress.estimated1rmNote": "以最重組估算：重量 × (1 + (次數 + RIR) / 30)。這是計算值，不是實測最大重量。",
+  "progress.metric.performance": "表現",
+  "progress.metric.estimated1rm": "預估強度",
+  "progress.metric.workingSets": "完成組數",
+  "progress.metric.estimated1rmSubtitle": "Estimated 1RM",
+  "progress.estimated1rmNote": "根據重量、次數與 RIR 估算，用於觀察長期趨勢，不代表實際測得的 1RM。",
+  "progress.point.estimated1rm": "預估 1RM {value} {unit} · 來自 {top}",
+  "progress.point.sets": "{count} 組",
+  "progress.point.volume": "訓練量 {volume} {unit}",
 
   "progress.rangeLabel": "範圍",
   "progress.range.3m": "3 個月",
@@ -30,7 +32,15 @@ export const progress: ProgressMessages = {
   "progress.empty": "此範圍內沒有已完成且有重量的組數。",
 
   "progress.selected.heading": "所選訓練",
-  "progress.selected.previous": "上一次訓練",
+  "progress.compare.heading": "與上次相比 · {date}",
+  "progress.compare.load": "重量",
+  "progress.compare.reps": "次數",
+  "progress.compare.rir": "RIR",
+  "progress.compare.notLogged": "未記錄",
+  "progress.compare.effortDown": "↓ effort",
+  "progress.compare.effortUp": "↑ effort",
+  "progress.compare.effortLower": "同重量與次數，較低 effort 完成",
+  "progress.compare.effortHigher": "同重量與次數，較高 effort 完成",
   "progress.selected.firstTime": "以 {unit} 記錄的第一筆。",
 
   "progress.timeline.heading": "歷史紀錄",
@@ -63,7 +73,6 @@ export const progress: ProgressMessages = {
   "progress.overview.prsDetail": "次數 PR 與重量 PR",
   "progress.overview.trendLabel": "每週預估 1RM，近 {weeks} 週",
   "progress.overview.chip.repPr": "次數 PR",
-  "progress.overview.chip.loadUp": "↑ 重量",
   "progress.viewProgress": "查看進度",
 
   // 跨教練可見性揭露（加入流程與隱私權政策）。
