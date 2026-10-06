@@ -64,6 +64,9 @@ export const progress: ProgressMessages = {
   "progress.selected.firstTime": "以 {unit} 記錄的第一筆。",
 
   "progress.timeline.heading": "歷史紀錄",
+  "progress.timeline.prev": "上一頁",
+  "progress.timeline.next": "下一頁",
+  "progress.timeline.page": "第 {page} / {total} 頁",
   "progress.position": "第 {position} 個動作",
   "progress.otherCoach": "其他教練",
   "progress.openSession": "開啟訓練",

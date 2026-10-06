@@ -22,6 +22,8 @@ type Role = "COACH" | "ATHLETE";
 // passed through; anything else falls back to errors.unexpected.
 const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
+const HISTORY_PAGE_SIZE = 10;
+
 // Exercise Progress: the same read-only view for the Coach
 // (/coach/clients/[athleteId]/exercises/[exerciseId]) and the Athlete
 // (/history/exercises/[exerciseId]). One request per 184-day window; kg and lb
@@ -176,6 +178,7 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
   const timeline = useMemo(() => buildTimeline(unit, sessions, exposures, exerciseId), [unit, sessions, exposures, exerciseId]);
   const visible = useMemo(() => exposures.map((exposure, index) => ({ exposure, index })).filter((v) => filterSince([v.exposure], cutoff).length > 0), [exposures, cutoff]);
   const chart = useMemo(() => layoutChart(visible.map((v) => v.exposure), metric), [visible, metric]);
+  const [historyPage, setHistoryPage] = useState(1);
   if (visible.length === 0) return null;
 
   const current = selectedIndex !== undefined && visible.some((v) => v.index === selectedIndex) ? selectedIndex : visible[visible.length - 1].index;
@@ -184,6 +187,10 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
   // The selected exposure is already shown in full above, so the list skips it.
   const historyTimeline = timeline.filter((e) => e.index !== current && visible.some((v) => v.index === e.index));
   const anyOtherCoach = visible.some((v) => v.exposure.source === "OTHER_COACH");
+  // Newest first, HISTORY_PAGE_SIZE per page; the page is clamped because the range can shrink the list.
+  const historyPages = Math.max(1, Math.ceil(historyTimeline.length / HISTORY_PAGE_SIZE));
+  const page = Math.min(historyPage, historyPages);
+  const pageEntries = historyTimeline.slice((page - 1) * HISTORY_PAGE_SIZE, page * HISTORY_PAGE_SIZE);
 
   return (
     <section className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-950/5">
@@ -206,12 +213,19 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
         <div className="mt-5 border-t border-slate-100 pt-4">
           <h2 className="text-sm font-bold">{t("progress.timeline.heading")}</h2>
           <ul className="mt-3 grid gap-2">
-            {historyTimeline.map((e) => (
+            {pageEntries.map((e) => (
               <li key={`${e.exposure.date}-${e.index}`}>
                 <TimelineRow entry={e} unit={unit} locale={locale} />
               </li>
             ))}
           </ul>
+          {historyPages > 1 && (
+            <nav className="mt-3 flex items-center justify-between gap-2" aria-label={t("progress.timeline.heading")}>
+              <button type="button" disabled={page <= 1} onClick={() => setHistoryPage(page - 1)} className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-800 disabled:opacity-40">{t("progress.timeline.prev")}</button>
+              <span className="text-xs font-medium text-slate-500">{t("progress.timeline.page", { page, total: historyPages })}</span>
+              <button type="button" disabled={page >= historyPages} onClick={() => setHistoryPage(page + 1)} className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-800 disabled:opacity-40">{t("progress.timeline.next")}</button>
+            </nav>
+          )}
         </div>
       )}
     </section>

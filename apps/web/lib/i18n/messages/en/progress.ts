@@ -64,6 +64,9 @@ export const progress = {
   "progress.selected.firstTime": "First time on record in {unit}.",
 
   "progress.timeline.heading": "History",
+  "progress.timeline.prev": "Previous",
+  "progress.timeline.next": "Next",
+  "progress.timeline.page": "Page {page} of {total}",
   "progress.position": "Exercise #{position}",
   "progress.otherCoach": "Other coach",
   "progress.openSession": "Open session",
