@@ -66,7 +66,7 @@ Redeeming a `coach_invite_codes` row inserts a `coach_athletes` row. The invite 
 | `coach_athletes` | `coach_id`, `athlete_id` | Coach N:N Athlete | Join row retained after account deletion as **historical access** ACL. Service layer distinguishes that from an **active relationship** (`deleted_at IS NULL` on both users). No `ended_at` column in V0.10. |
 | `coach_invite_codes` | `id`, `coach_id`, `code`, `description`, `expires_at`, `revoked_at` | Coach 1:N | Reusable capability a coach shares so athletes can self-connect. Redemption inserts `coach_athletes`; the invite row is never consumed. |
 | `exercises` | `id`, `name`, `owner_coach_id`, optional `description`, `youtube_url`, `image_object_key` | Optional owner Coach | Exercise identity/library. `owner_coach_id = NULL` means system seed; otherwise private to one coach. SYSTEM `name` is English identity, not a localized label. Media columns are nullable catalog attributes, not part of identity. |
-| `coach_exercise_media` | `coach_id`, `exercise_id`, `youtube_url`, `created_at`, `updated_at` | Coach N:N Exercise (PK `(coach_id, exercise_id)`) | **Approved, not yet implemented (migration `0013`).** One Coach's personal demo-video override for one exercise. Absence means "use `exercises.youtube_url`". Never edits the shared catalog row. Deleted with the Coach or the Exercise. |
+| `coach_exercise_media` | `coach_id`, `exercise_id`, `youtube_url`, `created_at`, `updated_at` | Coach N:N Exercise (PK `(coach_id, exercise_id)`) | **Approved, not yet implemented (migration `0013`).** One Coach's personal demo-video override for one exercise. Absence means "use `exercises.youtube_url`". Never edits the shared catalog row. No cascade from `users` (project rule, see 0004): account deletion removes a Coach's rows explicitly; rows also go when their Exercise is deleted. |
 | `workouts` | `id`, `coach_id`, `name`, `archived_at` | Coach 1:N Workout | Reusable workout template owned by a coach. |
 | `workout_exercises` | `workout_id`, `exercise_id`, set count, defaults, one planned load unit, optional `coach_cue`, `load_increment`, `set_increment`, `reps_increment`, `position` | Workout N:N Exercise through junction entity | Uniform-first authoring defaults, coach-authored weekly load/set/reps bumps for next copy/build/repeat, and workout-context Coach guidance for one template exercise. |
 | `workout_exercise_set_overrides` | `workout_exercise_id`, `planned_position`, nullable override values | WorkoutExercise 1:N | Sparse, property-specific explicit values; absent property means inherit. |
@@ -126,9 +126,9 @@ exercises(
 )
 
 coach_exercise_media(
-  coach_id uuid not null references users(id) on delete cascade,
+  coach_id uuid not null references users(id),
   exercise_id uuid not null references exercises(id) on delete cascade,
-  youtube_url text not null,
+  youtube_url text not null check (length(btrim(youtube_url)) > 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (coach_id, exercise_id)

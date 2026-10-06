@@ -40,7 +40,7 @@
 
   ```sql
   CREATE TABLE coach_exercise_media (
-      coach_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      coach_id    uuid NOT NULL REFERENCES users(id),
       exercise_id uuid NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
       youtube_url text NOT NULL,
       created_at  timestamptz NOT NULL DEFAULT now(),
@@ -78,8 +78,8 @@
 | Phase 0 inspection | Done | Findings in section 1 |
 | Task Doc | Done | This file |
 | 1. Contract and schema docs | Done | Contract V0.14 note, §3.2 PUT/DELETE, read rules, permission row; schema table and DDL. Marked approved, not implemented. Committed locally, not pushed |
-| 2. Migration `0013` | Not Started | |
-| 3. API set/clear | Not Started | |
+| 2. Migration `0013` | Done | up/down/verify written; applied to an empty scratch DB `performance_coach_migrate_test`, verified, down and up again; `go test ./internal/migrate` passes. Deviation recorded below |
+| 3. API set/clear | Not Started | Must also add `DELETE FROM coach_exercise_media WHERE coach_id = $1` to `accountdeletion.pruneOwnedData` (before pruning private exercises) with a test |
 | 4. Read paths | Not Started | |
 | 5. Frontend | Not Started | |
 | 6. Staging verification | Not Started | |
@@ -90,6 +90,8 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`.
 
 - Final status:
 - Deviations from plan:
+  - `coach_id` has **no** `ON DELETE CASCADE` (the plan said cascade). The existing migrate test `TestAccountDeletionMigration0004RoundTrip` forbids any cascade from `users`: users are tombstoned, never deleted, and account deletion prunes owned data explicitly. So the cleanup moves into `accountdeletion.pruneOwnedData` (sub-task 3). `exercise_id` keeps `ON DELETE CASCADE` (only references `exercises`).
+  - Added a `CHECK (length(btrim(youtube_url)) > 0)` so an empty row cannot exist even if the API check is bypassed.
 - Follow-ups:
   - Confirm with a read-only query whether production catalog rows have `youtube_url` at all; if not, decide whether to seed defaults there.
   - Editing description and image per Coach is out of scope.
