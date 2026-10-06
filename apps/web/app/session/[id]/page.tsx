@@ -238,10 +238,14 @@ export default function SessionPage() {
   }
 
   async function handleComplete() {
-    if (!idToken || completing) return;
-    const confirmed = window.confirm(locale === "zh-TW"
-      ? "確定要完成這次訓練嗎？完成後這份課表會完全鎖定，無法再新增或修改任何紀錄。"
-      : "Complete this workout? After completion it is fully locked. You cannot add or edit any recorded results.");
+    if (!idToken || !session || completing) return;
+    const targets = session.exercises
+      .filter((exercise) => exercise.removedAt === undefined)
+      .flatMap((exercise) => orderedTargets(exercise).map((target) => actualForTarget(exercise, target)));
+    const remaining = targets.filter((actual) => actual === undefined).length;
+    const confirmed = window.confirm(remaining > 0
+      ? t("athlete.session.finishConfirmIncomplete", { remaining, total: targets.length })
+      : t("athlete.session.finishConfirm"));
     if (!confirmed) return;
     setCompleting(true);
     setCompleteError(null);
@@ -368,7 +372,7 @@ export default function SessionPage() {
             <h1 className="mt-2 truncate text-2xl font-semibold tracking-tight">{session.athlete.name}</h1>
             <p className="mt-1 text-sm text-slate-300">{isActive ? t("athlete.session.live") : t("athlete.session.finished")}</p>
           </div>
-          {isActive ? (
+          {isActive ? !focusedExercise && (
             <button type="button" onClick={() => void handleComplete()} disabled={completing} className="mt-8 min-h-11 shrink-0 rounded-full bg-teal-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50">{completing ? t("athlete.session.completingWorkout") : t("athlete.session.finish")}</button>
           ) : (
             <span className="mt-8 shrink-0 rounded-full bg-emerald-400 px-3 py-1.5 text-xs font-bold text-emerald-950">{t("athlete.status.completed")}</span>
