@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useLocale, useT } from "@/lib/i18n";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
@@ -48,6 +49,7 @@ export default function SessionPage() {
   const submittingFormKeys = useRef(new Set<string>());
   const [completing, setCompleting] = useState(false);
   const [completeError, setCompleteError] = useState<string | null>(null);
+  const [finishPrompt, setFinishPrompt] = useState<{ remaining: number; total: number } | null>(null);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [exerciseOptions, setExerciseOptions] = useState<ExerciseOption[]>([]);
   const [selectedExerciseId, setSelectedExerciseId] = useState("");
@@ -237,16 +239,19 @@ export default function SessionPage() {
     }
   }
 
-  async function handleComplete() {
-    if (!idToken || !session || completing) return;
-    const targets = session.exercises
+  // Finishing locks the whole session, so the prompt states how many planned
+  // sets are still unlogged before the athlete commits.
+  function openFinishPrompt() {
+    if (!session || completing) return;
+    const actuals = session.exercises
       .filter((exercise) => exercise.removedAt === undefined)
       .flatMap((exercise) => orderedTargets(exercise).map((target) => actualForTarget(exercise, target)));
-    const remaining = targets.filter((actual) => actual === undefined).length;
-    const confirmed = window.confirm(remaining > 0
-      ? t("athlete.session.finishConfirmIncomplete", { remaining, total: targets.length })
-      : t("athlete.session.finishConfirm"));
-    if (!confirmed) return;
+    setFinishPrompt({ remaining: actuals.filter((actual) => actual === undefined).length, total: actuals.length });
+  }
+
+  async function handleComplete() {
+    setFinishPrompt(null);
+    if (!idToken || completing) return;
     setCompleting(true);
     setCompleteError(null);
     try {
@@ -373,7 +378,7 @@ export default function SessionPage() {
             <p className="mt-1 text-sm text-slate-300">{isActive ? t("athlete.session.live") : t("athlete.session.finished")}</p>
           </div>
           {isActive ? !focusedExercise && (
-            <button type="button" onClick={() => void handleComplete()} disabled={completing} className="mt-8 min-h-11 shrink-0 rounded-full bg-teal-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50">{completing ? t("athlete.session.completingWorkout") : t("athlete.session.finish")}</button>
+            <button type="button" onClick={openFinishPrompt} disabled={completing} className="mt-8 min-h-11 shrink-0 rounded-full bg-teal-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50">{completing ? t("athlete.session.completingWorkout") : t("athlete.session.finish")}</button>
           ) : (
             <span className="mt-8 shrink-0 rounded-full bg-emerald-400 px-3 py-1.5 text-xs font-bold text-emerald-950">{t("athlete.status.completed")}</span>
           )}
@@ -463,6 +468,20 @@ export default function SessionPage() {
           </>
         )}
       </div>
+
+      {finishPrompt && (
+        <ConfirmDialog
+          title={t("athlete.session.finishConfirmTitle")}
+          body={finishPrompt.remaining > 0
+            ? t("athlete.session.finishConfirmIncomplete", { remaining: finishPrompt.remaining, total: finishPrompt.total })
+            : t("athlete.session.finishConfirm")}
+          confirmLabel={t("athlete.session.finishConfirmAction")}
+          cancelLabel={t("athlete.session.finishConfirmCancel")}
+          danger={finishPrompt.remaining > 0}
+          onConfirm={() => void handleComplete()}
+          onCancel={() => setFinishPrompt(null)}
+        />
+      )}
     </main>
   );
 }

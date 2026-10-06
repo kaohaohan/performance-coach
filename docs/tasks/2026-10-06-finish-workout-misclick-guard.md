@@ -16,7 +16,7 @@
   2. Recovers mistakes, but breaks the "COMPLETED is permanently read-only" invariant and touches PR events, last-completed loads, and completion rate. Requires contract change and a larger task.
   3. Same invariant break as 2, and would not have helped this case (the Athlete noticed the next day).
 - Selected option and why: Option 1. It is the smallest change that removes the cause (Finish visible next to per-exercise logging, ambiguous label, confirm not mentioning unlogged sets). Option 2 is deferred until recovery is needed again (AGENTS.md §23).
-- Risks & unknowns: `window.confirm` is still a native dialog that users may dismiss habitually; the remaining-sets count makes it explicit. A custom modal is a follow-up only if misclicks continue.
+- Risks & unknowns: `window.confirm` is a native dialog that shows the site URL and generic OK/Cancel buttons users dismiss habitually. After the first staging test, this was replaced with the shared in-app `ConfirmDialog` (see Outcome).
 - Dependencies / blockers: none.
 
 ## 2. Technical Design
@@ -42,6 +42,7 @@
 | Task Doc | Done | |
 | Hide Finish in focus layer + label | Done | |
 | Progress-aware confirm (i18n) | Done | |
+| Replace `window.confirm` with in-app `ConfirmDialog` | Done | Founder request after first staging test |
 | Lint / tests | Done | |
 | Manual check in running app | Not Started | Needs a browser check by the founder |
 
@@ -50,5 +51,5 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`.
 ## 5. Outcome (filled at completion)
 
 - Final status: Code done; `npm run lint` (0 errors) and `npm test` (223/223) pass. Manual browser check pending.
-- Deviations from plan: none.
+- Deviations from plan: the native `window.confirm` was replaced with the shared `components/confirm-dialog.tsx` (title 結束整份訓練？, buttons 繼續記錄 / 結束並鎖定, red when sets are unlogged; focus starts on 繼續記錄). New keys: `finishConfirmTitle`, `finishConfirmAction`, `finishConfirmCancel`.
 - Follow-ups: Coach reopen (option 2) stays in the backlog until needed again.
