@@ -131,6 +131,58 @@ func TestGetReturnsFrozenPlannedTargetsAndActualAssociations(t *testing.T) {
 	}
 }
 
+func TestGetShowsSchedulingCoachVideoOverride(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	catalogURL := "https://www.youtube.com/watch?v=catalog"
+	name := integrationPrefix + " video bench"
+	if _, err := integrationPool.Exec(ctx,
+		`INSERT INTO exercises (id, name, owner_coach_id, created_at, youtube_url) VALUES ($1, $2, NULL, now(), $3)`,
+		uuid.NewString(), name, catalogURL,
+	); err != nil {
+		t.Fatal(err)
+	}
+	reps := 5
+	setup := newSession(t, []workout.CreateExerciseInput{{Name: name, Plan: prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}}}})
+
+	youtubeURL := func() string {
+		t.Helper()
+		detail, err := workoutsession.Get(ctx, integrationPool, setup.athlete, setup.session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(detail.Exercises) != 1 || detail.Exercises[0].YoutubeURL == nil {
+			t.Fatalf("exercises = %#v, want one with a youtubeUrl", detail.Exercises)
+		}
+		return *detail.Exercises[0].YoutubeURL
+	}
+
+	if got := youtubeURL(); got != catalogURL {
+		t.Fatalf("no override: %q, want catalog default", got)
+	}
+	mine := "https://www.youtube.com/watch?v=scheduling-coach"
+	if _, err := integrationPool.Exec(ctx,
+		`INSERT INTO coach_exercise_media (coach_id, exercise_id, youtube_url)
+		 SELECT $1, id, $3 FROM exercises WHERE name = $2`, setup.coach.ID, name, mine,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := youtubeURL(); got != mine {
+		t.Fatalf("with override: %q, want scheduling coach override", got)
+	}
+	// Another Coach's override on the same exercise must not leak into this session.
+	other := integrationUser(t, "COACH")
+	if _, err := integrationPool.Exec(ctx,
+		`INSERT INTO coach_exercise_media (coach_id, exercise_id, youtube_url)
+		 SELECT $1, id, 'https://youtu.be/other' FROM exercises WHERE name = $2`, other.ID, name,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := youtubeURL(); got != mine {
+		t.Fatalf("after another coach override: %q, want unchanged %q", got, mine)
+	}
+}
+
 func TestCreateSetLogValidationClaimsAuthorizationAndCompletion(t *testing.T) {
 	requireIntegrationDB(t)
 	ctx := context.Background()
@@ -540,6 +592,7 @@ func cleanupIntegration(ctx context.Context) {
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM scheduled_workouts WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM workout_exercise_set_overrides WHERE workout_exercise_id IN (SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id WHERE w.coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1))`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1))`, pattern)
+	_, _ = integrationPool.Exec(ctx, `DELETE FROM coach_exercise_media WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM exercises WHERE owner_coach_id IS NULL AND name LIKE $1`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM workouts WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = integrationPool.Exec(ctx, `DELETE FROM exercises WHERE owner_coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)

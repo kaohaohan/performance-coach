@@ -759,13 +759,15 @@ func loadSnapshotExercises(ctx context.Context, pool *pgxpool.Pool, scheduledWor
 		SELECT swe.id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.origin,
 		       swe.added_by_user_id::text, swe.removed_at::text, swe.removed_by_user_id::text,
 		       swe.replaces_scheduled_workout_exercise_id::text,
-		       e.youtube_url,
+		       COALESCE(m.youtube_url, e.youtube_url),
 		       p.id, p.planned_position, p.target_reps, p.target_prescription_note, p.target_load,
 		       CASE WHEN p.target_load IS NULL THEN NULL ELSE swe.target_load_unit END,
 		       p.target_rir
 		FROM scheduled_workout_exercises swe
 		JOIN scheduled_workout_planned_sets p ON p.scheduled_workout_exercise_id = swe.id
+		JOIN scheduled_workouts sw ON sw.id = swe.scheduled_workout_id
 		LEFT JOIN exercises e ON e.id = swe.exercise_id
+		LEFT JOIN coach_exercise_media m ON m.exercise_id = swe.exercise_id AND m.coach_id = sw.coach_id
 		WHERE swe.scheduled_workout_id = $1
 		ORDER BY swe.removed_at IS NOT NULL, swe.position, p.planned_position`
 

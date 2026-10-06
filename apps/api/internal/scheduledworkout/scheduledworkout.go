@@ -1292,9 +1292,12 @@ func ListForAthlete(ctx context.Context, pool *pgxpool.Pool, caller authn.User, 
 	}
 
 	const exercisesQuery = `
-		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.position, e.youtube_url
+		SELECT swe.id, swe.scheduled_workout_id, swe.exercise_id, swe.exercise_name, swe.coach_cue, swe.position,
+		       COALESCE(m.youtube_url, e.youtube_url)
 		FROM scheduled_workout_exercises swe
+		JOIN scheduled_workouts sw ON sw.id = swe.scheduled_workout_id
 		LEFT JOIN exercises e ON e.id = swe.exercise_id
+		LEFT JOIN coach_exercise_media m ON m.exercise_id = swe.exercise_id AND m.coach_id = sw.coach_id
 		WHERE swe.scheduled_workout_id = ANY($1)
 		ORDER BY swe.scheduled_workout_id, swe.position`
 

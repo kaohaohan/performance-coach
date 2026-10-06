@@ -229,6 +229,72 @@ func TestListForAthleteReadsCanonicalFrozenPlannedSets(t *testing.T) {
 	}
 }
 
+func TestTodayShowsSchedulingCoachVideoOverride(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	coachA, coachB := user(t, "COACH"), user(t, "COACH")
+	athlete := user(t, "ATHLETE")
+	connect(t, coachA, athlete)
+	connect(t, coachB, athlete)
+
+	catalogURL := "https://www.youtube.com/watch?v=catalog"
+	name := prefix + " video squat"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO exercises (id, name, owner_coach_id, created_at, youtube_url) VALUES ($1, $2, NULL, now(), $3)`,
+		uuid.NewString(), name, catalogURL,
+	); err != nil {
+		t.Fatal(err)
+	}
+	reps := 5
+	plan := prescription.Plan{SetCount: 1, Defaults: prescription.Defaults{Reps: &reps}}
+	schedule := func(coach authn.User, date string) {
+		t.Helper()
+		w := createWorkout(t, coach, []workout.CreateExerciseInput{{Name: name, Plan: plan}})
+		if _, err := scheduledworkout.Create(ctx, pool, coach, scheduledworkout.CreateInput{WorkoutID: w.ID, AthleteIDs: []string{athlete.ID}, ScheduledDate: date}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	todayURL := func(date time.Time) []string {
+		t.Helper()
+		got, err := scheduledworkout.ListForAthlete(ctx, pool, athlete, date)
+		if err != nil {
+			t.Fatal(err)
+		}
+		urls := make([]string, 0)
+		for _, sw := range got {
+			if len(sw.Exercises) != 1 || sw.Exercises[0].YoutubeURL == nil {
+				t.Fatalf("today exercises = %#v, want one with a youtubeUrl", sw.Exercises)
+			}
+			urls = append(urls, *sw.Exercises[0].YoutubeURL)
+		}
+		return urls
+	}
+
+	// Same exercise, same athlete, two Coaches on two days.
+	schedule(coachA, "2026-08-16")
+	schedule(coachB, "2026-08-17")
+	day16, day17 := time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC), time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC)
+	if got := todayURL(day16); len(got) != 1 || got[0] != catalogURL {
+		t.Fatalf("no override: %v, want catalog default", got)
+	}
+
+	// Coach A overrides: only Coach A's workout changes.
+	mine := "https://www.youtube.com/watch?v=coachA"
+	var exerciseID string
+	if err := pool.QueryRow(ctx, `SELECT id FROM exercises WHERE name = $1`, name).Scan(&exerciseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO coach_exercise_media (coach_id, exercise_id, youtube_url) VALUES ($1, $2, $3)`, coachA.ID, exerciseID, mine); err != nil {
+		t.Fatal(err)
+	}
+	if got := todayURL(day16); len(got) != 1 || got[0] != mine {
+		t.Fatalf("coach A day: %v, want coach A override", got)
+	}
+	if got := todayURL(day17); len(got) != 1 || got[0] != catalogURL {
+		t.Fatalf("coach B day: %v, want catalog default", got)
+	}
+}
+
 func TestListForAthleteRangeReturnsSummaryWithoutExercises(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()
@@ -538,6 +604,7 @@ func cleanup(ctx context.Context) {
 	_, _ = pool.Exec(ctx, `DELETE FROM workout_exercise_set_overrides WHERE workout_exercise_id IN (SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id WHERE w.name LIKE $1)`, pattern)
 	_, _ = pool.Exec(ctx, `DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE name LIKE $1)`, pattern)
 	_, _ = pool.Exec(ctx, `DELETE FROM workouts WHERE name LIKE $1`, pattern)
+	_, _ = pool.Exec(ctx, `DELETE FROM coach_exercise_media WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = pool.Exec(ctx, `DELETE FROM exercises WHERE name LIKE $1`, pattern)
 	_, _ = pool.Exec(ctx, `DELETE FROM coach_athletes WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1) OR athlete_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = pool.Exec(ctx, `DELETE FROM users WHERE firebase_uid LIKE $1`, pattern)
