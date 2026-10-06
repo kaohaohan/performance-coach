@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { translate, type Locale } from "./i18n/locale.ts";
+import { en, type Catalog } from "./i18n/messages/en/index.ts";
+import { zhTW } from "./i18n/messages/zh-TW/index.ts";
 import {
-  addDays, buildTimeline, eventLabel, filterSince, initialWindows, layoutChart, mergeWindows, compareToPrevious, comparisonRows, metricValue, niceTicks, pointLabel, pointText, rangeCutoff, setSummary, visibleLabels, windowBounds,
+  addDays, buildTimeline, eventLabel, filterSince, initialWindows, layoutChart, mergeWindows, compareToPrevious, comparisonRows, describeComparison, metricValue, niceTicks, pointLabel, pointText, rangeCutoff, setSummary, setsText, visibleLabels, windowBounds,
   type Exposure, type LogSession,
 } from "./exercise-progress";
 
+const catalogs: Record<Locale, Catalog> = { en, "zh-TW": zhTW };
+const zh = ((key: string, vars?: Record<string, string | number>) => translate(catalogs, "zh-TW", key as never, vars)) as never;
+const enT = ((key: string, vars?: Record<string, string | number>) => translate(catalogs, "en", key as never, vars)) as never;
 const t = ((key: string, params?: Record<string, string | number>) => `${key}${params ? JSON.stringify(params) : ""}`) as never;
 
 function exposure(date: string, load: number | null, reps: number, extra: Partial<Exposure> = {}): Exposure {
@@ -44,7 +50,6 @@ test("metrics read the engine's numbers, null when absent", () => {
   const e = exposure("2026-09-01", 80, 8);
   assert.equal(metricValue(e, "performance"), 80);
   assert.equal(metricValue(e, "estimated1rm"), 40);
-  assert.equal(metricValue(e, "workingSets"), 3);
   assert.equal(metricValue({ ...e, estimated1rm: undefined }, "estimated1rm"), null);
   assert.equal(metricValue(exposure("2026-09-01", null, 8), "performance"), null);
 });
@@ -52,7 +57,6 @@ test("metrics read the engine's numbers, null when absent", () => {
 test("point labels are reps@RIR, RIR omitted when unknown", () => {
   assert.equal(pointLabel(exposure("2026-09-01", 80, 9)), "9 @1");
   assert.equal(pointLabel({ ...exposure("2026-09-01", 80, 9), topSet: { load: 80, reps: 9 } }), "9");
-  assert.equal(pointLabel(exposure("2026-09-01", 80, 9), "workingSets"), "3");
 });
 
 test("setSummary reads load × reps · RIR, bodyweight spelled out", () => {
@@ -65,72 +69,101 @@ test("pointText: full text per metric", () => {
   const e = exposure("2026-09-01", 350, 12, { topSet: { load: 350, reps: 12, rir: 2 }, estimated1rm: 412, setCount: 3, volumeLoad: 12600 });
   assert.equal(pointText(t, e, "performance", "lb"), "350 lb × 12 @2");
   assert.equal(pointText(t, e, "estimated1rm", "lb"), 'progress.point.estimated1rm{"value":"412","unit":"lb","top":"350 lb × 12 @2"}');
-  assert.equal(pointText(t, e, "workingSets", "lb"), 'progress.point.sets{"count":3} · progress.point.volume{"volume":"12,600","unit":"lb"}');
-  assert.equal(pointText(t, { ...e, volumeLoad: undefined }, "workingSets", "lb"), 'progress.point.sets{"count":3}');
+  assert.equal(setsText(t, e, "lb"), 'progress.point.sets{"count":3} · progress.point.volume{"volume":"12,600","unit":"lb"}');
+  assert.equal(setsText(t, { ...e, volumeLoad: undefined }, "lb"), 'progress.point.sets{"count":3}');
 });
 
-test("sets chart: integer y ticks and no load-change guides", () => {
-  const chart = layoutChart([
-    exposure("2026-09-01", 80, 8, { setCount: 3 }),
-    exposure("2026-09-08", 82.5, 8, { setCount: 4, events: [{ type: "LOAD_CHANGE", delta: 2.5, unit: "kg" }] }),
-  ], "workingSets");
-  assert.ok(chart.yTicks.every((tick) => Number.isInteger(Number(tick.label))));
-  assert.ok(chart.points.every((p) => !p.loadChange));
+test("niceTicks integer mode gives whole numbers", () => {
   assert.deepEqual(niceTicks(2, 3.2, 4, true).every(Number.isInteger), true);
 });
 
-test("compareToPrevious: load up", () => {
+function cmp(prev: Partial<Exposure["topSet"]> & { date?: string; source?: Exposure["source"] }, cur: Partial<Exposure["topSet"]> & { date?: string }) {
+  const mk = (o: typeof prev, date: string, source: Exposure["source"] = "OWN"): Exposure => {
+    const topSet = { load: 100, reps: 8, rir: 1, ...o } as Exposure["topSet"];
+    delete (o as { date?: string }).date;
+    return exposure(date, topSet.load, topSet.reps, { topSet, source });
+  };
+  const c = compareToPrevious(mk(cur, cur.date ?? "2026-09-08"), mk(prev, prev.date ?? "2026-09-01", prev.source));
+  assert.ok(c);
+  return c;
+}
+
+test("compareToPrevious: load up, 3-column rows", () => {
   const c = compareToPrevious(exposure("2026-09-08", 350, 12), exposure("2026-09-01", 330, 12));
   assert.ok(c);
   assert.equal(c.previousDate, "2026-09-01");
   assert.deepEqual(c.load, { from: 330, to: 350, delta: 20 });
-  assert.equal(c.reps.delta, 0);
-  assert.equal(c.rir.delta, 0);
   assert.equal(c.effort, null);
-  assert.deepEqual(comparisonRows(t, c, "lb").map((r) => [r.values, r.direction]), [["330 → 350 lb", "↑ +20 lb"], ["12 → 12", "—"], ["1 → 1", "—"]]);
+  assert.deepEqual(comparisonRows(t, c, "lb").map((r) => [r.previous, r.current, r.change]), [["330 lb", "350 lb", "↑ +20 lb"], ["12", "12", "—"], ["1", "1", "—"]]);
 });
 
-test("compareToPrevious: same load and reps, RIR 1 to 3 is lower effort", () => {
+test("compareToPrevious: RIR rows use effort wording, missing RIR reads not logged", () => {
   const c = compareToPrevious(exposure("2026-09-08", 350, 12, { topSet: { load: 350, reps: 12, rir: 3 } }), exposure("2026-09-01", 350, 12));
-  assert.equal(c?.rir.delta, 2);
   assert.equal(c?.effort, "lower");
-  assert.equal(comparisonRows(t, c!, "lb")[2].direction, "progress.compare.effortDown");
+  assert.equal(comparisonRows(t, c!, "lb")[2].change, "progress.compare.effortDown");
   const higher = compareToPrevious(exposure("2026-09-08", 350, 12, { topSet: { load: 350, reps: 12, rir: 0 } }), exposure("2026-09-01", 350, 12));
   assert.equal(higher?.effort, "higher");
-  assert.equal(comparisonRows(t, higher!, "lb")[2].direction, "progress.compare.effortUp");
+  assert.equal(comparisonRows(t, higher!, "lb")[2].change, "progress.compare.effortUp");
+  const missing = compareToPrevious(exposure("2026-09-08", 350, 12, { topSet: { load: 350, reps: 12 } }), exposure("2026-09-01", 350, 12));
+  assert.equal(missing?.rir.delta, null);
+  assert.equal(missing?.effort, null);
+  assert.deepEqual(comparisonRows(t, missing!, "lb")[2], { key: "rir", previous: "1", current: "progress.compare.notLogged", change: "progress.compare.notLogged" });
 });
 
-test("compareToPrevious: missing RIR gives null delta and no effort", () => {
-  const c = compareToPrevious(exposure("2026-09-08", 350, 12, { topSet: { load: 350, reps: 12 } }), exposure("2026-09-01", 350, 12));
-  assert.equal(c?.rir.delta, null);
-  assert.equal(c?.rir.to, null);
-  assert.equal(c?.effort, null);
-  assert.equal(comparisonRows(t, c!, "lb")[2].direction, "—");
-});
-
-test("compareToPrevious: bodyweight load is null, reps still compare", () => {
-  const c = compareToPrevious(exposure("2026-09-08", null, 14), exposure("2026-09-01", null, 12));
+test("compareToPrevious: reps and bodyweight rows", () => {
+  const c = compareToPrevious(exposure("2026-09-08", null, 10), exposure("2026-09-01", null, 12));
   assert.deepEqual(c?.load, { from: null, to: null, delta: null });
-  assert.equal(c?.reps.delta, 2);
-  assert.equal(comparisonRows(t, c!, "kg")[1].direction, "↑ +2");
+  const rows = comparisonRows(t, c!, "kg");
+  assert.equal(rows[1].change, "↓ −2");
+  assert.equal(rows[0].change, "—");
 });
 
-test("compareToPrevious: no previous exposure", () => {
+test("compareToPrevious: no previous exposure gives null", () => {
   assert.equal(compareToPrevious(exposure("2026-09-08", 350, 12), undefined), null);
 });
 
-test("visibleLabels: selected always kept, crowded points dropped newest first", () => {
+test("compareToPrevious: sameDay and previousSource", () => {
+  const sameDay = compareToPrevious(exposure("2026-09-08", 350, 12), exposure("2026-09-08", 330, 12));
+  assert.equal(sameDay?.sameDay, true);
+  assert.equal(sameDay?.previousSource, "OWN");
+  const other = compareToPrevious(exposure("2026-09-08", 350, 12), exposure("2026-09-01", 330, 12, { source: "OTHER_COACH" }));
+  assert.equal(other?.sameDay, false);
+  assert.equal(other?.previousSource, "OTHER_COACH");
+});
+
+test("describeComparison (zh-TW): every plan case", () => {
+  const d = (c: ReturnType<typeof cmp>, unit = "kg") => describeComparison(zh, c, unit);
+  assert.equal(d(cmp({ rir: 1 }, { rir: 3 })), "同重量、同次數，以較低 effort 完成");
+  assert.equal(d(cmp({ reps: 7 }, { reps: 6 })), "同重量、相同 RIR，少 1 rep");
+  assert.equal(d(cmp({ load: 100, reps: 8 }, { load: 105, reps: 6 })), "重量增加 5 kg，少 2 reps，RIR 相同");
+  assert.equal(d(cmp({ load: 100 }, { load: 105 })), "重量增加 5 kg，次數與 RIR 維持");
+  assert.equal(d(cmp({}, {})), "與上次相同");
+  assert.equal(d(cmp({ load: 140 }, { load: 130 })), "重量減少 10 kg，次數與 RIR 維持");
+  assert.equal(d(cmp({ rir: 3 }, { rir: 1 })), "同重量、同次數，以較高 effort 完成");
+  assert.equal(d(cmp({ reps: 6 }, { reps: 8 })), "同重量、相同 RIR，多 2 reps");
+  const missing = cmp({}, { rir: undefined });
+  assert.equal(missing.effort, null);
+  assert.equal(d(missing), "同重量、同次數，RIR 未記錄，無法比較 effort");
+  assert.ok(d(cmp({ load: 100 }, { load: 105, rir: undefined })).includes("RIR 未記錄，無法比較 effort"));
+});
+
+test("describeComparison: lb is never converted; en wording differs and stays neutral", () => {
+  assert.equal(describeComparison(zh, cmp({ load: 315 }, { load: 325 }), "lb"), "重量增加 10 lb，次數與 RIR 維持");
+  assert.equal(describeComparison(enT, cmp({ load: 315 }, { load: 325 }), "lb"), "Load up 10 lb; reps and RIR unchanged");
+  assert.equal(describeComparison(enT, cmp({ rir: 1 }, { rir: 3 }), "kg"), "Same load, same reps; done at lower effort");
+  assert.equal(describeComparison(enT, cmp({}, {}), "kg"), "Same as last time");
+  assert.equal(comparisonRows(t, cmp({ load: 315 }, { load: 325 }), "lb")[0].change, "↑ +10 lb");
+});
+
+test("visibleLabels: only the selected and the latest point", () => {
   const pts = [0, 10, 20, 100, 110, 150].map((x) => ({ x }));
-  const kept = visibleLabels(pts, 1);
-  assert.ok(kept.has(1), "selected kept even though crowded");
-  assert.ok(kept.has(5) && kept.has(4), "newest kept first");
-  assert.ok(!kept.has(3), "100 is within 30 of the already kept 110");
-  assert.ok(!kept.has(0) && !kept.has(2), "0 and 20 are within 30 of the selected 10");
-  assert.deepEqual([...visibleLabels(pts, 2)].sort(), [2, 4, 5]);
+  assert.deepEqual([...visibleLabels(pts, 1)].sort(), [1, 5]);
+  assert.deepEqual([...visibleLabels(pts, 5)], [5]);
+  assert.deepEqual([...visibleLabels(pts, -1)], [5]);
   assert.deepEqual([...visibleLabels([], -1)], []);
 });
 
-test("chart: hollow for other-Coach points, dashed guide at load changes, time-proportional x", () => {
+test("chart: hollow for other-Coach points, no load-change guides, time-proportional x", () => {
   const chart = layoutChart([
     exposure("2026-09-01", 80, 8),
     exposure("2026-09-08", 82.5, 8, { source: "OTHER_COACH", events: [{ type: "LOAD_CHANGE", delta: 2.5, unit: "kg" }] }),
@@ -138,7 +171,7 @@ test("chart: hollow for other-Coach points, dashed guide at load changes, time-p
   ], "performance");
   assert.equal(chart.points.length, 3);
   assert.deepEqual(chart.points.map((p) => p.hollow), [false, true, false]);
-  assert.deepEqual(chart.points.map((p) => p.loadChange), [false, true, false]);
+  assert.ok(chart.points.every((p) => !("loadChange" in p)));
   const [a, b, c] = chart.points;
   assert.ok(a.x < b.x && b.x < c.x);
   assert.ok(Math.abs((b.x - a.x) / (c.x - a.x) - 7 / 28) < 1e-9);

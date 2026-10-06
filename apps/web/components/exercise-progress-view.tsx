@@ -11,7 +11,7 @@ import { errorMessage, type ErrorPolicy } from "@/lib/i18n/errors";
 import { localizeExerciseName } from "@/lib/i18n/exercise-names";
 import { AppHeader } from "@/components/app-header";
 import {
-  MAX_WINDOWS, METRICS, RANGES, buildTimeline, compareToPrevious, comparisonRows, eventLabel, exerciseNameFrom, filterSince, initialWindows, layoutChart, mergeWindows,
+  MAX_WINDOWS, METRICS, RANGES, buildTimeline, compareToPrevious, comparisonRows, describeComparison, eventLabel, exerciseNameFrom, filterSince, initialWindows, layoutChart, mergeWindows,
   localToday, pointText, rangeCutoff, setSummary, setsText, visibleLabels, windowBounds,
   type Chart, type Comparison, type Exposure, type LogSession, type Metric, type ProgressEvent, type RangeKey, type TimelineEntry, type TrainingLog,
 } from "@/lib/exercise-progress";
@@ -226,37 +226,55 @@ function SessionCard({ heading, entry, locale, unit }: { heading: string; entry:
   return (
     <div className="rounded-2xl bg-teal-50 p-3 ring-1 ring-teal-600/20">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{heading}</p>
-      <TimelineBody entry={entry} locale={locale} />
+      <TimelineBody entry={entry} locale={locale} prOnly />
       <p className="mt-2 text-xs text-slate-500">{setsText(t, entry.exposure, unit)}</p>
     </div>
   );
 }
 
-// "vs. last time": raw from → to per field with arrows and signs only, in
-// neutral slate. RIR direction describes effort, never good or bad.
+// "vs. last time": a Last | This | Change table plus one descriptive sentence,
+// in neutral slate. RIR direction describes effort, never good or bad.
 function ComparisonBlock({ comparison, unit, locale }: { comparison: Comparison; unit: string; locale: Parameters<typeof monthDay>[0] }) {
   const t = useT();
   const rows = comparisonRows(t, comparison, unit);
   return (
     <div className="rounded-2xl bg-stone-50 p-3 ring-1 ring-slate-950/5">
-      <p className="text-sm font-bold">{t("progress.compare.heading", { date: monthDay(locale, comparison.previousDate) })}</p>
-      <dl className="mt-2 grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-1 text-sm text-slate-700">
-        {rows.map((row) => (
-          <div key={row.key} className="contents">
-            <dt className="text-slate-500">{t(`progress.compare.${row.key}` as MessageKey)}</dt>
-            <dd className="tabular-nums">{row.values}</dd>
-            <dd className="text-right tabular-nums">{row.direction}</dd>
-          </div>
-        ))}
-      </dl>
-      {comparison.effort && <p className="mt-2 text-sm text-slate-700">{t(comparison.effort === "lower" ? "progress.compare.effortLower" : "progress.compare.effortHigher")}</p>}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <p className="text-sm font-bold">{t("progress.compare.heading", { date: monthDay(locale, comparison.previousDate) })}</p>
+        {comparison.sameDay && <span className="text-[11px] font-medium text-slate-500">{t("progress.compare.sameDay")}</span>}
+        {comparison.previousSource === "OTHER_COACH" && <span className="text-[11px] font-medium text-slate-500">{t("progress.compare.otherCoach")}</span>}
+      </div>
+      <table className="mt-2 w-full text-sm text-slate-700">
+        <thead>
+          <tr className="text-left text-xs text-slate-500">
+            <td className="py-1 pr-2" />
+            <th scope="col" className="py-1 pr-2 font-medium">{t("progress.compare.last")}</th>
+            <th scope="col" className="py-1 pr-2 font-medium">{t("progress.compare.this")}</th>
+            <th scope="col" className="py-1 text-right font-medium">{t("progress.compare.change")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <th scope="row" className="py-1 pr-2 text-left font-normal text-slate-500">{t(`progress.compare.${row.key}` as MessageKey)}</th>
+              <td className="py-1 pr-2 tabular-nums">{row.previous}</td>
+              <td className="py-1 pr-2 tabular-nums">{row.current}</td>
+              <td className="py-1 text-right tabular-nums">{row.change}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-2 text-sm text-slate-700">{describeComparison(t, comparison, unit)}</p>
+      <p className="mt-1 text-[11px] text-slate-500">{t("progress.compare.basis")}</p>
     </div>
   );
 }
 
-function TimelineBody({ entry, locale }: { entry: TimelineEntry; locale: Parameters<typeof monthDay>[0] }) {
+function TimelineBody({ entry, locale, prOnly = false }: { entry: TimelineEntry; locale: Parameters<typeof monthDay>[0]; prOnly?: boolean }) {
   const t = useT();
   const { exposure, sets, sessionId } = entry;
+  // The selected card is followed by the comparison block, so it only keeps PR chips.
+  const events = prOnly ? exposure.events.filter((e) => e.type === "LOAD_PR" || e.type === "REP_PR") : exposure.events;
   return (
     <div className="mt-1">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -269,9 +287,9 @@ function TimelineBody({ entry, locale }: { entry: TimelineEntry; locale: Paramet
           ? sets.map((set) => <li key={set.setNumber} className="tabular-nums">{set.setNumber}. {setSummary(t, set)}</li>)
           : <li className="tabular-nums">{setSummary(t, { load: exposure.topSet.load, unit: undefined, reps: exposure.topSet.reps, rir: exposure.topSet.rir })}</li>}
       </ul>
-      {exposure.events.length > 0 && (
+      {events.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {exposure.events.map((event, i) => <EventChip key={`${event.type}-${i}`} event={event} />)}
+          {events.map((event, i) => <EventChip key={`${event.type}-${i}`} event={event} />)}
         </div>
       )}
       {sessionId && <Link href={`/session/${sessionId}`} className="mt-2 inline-block text-sm font-bold text-teal-700">{t("progress.openSession")}</Link>}
@@ -285,9 +303,9 @@ function EventChip({ event }: { event: ProgressEvent }) {
   return <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${pr ? "bg-teal-50 text-teal-700 ring-teal-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/10"}`}>{eventLabel(t, event)}</span>;
 }
 
-// Inline SVG: no chart library. The selected point's label is strong, others
-// are light and thinned out so they never overlap; other-Coach points are
-// hollow; a dashed vertical line marks every load change (not on Sets).
+// Inline SVG: no chart library. Only the selected point (bold) and the latest
+// point (plain, light) are labelled; every point keeps a tooltip and aria-label.
+// Other-Coach points are hollow.
 function ProgressChart({ chart, unit, metric, caption, selected, indexMap, onSelect, locale }: { chart: Chart; unit: string; metric: Metric; caption: string; selected: number; indexMap: number[]; onSelect: (index: number) => void; locale: Parameters<typeof monthDay>[0] }) {
   const { points, yTicks, xTicks, width, height, plot } = chart;
   const t = useT();
@@ -300,9 +318,6 @@ function ProgressChart({ chart, unit, metric, caption, selected, indexMap, onSel
           <text x={plot.left - 6} y={tick.y + 3} textAnchor="end" className="fill-slate-500" fontSize={10}>{tick.label}</text>
         </g>
       ))}
-      {points.filter((p) => p.loadChange).map((p) => (
-        <line key={`lc-${p.index}`} x1={p.x} x2={p.x} y1={plot.top} y2={plot.bottom} className="stroke-slate-400" strokeWidth={1} strokeDasharray="3 3" />
-      ))}
       <polyline fill="none" className="stroke-teal-600" strokeWidth={1.5} points={points.map((p) => `${p.x},${p.y}`).join(" ")} />
       {points.map((p, pi) => {
         const fullIndex = indexMap[p.index];
@@ -312,7 +327,7 @@ function ProgressChart({ chart, unit, metric, caption, selected, indexMap, onSel
           <g key={p.index}>
             {isSelected && <circle cx={p.x} cy={p.y} r={8} className="fill-none stroke-slate-900" strokeWidth={1.5} />}
             <circle cx={p.x} cy={p.y} r={4} strokeWidth={2} className={`stroke-teal-700 ${p.hollow ? "fill-white" : "fill-teal-700"}`} />
-            {labelled.has(pi) && <text x={p.x} y={p.y - 11} textAnchor="middle" className={isSelected ? "fill-slate-900" : "fill-slate-400"} fontSize={9} fontWeight={isSelected ? 700 : 500}>{p.label}</text>}
+            {labelled.has(pi) && <text x={p.x} y={p.y - 11} textAnchor="middle" className={isSelected ? "fill-slate-900" : "fill-slate-400"} fontSize={9} fontWeight={isSelected ? 700 : 400}>{p.label}</text>}
             <circle
               cx={p.x} cy={p.y} r={14} fill="transparent" role="button" tabIndex={0}
               aria-pressed={isSelected} aria-label={`${monthDay(locale, p.exposure.date)} ${full}`}

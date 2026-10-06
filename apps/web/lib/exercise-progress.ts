@@ -1,4 +1,4 @@
-import type { Translate } from "@/lib/i18n";
+import type { MessageKey, Translate } from "@/lib/i18n";
 
 // Exercise Progress view model: GET /training-log
 // (docs/go-backend-api-contract-v0.1.md §3.10). Everything here is pure so it
@@ -38,9 +38,9 @@ export type Exposure = {
 export type TrainingLog = { sessions: LogSession[]; exposures?: Record<string, Exposure[]> };
 
 // Performance = the top set's load (point labels carry reps @ RIR); Estimated
-// strength = the server's estimated 1RM; Working sets = logged set count.
-export type Metric = "performance" | "estimated1rm" | "workingSets";
-export const METRICS: Metric[] = ["performance", "estimated1rm", "workingSets"];
+// strength = the server's estimated 1RM.
+export type Metric = "performance" | "estimated1rm";
+export const METRICS: Metric[] = ["performance", "estimated1rm"];
 export type RangeKey = "3m" | "1y" | "all";
 export const RANGES: RangeKey[] = ["3m", "1y", "all"];
 
@@ -111,7 +111,6 @@ export function metricValue(e: Exposure, metric: Metric): number | null {
   switch (metric) {
     case "performance": return e.topSet.load;
     case "estimated1rm": return e.estimated1rm ?? null;
-    case "workingSets": return e.setCount;
   }
 }
 
@@ -127,10 +126,9 @@ function loadText(t: Translate, load: number | null | undefined, unit: string | 
   return load === null || load === undefined ? t("athlete.set.bodyweight") : `${formatNumber(load)} ${unit ?? ""}`.trim();
 }
 
-// Short chart label: "12 @2" (reps only when RIR was not logged); the sets
-// metric labels with the count.
-export function pointLabel(e: Exposure, metric: Metric = "performance"): string {
-  return metric === "workingSets" ? String(e.setCount) : repsAtRir(e.topSet.reps, e.topSet.rir);
+// Short chart label: "12 @2" (reps only when RIR was not logged).
+export function pointLabel(e: Exposure): string {
+  return repsAtRir(e.topSet.reps, e.topSet.rir);
 }
 
 // Full text for tooltips, aria-labels and the card: "350 lb × 12 @2".
@@ -139,7 +137,6 @@ export function pointText(t: Translate, e: Exposure, metric: Metric, unit: strin
   switch (metric) {
     case "performance": return top;
     case "estimated1rm": return e.estimated1rm === undefined ? top : t("progress.point.estimated1rm", { value: formatNumber(e.estimated1rm), unit, top });
-    case "workingSets": return setsText(t, e, unit);
   }
 }
 
@@ -158,6 +155,8 @@ export function setSummary(t: Translate, set: { load?: number | null; unit?: Uni
 export type FieldDiff = { from: number | null; to: number | null; delta: number | null };
 export type Comparison = {
   previousDate: string;
+  sameDay: boolean;
+  previousSource: Source;
   load: FieldDiff;
   reps: FieldDiff;
   rir: FieldDiff;
@@ -181,35 +180,79 @@ export function compareToPrevious(current: Exposure, previous: Exposure | undefi
   const sameLoad = load.from === load.to;
   let effort: Comparison["effort"] = null;
   if (sameLoad && reps.delta === 0 && rir.delta !== null && rir.delta !== 0) effort = rir.delta > 0 ? "lower" : "higher";
-  return { previousDate: previous.date, load, reps, rir, effort };
+  return { previousDate: previous.date, sameDay: previous.date === current.date, previousSource: previous.source, load, reps, rir, effort };
 }
 
-export type ComparisonRow = { key: "load" | "reps" | "rir"; values: string; direction: string };
+export type ComparisonRow = { key: "load" | "reps" | "rir"; previous: string; current: string; change: string };
 
 function signed(delta: number, suffix = ""): string {
   return `${delta > 0 ? "+" : "−"}${formatNumber(Math.abs(delta))}${suffix}`;
 }
 
-// Display rows for the "vs. last time" block. Direction is arrows and signs
-// only; for RIR it describes effort (RIR up = lower effort), not good or bad.
+// Rows of the Last | This | Change table. Change is arrows and signs only; for
+// RIR it describes effort (RIR up = lower effort), not good or bad.
 export function comparisonRows(t: Translate, c: Comparison, unit: string): ComparisonRow[] {
-  const num = (v: number | null, missing: string, suffix = "") => (v === null ? missing : `${formatNumber(v)}${suffix}`);
-  const arrow = (delta: number | null) => (delta === null || delta === 0 ? null : delta > 0 ? "↑" : "↓");
   const bodyweight = t("athlete.set.bodyweight");
-  const mixed = c.load.from === null || c.load.to === null;
-  const loadSuffix = mixed ? ` ${unit}` : "";
-  const loadValues = mixed
-    ? `${num(c.load.from, bodyweight, loadSuffix)} → ${num(c.load.to, bodyweight, loadSuffix)}`
-    : `${formatNumber(c.load.from as number)} → ${formatNumber(c.load.to as number)} ${unit}`;
-  const loadDir = c.load.delta === null || c.load.delta === 0 ? "—" : `${arrow(c.load.delta)} ${signed(c.load.delta, ` ${unit}`)}`;
-  const repsDir = c.reps.delta === null || c.reps.delta === 0 ? "—" : `${arrow(c.reps.delta)} ${signed(c.reps.delta)}`;
   const notLogged = t("progress.compare.notLogged");
-  const rirDir = c.rir.delta === null || c.rir.delta === 0 ? "—" : t(c.rir.delta > 0 ? "progress.compare.effortDown" : "progress.compare.effortUp");
+  const arrow = (delta: number) => (delta > 0 ? "↑" : "↓");
+  const numeric = (field: FieldDiff, suffix: string) => (field.delta === null || field.delta === 0 ? "—" : `${arrow(field.delta)} ${signed(field.delta, suffix)}`);
+  const num = (v: number | null, missing: string, suffix = "") => (v === null ? missing : `${formatNumber(v)}${suffix}`);
+  const loadSuffix = ` ${unit}`;
+  const rirChange = c.rir.from === null || c.rir.to === null ? notLogged : c.rir.delta === 0 ? "—" : t(c.rir.delta! > 0 ? "progress.compare.effortDown" : "progress.compare.effortUp");
   return [
-    { key: "load", values: loadValues, direction: loadDir },
-    { key: "reps", values: `${num(c.reps.from, "—")} → ${num(c.reps.to, "—")}`, direction: repsDir },
-    { key: "rir", values: `${num(c.rir.from, notLogged)} → ${num(c.rir.to, notLogged)}`, direction: rirDir },
+    { key: "load", previous: num(c.load.from, bodyweight, loadSuffix), current: num(c.load.to, bodyweight, loadSuffix), change: numeric(c.load, loadSuffix) },
+    { key: "reps", previous: num(c.reps.from, "—"), current: num(c.reps.to, "—"), change: numeric(c.reps, "") },
+    { key: "rir", previous: num(c.rir.from, notLogged), current: num(c.rir.to, notLogged), change: rirChange },
   ];
+}
+
+// One neutral sentence about what changed between two top sets. Built from
+// i18n fragments so each locale controls its own wording; it never grades.
+// Load unchanged: unchanged parts first, then what changed. Load changed: the
+// load change first, then reps and RIR.
+export function describeComparison(t: Translate, c: Comparison, unit: string): string {
+  const loadSame = c.load.from === c.load.to;
+  const repsSame = c.reps.delta === 0;
+  const rirKnown = c.rir.delta !== null;
+  const rirSame = c.rir.delta === 0;
+  if (loadSame && repsSame && rirSame) return capitalize(t("progress.describe.same"));
+
+  const listSep = t("progress.describe.joinList");
+  const clauseSep = t("progress.describe.joinClause");
+  const repsChange = (): string => {
+    const n = Math.abs(c.reps.delta ?? 0);
+    const more = (c.reps.delta ?? 0) > 0;
+    const key = `progress.describe.reps${more ? "More" : "Fewer"}${n === 1 ? "One" : "Many"}` as MessageKey;
+    return t(key, { count: formatNumber(n) });
+  };
+  const rirChange = (): string => (!rirKnown ? t("progress.describe.rirMissing") : t(c.rir.delta! > 0 ? "progress.describe.effortLower" : "progress.describe.effortHigher"));
+  const repsKnown = c.reps.delta !== null;
+
+  if (loadSame) {
+    const unchanged: string[] = [];
+    const changed: string[] = [];
+    if (c.load.from !== null) unchanged.push(t("progress.describe.sameLoad"));
+    if (repsSame) unchanged.push(t("progress.describe.sameReps"));
+    else if (repsKnown) changed.push(repsChange());
+    if (rirSame) unchanged.push(t("progress.describe.sameRir"));
+    else changed.push(rirChange());
+    return capitalize([unchanged.join(listSep), changed.join(listSep)].filter(Boolean).join(clauseSep));
+  }
+
+  const parts: string[] = [];
+  if (c.load.delta !== null) parts.push(t(c.load.delta > 0 ? "progress.describe.loadUp" : "progress.describe.loadDown", { delta: formatNumber(Math.abs(c.load.delta)), unit }));
+  if (repsSame && rirSame) parts.push(t("progress.describe.repsRirKept"));
+  else {
+    if (repsSame) parts.push(t("progress.describe.sameReps"));
+    else if (repsKnown) parts.push(repsChange());
+    if (rirSame) parts.push(t("progress.describe.rirSame"));
+    else parts.push(rirChange());
+  }
+  return capitalize(parts.join(clauseSep));
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 export function eventLabel(t: Translate, event: ProgressEvent): string {
@@ -228,7 +271,7 @@ export function eventLabel(t: Translate, event: ProgressEvent): string {
   }
 }
 
-export type ChartPoint = { index: number; x: number; y: number; value: number; exposure: Exposure; label: string; hollow: boolean; loadChange: boolean };
+export type ChartPoint = { index: number; x: number; y: number; value: number; exposure: Exposure; label: string; hollow: boolean };
 export type Chart = { points: ChartPoint[]; yTicks: { y: number; label: string }[]; xTicks: { x: number; date: string }[]; width: number; height: number; plot: { left: number; right: number; top: number; bottom: number } };
 
 export function niceTicks(min: number, max: number, count = 4, integer = false): number[] {
@@ -243,8 +286,7 @@ export function niceTicks(min: number, max: number, count = 4, integer = false):
 }
 
 // Time-proportional x axis; y axis padded 10%. Exposures without a value for
-// the metric (no RIR for est. 1RM, bodyweight load) are skipped. A dashed
-// guide is flagged on points whose engine events include a load change.
+// the metric (no RIR for est. 1RM, bodyweight load) are skipped.
 export function layoutChart(exposures: Exposure[], metric: Metric, width = 320, height = 200): Chart {
   const plot = { left: 40, right: width - 14, top: 16, bottom: height - 26 };
   const usable = exposures.map((exposure, index) => ({ exposure, index, value: metricValue(exposure, metric) })).filter((p): p is { exposure: Exposure; index: number; value: number } => p.value !== null);
@@ -268,25 +310,20 @@ export function layoutChart(exposures: Exposure[], metric: Metric, width = 320, 
     y: y(p.value),
     value: p.value,
     exposure: p.exposure,
-    label: pointLabel(p.exposure, metric),
+    label: pointLabel(p.exposure),
     hollow: p.exposure.source === "OTHER_COACH",
-    loadChange: metric !== "workingSets" && p.exposure.events.some((e) => e.type === "LOAD_CHANGE"),
   }));
-  const yTicks = niceTicks(lo, hi, 4, metric === "workingSets").map((v) => ({ y: y(v), label: formatNumber(v) }));
+  const yTicks = niceTicks(lo, hi, 4).map((v) => ({ y: y(v), label: formatNumber(v) }));
   const xTicks = t1 === t0 ? [{ x: x(t0), date: usable[0].exposure.date }] : [{ x: x(t0), date: usable[0].exposure.date }, { x: x(t1), date: usable[usable.length - 1].exposure.date }];
   return { points, yTicks, xTicks, width, height, plot };
 }
 
-// Which point labels to draw: the selected one always, then the others newest
-// to oldest, each only if at least minGap px (viewBox units) from every label
-// already kept. selectedIndex is a position in `points`.
-export function visibleLabels(points: { x: number }[], selectedIndex: number, minGap = 30): Set<number> {
+// Which point labels to draw: only the selected point and the latest one.
+// selectedIndex is a position in `points`.
+export function visibleLabels(points: unknown[], selectedIndex: number): Set<number> {
   const kept = new Set<number>();
   if (selectedIndex >= 0 && selectedIndex < points.length) kept.add(selectedIndex);
-  for (let i = points.length - 1; i >= 0; i--) {
-    if (kept.has(i)) continue;
-    if ([...kept].every((k) => Math.abs(points[k].x - points[i].x) >= minGap)) kept.add(i);
-  }
+  if (points.length > 0) kept.add(points.length - 1);
   return kept;
 }
 
