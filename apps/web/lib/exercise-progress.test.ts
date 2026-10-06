@@ -107,7 +107,7 @@ test("compareToPrevious: RIR rows use effort wording, missing RIR reads not logg
   const missing = compareToPrevious(exposure("2026-09-08", 350, 12, { topSet: { load: 350, reps: 12 } }), exposure("2026-09-01", 350, 12));
   assert.equal(missing?.rir.delta, null);
   assert.equal(missing?.effort, null);
-  assert.deepEqual(comparisonRows(t, missing!, "lb")[2], { key: "rir", previous: "1", current: "progress.compare.notLogged", change: "progress.compare.notLogged" });
+  assert.deepEqual(comparisonRows(t, missing!, "lb")[2], { key: "rir", previous: "1", current: "progress.compare.notLogged", change: "progress.compare.notLogged", tone: "none" });
 });
 
 test("compareToPrevious: reps and bodyweight rows", () => {
@@ -229,4 +229,19 @@ test("timeline pairs exposures with sets per unit, newest first, never mixing un
   // A date mismatch drops the sets instead of showing someone else's.
   const mismatch = buildTimeline("kg", sessions, [exposure("2026-01-01", 80, 8)], "ex");
   assert.deepEqual(mismatch[0].sets, []);
+});
+
+test("comparisonRows tone marks direction only: up, down, or none", () => {
+  const tones = (cur: Parameters<typeof exposure>, prev: Parameters<typeof exposure>) =>
+    comparisonRows(t, compareToPrevious(exposure(...cur), exposure(...prev))!, "kg").map((r) => r.tone);
+  assert.deepEqual(tones(["2026-09-08", 145, 6], ["2026-09-01", 140, 6]), ["up", "none", "none"]);
+  assert.deepEqual(tones(["2026-09-08", 130, 6], ["2026-09-01", 140, 6]), ["down", "none", "none"]);
+  assert.deepEqual(tones(["2026-09-08", 140, 5], ["2026-09-01", 140, 6]), ["none", "down", "none"]);
+  assert.deepEqual(tones(["2026-09-08", 140, 6], ["2026-09-01", 140, 6]), ["none", "none", "none"]);
+  // RIR 1 -> 3 is shown as "↓ effort", so it is "down"; 1 -> 0 is "↑ effort", so "up".
+  const rir = (to: number) => comparisonRows(t, compareToPrevious(exposure("2026-09-08", 140, 6, { topSet: { load: 140, reps: 6, rir: to } }), exposure("2026-09-01", 140, 6))!, "kg")[2].tone;
+  assert.equal(rir(3), "down");
+  assert.equal(rir(0), "up");
+  const noRir = compareToPrevious(exposure("2026-09-08", 140, 6, { topSet: { load: 140, reps: 6 } }), exposure("2026-09-01", 140, 6));
+  assert.equal(comparisonRows(t, noRir!, "kg")[2].tone, "none");
 });

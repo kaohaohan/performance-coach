@@ -13,7 +13,7 @@ import { AppHeader } from "@/components/app-header";
 import {
   MAX_WINDOWS, RANGES, buildTimeline, compareToPrevious, comparisonRows, describeComparison, eventLabel, exerciseNameFrom, filterSince, initialWindows, layoutChart, mergeWindows,
   localToday, pointText, rangeCutoff, setSummary, setsText, visibleLabels, windowBounds,
-  type Chart, type Comparison, type Exposure, type LogSession, type Metric, type ProgressEvent, type RangeKey, type TimelineEntry, type TrainingLog,
+  type Chart, type Comparison, type Exposure, type LogSession, type Metric, type ProgressEvent, type RangeKey, type TimelineEntry, type Tone, type TrainingLog,
 } from "@/lib/exercise-progress";
 
 type Role = "COACH" | "ATHLETE";
@@ -23,6 +23,9 @@ type Role = "COACH" | "ATHLETE";
 const API_ERROR_POLICY: ErrorPolicy = { serverMessage: true };
 
 const HISTORY_PAGE_SIZE = 10;
+
+// Direction only (teal up, amber down); never red/green, never good/bad.
+const TONE_CLASS: Record<Tone, string> = { up: "font-semibold text-teal-700", down: "font-semibold text-amber-700", none: "" };
 
 // Exercise Progress: the same read-only view for the Coach
 // (/coach/clients/[athleteId]/exercises/[exerciseId]) and the Athlete
@@ -270,7 +273,7 @@ function ComparisonBlock({ comparison, unit, locale }: { comparison: Comparison;
               <th scope="row" className="py-1 pr-2 text-left font-normal text-slate-500">{t(`progress.compare.${row.key}` as MessageKey)}</th>
               <td className="py-1 pr-2 tabular-nums">{row.previous}</td>
               <td className="py-1 pr-2 tabular-nums">{row.current}</td>
-              <td className="py-1 text-right tabular-nums">{row.change}</td>
+              <td className={`py-1 text-right tabular-nums ${TONE_CLASS[row.tone]}`}>{row.change}</td>
             </tr>
           ))}
         </tbody>

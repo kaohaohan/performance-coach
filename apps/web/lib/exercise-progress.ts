@@ -183,7 +183,10 @@ export function compareToPrevious(current: Exposure, previous: Exposure | undefi
   return { previousDate: previous.date, sameDay: previous.date === current.date, previousSource: previous.source, load, reps, rir, effort };
 }
 
-export type ComparisonRow = { key: "load" | "reps" | "rir"; previous: string; current: string; change: string };
+// tone follows the arrow shown in `change` (up / down / unchanged or unknown). It
+// marks direction only, never good or bad.
+export type Tone = "up" | "down" | "none";
+export type ComparisonRow = { key: "load" | "reps" | "rir"; previous: string; current: string; change: string; tone: Tone };
 
 function signed(delta: number, suffix = ""): string {
   return `${delta > 0 ? "+" : "−"}${formatNumber(Math.abs(delta))}${suffix}`;
@@ -198,11 +201,14 @@ export function comparisonRows(t: Translate, c: Comparison, unit: string): Compa
   const numeric = (field: FieldDiff, suffix: string) => (field.delta === null || field.delta === 0 ? "—" : `${arrow(field.delta)} ${signed(field.delta, suffix)}`);
   const num = (v: number | null, missing: string, suffix = "") => (v === null ? missing : `${formatNumber(v)}${suffix}`);
   const loadSuffix = ` ${unit}`;
+  const toneOf = (delta: number | null): Tone => (delta === null || delta === 0 ? "none" : delta > 0 ? "up" : "down");
+  // RIR up = lower effort, which is shown as "↓ effort", so its tone is inverted.
+  const rirTone: Tone = c.rir.from === null || c.rir.to === null ? "none" : toneOf(c.rir.delta === null ? null : -c.rir.delta);
   const rirChange = c.rir.from === null || c.rir.to === null ? notLogged : c.rir.delta === 0 ? "—" : t(c.rir.delta! > 0 ? "progress.compare.effortDown" : "progress.compare.effortUp");
   return [
-    { key: "load", previous: num(c.load.from, bodyweight, loadSuffix), current: num(c.load.to, bodyweight, loadSuffix), change: numeric(c.load, loadSuffix) },
-    { key: "reps", previous: num(c.reps.from, "—"), current: num(c.reps.to, "—"), change: numeric(c.reps, "") },
-    { key: "rir", previous: num(c.rir.from, notLogged), current: num(c.rir.to, notLogged), change: rirChange },
+    { key: "load", previous: num(c.load.from, bodyweight, loadSuffix), current: num(c.load.to, bodyweight, loadSuffix), change: numeric(c.load, loadSuffix), tone: toneOf(c.load.delta) },
+    { key: "reps", previous: num(c.reps.from, "—"), current: num(c.reps.to, "—"), change: numeric(c.reps, ""), tone: toneOf(c.reps.delta) },
+    { key: "rir", previous: num(c.rir.from, notLogged), current: num(c.rir.to, notLogged), change: rirChange, tone: rirTone },
   ];
 }
 

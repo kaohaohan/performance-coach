@@ -64,4 +64,5 @@
 
 - Final status: Done (not committed; staging check pending)
 - Deviations from plan: `visibleLabels` signature widened to `points: unknown[]` (x positions no longer needed). English describe fragments are lowercase and `describeComparison` capitalizes the first character. Separators are i18n keys (zh-TW 、 and ，). Bodyweight (null load both sides) omits the "same load" fragment.
+- Later changes on the same page (2026-10-06): estimated-strength tab hidden; history collapsed to expandable rows and paginated (10 per page); the Change column is tinted by direction only (teal up, amber down, grey unchanged or not logged; RIR follows the displayed effort arrow), never red/green.
 - Follow-ups: (nice to have) exposure pairing key from the API; offset same-day points on the chart; cross-unit hint; later, dosage metrics and warm-up flag.
