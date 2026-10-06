@@ -181,7 +181,8 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
   const current = selectedIndex !== undefined && visible.some((v) => v.index === selectedIndex) ? selectedIndex : visible[visible.length - 1].index;
   const entry = timeline.find((e) => e.index === current);
   const comparison = compareToPrevious(exposures[current], exposures[current - 1]);
-  const visibleTimeline = timeline.filter((e) => visible.some((v) => v.index === e.index));
+  // The selected exposure is already shown in full above, so the list skips it.
+  const historyTimeline = timeline.filter((e) => e.index !== current && visible.some((v) => v.index === e.index));
   const anyOtherCoach = visible.some((v) => v.exposure.source === "OTHER_COACH");
 
   return (
@@ -201,16 +202,18 @@ function UnitSection({ unit, exposures, sessions, exerciseId, cutoff, metric, se
         </div>
       )}
 
-      <div className="mt-5 border-t border-slate-100 pt-4">
-        <h2 className="text-sm font-bold">{t("progress.timeline.heading")}</h2>
-        <ul className="mt-3 grid gap-3">
-          {visibleTimeline.map((e) => (
-            <li key={`${e.exposure.date}-${e.index}`} className={`rounded-2xl p-3 ring-1 ${e.index === current ? "bg-teal-50 ring-teal-600/20" : "bg-stone-50 ring-slate-950/5"}`}>
-              <TimelineBody entry={e} locale={locale} />
-            </li>
-          ))}
-        </ul>
-      </div>
+      {historyTimeline.length > 0 && (
+        <div className="mt-5 border-t border-slate-100 pt-4">
+          <h2 className="text-sm font-bold">{t("progress.timeline.heading")}</h2>
+          <ul className="mt-3 grid gap-2">
+            {historyTimeline.map((e) => (
+              <li key={`${e.exposure.date}-${e.index}`}>
+                <TimelineRow entry={e} unit={unit} locale={locale} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }
@@ -261,6 +264,25 @@ function ComparisonBlock({ comparison, unit, locale }: { comparison: Comparison;
       <p className="mt-2 text-sm text-slate-700">{describeComparison(t, comparison, unit)}</p>
       <p className="mt-1 text-[11px] text-slate-500">{t("progress.compare.basis")}</p>
     </div>
+  );
+}
+
+// One history entry, collapsed to a line (date · top set · PR chips); tap to
+// see every set, all events and the session link.
+function TimelineRow({ entry, unit, locale }: { entry: TimelineEntry; unit: string; locale: Parameters<typeof monthDay>[0] }) {
+  const t = useT();
+  const { exposure } = entry;
+  const prs = exposure.events.filter((e) => e.type === "LOAD_PR" || e.type === "REP_PR");
+  return (
+    <details className="group rounded-2xl bg-stone-50 ring-1 ring-slate-950/5">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
+        <span className="shrink-0 text-sm font-bold">{monthDay(locale, exposure.date)}</span>
+        <span className="min-w-0 flex-1 truncate text-sm tabular-nums text-slate-700">{pointText(t, exposure, "performance", unit)}</span>
+        {prs.map((event, i) => <EventChip key={`${event.type}-${i}`} event={event} />)}
+        <span aria-hidden className="shrink-0 text-slate-400 transition group-open:rotate-90">›</span>
+      </summary>
+      <div className="px-3 pb-3"><TimelineBody entry={entry} locale={locale} /></div>
+    </details>
   );
 }
 
