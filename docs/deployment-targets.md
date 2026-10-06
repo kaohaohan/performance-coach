@@ -38,6 +38,12 @@ commit locally
   → test the staging URL in Safari/Chrome
 ```
 
+**One test URL.** The staging URL above is the only web URL handed to anyone for
+testing. Vercel also builds a Preview for every pushed feature branch
+(`performance-coach-git-<branch>-…`), but those URLs are not test targets: their
+API and database wiring is not verified. To test a change, merge it into
+`staging` and use the staging URL.
+
 No Xcode rebuild is required for a web-only change. An installed Capacitor app
 loads whichever remote URL was baked into its generated Capacitor config, so a
 remote web deployment is visible only when that app is already pointed at the
