@@ -82,7 +82,7 @@
 | 3. API set/clear | Done | `PUT/DELETE /exercises/{id}/media`, `exercise.ValidateVideoURL/SetVideoURL/ClearVideoURL`, `GET /exercises` override join (moved here from step 4: PUT returns the listed shape), `accountdeletion.pruneOwnedData` removes the Coach's rows. Allowed hosts in one map `allowedVideoHosts`. go vet, gofmt, full `go test ./...` pass on an isolated DB |
 | 4. Read paths | Done | Today (`scheduledworkout.go`) and session (`workoutsession.go`) now `COALESCE(scheduling coach override, catalog)` via `scheduled_workouts.coach_id`. Tests: two Coaches schedule the same exercise for one Athlete; another Coach's override does not leak. Full `go test ./...` passes |
 | 5. Frontend | Done | `VideoEditor` in `app/coach/exercises/page.tsx` (Add/Edit video, Save, Use default, Cancel; reloads the list after a change); 5 en/zh-TW keys; UI spec row updated. `npm test` 226 pass, eslint and tsc clean. Not yet seen in a browser |
-| 6. Staging verification | Not Started | |
+| 6. Staging verification | In Progress | 2026-10-06: image built with Cloud Build (a93ca7f); `performance-coach-migrate-staging` job applied `0013` (staging was at `0012`); API revision 00215 deployed no-traffic, smoke-tested, promoted, labelled `commit-sha=a93ca7f`; pushed to `staging`, CI (api, web, deploy api staging) green, Vercel deployed. Remaining: founder checks in the browser that a Coach can set a video and the Athlete sees it |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`.
 
@@ -93,6 +93,8 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`.
   - `coach_id` has **no** `ON DELETE CASCADE` (the plan said cascade). The existing migrate test `TestAccountDeletionMigration0004RoundTrip` forbids any cascade from `users`: users are tombstoned, never deleted, and account deletion prunes owned data explicitly. So the cleanup moves into `accountdeletion.pruneOwnedData` (sub-task 3). `exercise_id` keeps `ON DELETE CASCADE` (only references `exercises`).
   - Added a `CHECK (length(btrim(youtube_url)) > 0)` so an empty row cannot exist even if the API check is bypassed.
 - Follow-ups:
+  - Staging migrations are still manual (the CI guard refuses a deploy that changes migrations). Procedure used: Cloud Build the image from `apps/api` at the commit, point `performance-coach-migrate-staging` at the digest, run it, deploy the same digest to `performance-coach-api-staging` as a no-traffic tagged revision labelled with the full `commit-sha`, smoke `/health` `/ready`, promote, then push `staging`. Worth writing into `docs/deployment-targets.md`.
+  - The staging migrate role password had rotated, so its Secret Manager value was stale (versions 5–8 were wrong or exposed; 9 is current). The password shown once in the chat was reset.
   - Confirm with a read-only query whether production catalog rows have `youtube_url` at all; if not, decide whether to seed defaults there.
   - Editing description and image per Coach is out of scope.
   - Ship in the release after the current staging → production release.
