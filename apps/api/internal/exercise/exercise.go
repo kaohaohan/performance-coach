@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -29,6 +30,23 @@ type Exercise struct {
 
 // ErrForbidden indicates the caller is authenticated but is not a coach.
 var ErrForbidden = errors.New("exercise: caller is not a coach")
+
+// ErrNotFound means the exercise does not exist or is not visible to the
+// caller (another Coach's private exercise); the two are indistinguishable.
+var ErrNotFound = errors.New("exercise: exercise not found")
+
+// maxVideoURLLength bounds a stored demo-video link.
+const maxVideoURLLength = 300
+
+// allowedVideoHosts is the single place that decides which video platforms a
+// Coach may link. YouTube only for now; opening other platforms later means
+// adding hosts here (and tests), not changing routes or tables.
+var allowedVideoHosts = map[string]struct{}{
+	"youtube.com":     {},
+	"www.youtube.com": {},
+	"m.youtube.com":   {},
+	"youtu.be":        {},
+}
 
 // ValidationError is returned when a submitted exercise name is empty after
 // normalization. Handlers map it to 400 INVALID_ARGUMENT.
@@ -65,8 +83,9 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, ra
 	query := strings.TrimSpace(rawQuery)
 	const listQuery = `
 		SELECT e.id, e.name, e.owner_coach_id IS NULL AS is_system,
-		       e.description, e.youtube_url, e.image_object_key
+		       e.description, COALESCE(m.youtube_url, e.youtube_url), e.image_object_key
 		FROM exercises e
+		LEFT JOIN coach_exercise_media m ON m.exercise_id = e.id AND m.coach_id = $1
 		LEFT JOIN (
 			SELECT swe.exercise_id,
 			       count(*) AS uses,
@@ -103,6 +122,105 @@ func ListForCoach(ctx context.Context, pool *pgxpool.Pool, caller authn.User, ra
 		return nil, fmt.Errorf("exercise: iterate visible exercises: %w", err)
 	}
 	return exercises, nil
+}
+
+// ValidateVideoURL trims and checks a Coach-supplied demo-video link: required,
+// at most maxVideoURLLength, https, no credentials or port, and an allowed host.
+// It returns the trimmed value to store.
+func ValidateVideoURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", &ValidationError{Message: "youtubeUrl is required"}
+	}
+	if len(value) > maxVideoURLLength {
+		return "", &ValidationError{Message: fmt.Sprintf("youtubeUrl must be at most %d characters", maxVideoURLLength)}
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", &ValidationError{Message: "youtubeUrl must be a valid https URL"}
+	}
+	if u.User != nil || u.Port() != "" {
+		return "", &ValidationError{Message: "youtubeUrl must not contain credentials or a port"}
+	}
+	if _, ok := allowedVideoHosts[strings.ToLower(u.Hostname())]; !ok {
+		return "", &ValidationError{Message: "youtubeUrl must be a YouTube link"}
+	}
+	return value, nil
+}
+
+// SetVideoURL stores the caller's personal demo-video link for a visible
+// exercise (upsert) and returns the exercise as the caller's library lists it.
+// It never touches the shared exercises row.
+func SetVideoURL(ctx context.Context, pool *pgxpool.Pool, caller authn.User, exerciseID, rawURL string) (Exercise, error) {
+	if caller.Role != "COACH" {
+		return Exercise{}, ErrForbidden
+	}
+	value, err := ValidateVideoURL(rawURL)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if _, err := uuid.Parse(exerciseID); err != nil {
+		return Exercise{}, ErrNotFound
+	}
+
+	const upsert = `
+		INSERT INTO coach_exercise_media (coach_id, exercise_id, youtube_url)
+		SELECT $1, e.id, $3
+		FROM exercises e
+		WHERE e.id = $2 AND (e.owner_coach_id IS NULL OR e.owner_coach_id = $1)
+		ON CONFLICT (coach_id, exercise_id)
+		DO UPDATE SET youtube_url = EXCLUDED.youtube_url, updated_at = now()`
+	tag, err := pool.Exec(ctx, upsert, caller.ID, exerciseID, value)
+	if err != nil {
+		return Exercise{}, fmt.Errorf("exercise: set video url: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Exercise{}, ErrNotFound
+	}
+	return getVisible(ctx, pool, caller.ID, exerciseID)
+}
+
+// ClearVideoURL removes the caller's override so the catalog default applies
+// again. It is idempotent for a visible exercise.
+func ClearVideoURL(ctx context.Context, pool *pgxpool.Pool, caller authn.User, exerciseID string) error {
+	if caller.Role != "COACH" {
+		return ErrForbidden
+	}
+	if _, err := uuid.Parse(exerciseID); err != nil {
+		return ErrNotFound
+	}
+	var visible bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM exercises
+			WHERE id = $1 AND (owner_coach_id IS NULL OR owner_coach_id = $2)
+		)`, exerciseID, caller.ID).Scan(&visible); err != nil {
+		return fmt.Errorf("exercise: check visible exercise: %w", err)
+	}
+	if !visible {
+		return ErrNotFound
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM coach_exercise_media WHERE coach_id = $1 AND exercise_id = $2`, caller.ID, exerciseID); err != nil {
+		return fmt.Errorf("exercise: clear video url: %w", err)
+	}
+	return nil
+}
+
+func getVisible(ctx context.Context, q queryer, coachID, exerciseID string) (Exercise, error) {
+	const query = `
+		SELECT e.id, e.name, e.owner_coach_id IS NULL AS is_system,
+		       e.description, COALESCE(m.youtube_url, e.youtube_url), e.image_object_key
+		FROM exercises e
+		LEFT JOIN coach_exercise_media m ON m.exercise_id = e.id AND m.coach_id = $1
+		WHERE e.id = $2 AND (e.owner_coach_id IS NULL OR e.owner_coach_id = $1)`
+	item, err := scanExerciseRow(q.QueryRow(ctx, query, coachID, exerciseID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Exercise{}, ErrNotFound
+		}
+		return Exercise{}, err
+	}
+	return item, nil
 }
 
 // CreatePrivate validates and creates a caller-owned private Exercise. System

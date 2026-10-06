@@ -357,6 +357,112 @@ func TestExerciseLibrarySearchRanksEarlierMatchAboveLaterMatch(t *testing.T) {
 	}
 }
 
+func TestCoachVideoOverrideSetClearAndIsolation(t *testing.T) {
+	requireIntegrationDB(t)
+	ctx := context.Background()
+	coachA := createUser(t, "COACH")
+	coachB := createUser(t, "COACH")
+	athlete := createUser(t, "ATHLETE")
+	catalogURL := "https://www.youtube.com/watch?v=catalog"
+	mineURL := "https://www.youtube.com/watch?v=coachA"
+
+	systemID := uuid.NewString()
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO exercises (id, name, owner_coach_id, created_at, youtube_url) VALUES ($1, $2, NULL, now(), $3)`,
+		systemID, testPrefix+" Override System", catalogURL,
+	); err != nil {
+		t.Fatal(err)
+	}
+	privateA := insertExercise(t, ctx, testPrefix+" Override Private A", &coachA.ID)
+	privateB := insertExercise(t, ctx, testPrefix+" Override Private B", &coachB.ID)
+
+	listedURL := func(coach authn.User, id string) *string {
+		t.Helper()
+		listed, err := exercise.ListForCoach(ctx, testPool, coach, testPrefix+" Override")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range listed {
+			if item.ID == id {
+				return item.YoutubeURL
+			}
+		}
+		t.Fatalf("exercise %s not listed for coach %s", id, coach.ID)
+		return nil
+	}
+
+	// Coach A overrides the shared SYSTEM exercise; the response is the listed shape.
+	updated, err := exercise.SetVideoURL(ctx, testPool, coachA, systemID, "  "+mineURL+"  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != systemID || updated.Scope != "SYSTEM" || updated.YoutubeURL == nil || *updated.YoutubeURL != mineURL {
+		t.Fatalf("SetVideoURL = %#v, want SYSTEM exercise with trimmed override", updated)
+	}
+	if got := listedURL(coachA, systemID); got == nil || *got != mineURL {
+		t.Fatalf("coach A list youtubeUrl = %q, want %q", deref(got), mineURL)
+	}
+	// Coach B still sees the catalog default, and the shared row is untouched.
+	if got := listedURL(coachB, systemID); got == nil || *got != catalogURL {
+		t.Fatalf("coach B list youtubeUrl = %v, want catalog default", got)
+	}
+	var stored string
+	if err := testPool.QueryRow(ctx, `SELECT youtube_url FROM exercises WHERE id = $1`, systemID).Scan(&stored); err != nil || stored != catalogURL {
+		t.Fatalf("shared row youtube_url = %q, %v; want unchanged", stored, err)
+	}
+
+	// Second call overwrites (idempotent upsert, one row).
+	again := "https://youtu.be/second"
+	if _, err := exercise.SetVideoURL(ctx, testPool, coachA, systemID, again); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM coach_exercise_media WHERE coach_id = $1 AND exercise_id = $2`, coachA.ID, systemID).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("override rows = %d, %v; want 1", rows, err)
+	}
+	if got := listedURL(coachA, systemID); got == nil || *got != again {
+		t.Fatalf("coach A list after overwrite = %v, want %q", got, again)
+	}
+
+	// Own private exercise works; another coach's private exercise is 404-equivalent.
+	if _, err := exercise.SetVideoURL(ctx, testPool, coachA, privateA, mineURL); err != nil {
+		t.Fatalf("own private exercise: %v", err)
+	}
+	if _, err := exercise.SetVideoURL(ctx, testPool, coachA, privateB, mineURL); !errors.Is(err, exercise.ErrNotFound) {
+		t.Fatalf("other coach private exercise error = %v, want ErrNotFound", err)
+	}
+	if _, err := exercise.SetVideoURL(ctx, testPool, coachA, uuid.NewString(), mineURL); !errors.Is(err, exercise.ErrNotFound) {
+		t.Fatalf("unknown exercise error = %v, want ErrNotFound", err)
+	}
+	if _, err := exercise.SetVideoURL(ctx, testPool, coachA, "not-a-uuid", mineURL); !errors.Is(err, exercise.ErrNotFound) {
+		t.Fatalf("malformed id error = %v, want ErrNotFound", err)
+	}
+	if err := exercise.ClearVideoURL(ctx, testPool, coachA, privateB); !errors.Is(err, exercise.ErrNotFound) {
+		t.Fatalf("clear other coach private error = %v, want ErrNotFound", err)
+	}
+
+	// Validation and authorization.
+	if _, err := exercise.SetVideoURL(ctx, testPool, coachA, systemID, "https://vimeo.com/1"); !hasValidationError(err) {
+		t.Fatalf("non-YouTube error = %v, want ValidationError", err)
+	}
+	if _, err := exercise.SetVideoURL(ctx, testPool, athlete, systemID, mineURL); !errors.Is(err, exercise.ErrForbidden) {
+		t.Fatalf("athlete set error = %v, want ErrForbidden", err)
+	}
+	if err := exercise.ClearVideoURL(ctx, testPool, athlete, systemID); !errors.Is(err, exercise.ErrForbidden) {
+		t.Fatalf("athlete clear error = %v, want ErrForbidden", err)
+	}
+
+	// Clear returns to the catalog default and is idempotent.
+	for i := 0; i < 2; i++ {
+		if err := exercise.ClearVideoURL(ctx, testPool, coachA, systemID); err != nil {
+			t.Fatalf("clear #%d: %v", i+1, err)
+		}
+	}
+	if got := listedURL(coachA, systemID); got == nil || *got != catalogURL {
+		t.Fatalf("coach A list after clear = %v, want catalog default", got)
+	}
+}
+
 func requireIntegrationDB(t *testing.T) {
 	t.Helper()
 	if skipReason != "" {
@@ -421,6 +527,7 @@ func cleanupTestRows(ctx context.Context) {
 	_, _ = testPool.Exec(ctx, `DELETE FROM workout_exercise_set_overrides WHERE workout_exercise_id IN (SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id WHERE w.name LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE name LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM workouts WHERE name LIKE $1`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM coach_exercise_media WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM exercises WHERE name LIKE $1`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM coach_athletes WHERE coach_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1) OR athlete_id IN (SELECT id FROM users WHERE firebase_uid LIKE $1)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM users WHERE firebase_uid LIKE $1`, pattern)
@@ -457,4 +564,11 @@ func sameDatabaseTarget(testURL, developmentURL string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
 }

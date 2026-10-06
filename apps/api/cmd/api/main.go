@@ -146,6 +146,8 @@ func run(logger *slog.Logger) error {
 	mux.Handle("POST /api/v1/invite-codes/{code}/redeem", redeemLimiter.Middleware(firebaseOnlyMiddleware(handleRedeemInviteCode(pool))))
 	mux.Handle("GET /api/v1/exercises", authMiddleware(handleListExercises(pool)))
 	mux.Handle("POST /api/v1/exercises", authMiddleware(handleCreateExercise(pool)))
+	mux.Handle("PUT /api/v1/exercises/{exerciseId}/media", authMiddleware(handleSetExerciseMedia(pool)))
+	mux.Handle("DELETE /api/v1/exercises/{exerciseId}/media", authMiddleware(handleClearExerciseMedia(pool)))
 	mux.Handle("POST /api/v1/workouts", authMiddleware(handleCreateWorkout(pool)))
 	mux.Handle("GET /api/v1/workouts", authMiddleware(handleListWorkouts(pool)))
 	mux.Handle("PATCH /api/v1/workouts/{workoutId}", authMiddleware(handlePatchWorkout(pool)))
@@ -710,6 +712,71 @@ func handleCreateExercise(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(created)
+	}
+}
+
+// setExerciseMediaRequest is the wire shape for PUT /api/v1/exercises/{id}/media.
+type setExerciseMediaRequest struct {
+	YoutubeURL string `json:"youtubeUrl"`
+}
+
+// writeExerciseMediaError maps exercise-service errors for the media routes.
+func writeExerciseMediaError(w http.ResponseWriter, r *http.Request, err error) {
+	var validationErr *exercise.ValidationError
+	switch {
+	case errors.Is(err, exercise.ErrForbidden):
+		authn.WriteError(w, http.StatusForbidden, "FORBIDDEN", "caller is not a coach")
+	case errors.Is(err, exercise.ErrNotFound):
+		authn.WriteError(w, http.StatusNotFound, "NOT_FOUND", "exercise not found")
+	case errors.As(err, &validationErr):
+		authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", validationErr.Error())
+	default:
+		authn.WriteInternalError(w, r, err)
+	}
+}
+
+// handleSetExerciseMedia sets the caller Coach's own demo-video link for one
+// visible Exercise (docs/go-backend-api-contract-v0.1.md §3.2, V0.14).
+func handleSetExerciseMedia(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+
+		var req setExerciseMediaRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			authn.WriteError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "malformed JSON body")
+			return
+		}
+
+		updated, err := exercise.SetVideoURL(r.Context(), pool, user, r.PathValue("exerciseId"), req.YoutubeURL)
+		if err != nil {
+			writeExerciseMediaError(w, r, err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(updated)
+	}
+}
+
+// handleClearExerciseMedia removes the caller Coach's own override so the
+// catalog default applies again.
+func handleClearExerciseMedia(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := authn.UserFromContext(r.Context())
+		if !ok {
+			authn.WriteError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or invalid authentication")
+			return
+		}
+		if err := exercise.ClearVideoURL(r.Context(), pool, user, r.PathValue("exerciseId")); err != nil {
+			writeExerciseMediaError(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

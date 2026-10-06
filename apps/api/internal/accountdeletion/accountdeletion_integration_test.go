@@ -94,11 +94,20 @@ func TestCoachDeleteMeLifecycle(t *testing.T) {
 	keptExerciseID := kept.Exercises[0].ExerciseID
 	unusedExerciseID := unused.Exercises[0].ExerciseID
 
+	if _, err := testPool.Exec(ctx, `INSERT INTO coach_exercise_media (coach_id, exercise_id, youtube_url) VALUES ($1, $2, 'https://youtu.be/override')`, coach.ID, keptExerciseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO coach_exercise_media (coach_id, exercise_id, youtube_url) VALUES ($1, $2, 'https://youtu.be/other')`, otherCoach.ID, keptExerciseID); err != nil {
+		t.Fatal(err)
+	}
+
 	fb := &fakeFirebase{}
 	rec := deleteMe(t, coach, nil, fb, "")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
+	assertExists(t, `SELECT count(*) FROM coach_exercise_media WHERE coach_id = $1`, coach.ID, 0)
+	assertExists(t, `SELECT count(*) FROM coach_exercise_media WHERE coach_id = $1`, otherCoach.ID, 1)
 	if strings.Contains(rec.Body.String(), "refresh") || strings.Contains(strings.ToLower(rec.Body.String()), "token") && rec.Body.Len() > 0 {
 		t.Fatalf("response leaked secret-like text: %s", rec.Body.String())
 	}
@@ -716,6 +725,10 @@ func cleanup(ctx context.Context) {
 		)
 	)`, pattern)
 	_, _ = testPool.Exec(ctx, `DELETE FROM workouts WHERE coach_id IN (
+		SELECT id FROM users WHERE firebase_uid LIKE $1
+		UNION SELECT user_id FROM account_deletion_jobs WHERE original_firebase_uid LIKE $1
+	)`, pattern)
+	_, _ = testPool.Exec(ctx, `DELETE FROM coach_exercise_media WHERE coach_id IN (
 		SELECT id FROM users WHERE firebase_uid LIKE $1
 		UNION SELECT user_id FROM account_deletion_jobs WHERE original_firebase_uid LIKE $1
 	)`, pattern)

@@ -286,6 +286,9 @@ func pruneOwnedData(ctx context.Context, tx pgx.Tx, userID string) error {
 		  )`, userID); err != nil {
 		return fmt.Errorf("accountdeletion: prune unreferenced workouts: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM coach_exercise_media WHERE coach_id = $1`, userID); err != nil {
+		return fmt.Errorf("accountdeletion: prune exercise media: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM exercises
 		WHERE owner_coach_id = $1
