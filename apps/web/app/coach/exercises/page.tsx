@@ -213,8 +213,8 @@ export default function CoachExercisesPage() {
               {!createOpen && <button type="button" onClick={openCreate} className="mt-4 min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700">{t("coach.exercises.create")}</button>}
             </section>
           ) : <>
-            <ExerciseSection title={t("coach.exercises.systemTitle")} badge="SYSTEM" badgeLabel={t("coach.scope.system")} exercises={systemExercises} empty={t("coach.exercises.systemEmpty")} />
-            <ExerciseSection title={t("coach.exercises.privateTitle")} badge="PRIVATE" badgeLabel={t("coach.scope.private")} exercises={privateExercises} empty={t("coach.exercises.privateEmpty")} onCreate={!createOpen ? openCreate : undefined} createLabel={t("coach.exercises.create")} />
+            <ExerciseSection title={t("coach.exercises.systemTitle")} badge="SYSTEM" badgeLabel={t("coach.scope.system")} exercises={systemExercises} empty={t("coach.exercises.systemEmpty")} idToken={idToken} onVideoChanged={() => setReloadKey((value) => value + 1)} />
+            <ExerciseSection title={t("coach.exercises.privateTitle")} badge="PRIVATE" badgeLabel={t("coach.scope.private")} exercises={privateExercises} empty={t("coach.exercises.privateEmpty")} onCreate={!createOpen ? openCreate : undefined} createLabel={t("coach.exercises.create")} idToken={idToken} onVideoChanged={() => setReloadKey((value) => value + 1)} />
           </>}
         </>}
       </div>
@@ -230,7 +230,7 @@ function LoadingCard({ label }: { label: string }) {
   return <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-950/5"><p className="text-sm font-medium text-slate-500">{label}</p></section>;
 }
 
-function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate, createLabel }: { title: string; badge: Exercise["scope"]; badgeLabel: string; exercises: Exercise[]; empty: string; onCreate?: () => void; createLabel?: string }) {
+function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate, createLabel, idToken, onVideoChanged }: { title: string; badge: Exercise["scope"]; badgeLabel: string; exercises: Exercise[]; empty: string; onCreate?: () => void; createLabel?: string; idToken: string | null; onVideoChanged: () => void }) {
   const { locale } = useLocale();
   const t = useT();
   return (
@@ -251,6 +251,7 @@ function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate,
                 <p className="break-words font-semibold">{localizeExerciseName(exercise.name, locale)}</p>
                 {exercise.description && <p className="mt-1 text-sm leading-6 text-slate-500">{exercise.description}</p>}
                 {exercise.youtubeUrl && <a href={exercise.youtubeUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-sm font-semibold text-teal-700 underline-offset-2 hover:underline">{t("coach.exercises.watchVideo")}</a>}
+                {idToken && <VideoEditor exercise={exercise} idToken={idToken} onChanged={onVideoChanged} />}
               </div>
               <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${badge === "SYSTEM" ? "bg-slate-100 text-slate-600" : "bg-teal-50 text-teal-700"}`}>{badgeLabel}</span>
             </div>
@@ -258,5 +259,62 @@ function ExerciseSection({ title, badge, badgeLabel, exercises, empty, onCreate,
         </ul>
       )}
     </section>
+  );
+}
+
+// A Coach's own demo-video link for one exercise. Saving or clearing only
+// affects this Coach's Athletes; "use default" goes back to the system link.
+// The Go API validates the link (https, YouTube only) and its message is shown.
+function VideoEditor({ exercise, idToken, onChanged }: { exercise: Exercise; idToken: string; onChanged: () => void }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function openEditor() {
+    setValue(exercise.youtubeUrl ?? "");
+    setError(null);
+    setOpen(true);
+  }
+
+  async function run(action: () => Promise<unknown>) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      setOpen(false);
+      onChanged();
+    } catch (err) {
+      setError(errorMessage(t, err, API_ERROR_POLICY));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const path = `/api/v1/exercises/${encodeURIComponent(exercise.id)}/media`;
+
+  if (!open) {
+    return <button type="button" onClick={openEditor} className="mt-2 ml-3 inline-block min-h-8 text-sm font-semibold text-slate-600 underline-offset-2 hover:underline">{exercise.youtubeUrl ? t("coach.exercises.editVideo") : t("coach.exercises.addVideo")}</button>;
+  }
+
+  return (
+    <form
+      onSubmit={(event) => { event.preventDefault(); void run(() => apiFetch(idToken, path, { method: "PUT", body: { youtubeUrl: value } })); }}
+      className="mt-3 rounded-2xl bg-stone-50 p-3 ring-1 ring-slate-950/5"
+    >
+      <label className="block">
+        <span className="mb-1 block text-xs font-semibold text-slate-600">{t("coach.exercises.videoLabel")}</span>
+        <input type="url" inputMode="url" value={value} onChange={(event) => setValue(event.target.value)} disabled={busy} placeholder="https://www.youtube.com/watch?v=…" autoFocus className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/15 disabled:bg-slate-100" />
+      </label>
+      <p className="mt-1.5 text-xs leading-5 text-slate-500">{t("coach.exercises.videoHint")}</p>
+      {error && <div className="mt-2"><Notice>{error}</Notice></div>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="submit" disabled={busy || value.trim() === ""} className="min-h-11 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{busy ? t("common.saving") : t("common.save")}</button>
+        <button type="button" disabled={busy} onClick={() => void run(() => apiFetch(idToken, path, { method: "DELETE" }))} className="min-h-11 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-900 transition hover:bg-slate-50 disabled:opacity-50">{t("coach.exercises.useDefaultVideo")}</button>
+        <button type="button" disabled={busy} onClick={() => setOpen(false)} className="min-h-11 rounded-xl px-3 text-sm font-semibold text-slate-600 disabled:opacity-50">{t("common.cancel")}</button>
+      </div>
+    </form>
   );
 }

@@ -195,4 +195,9 @@ export const coach: CoachMessages = {
   "coach.exercises.privateTitle": "我的動作",
   "coach.exercises.privateEmpty": "你還沒有建立任何動作。",
   "coach.exercises.watchVideo": "觀看示範",
+  "coach.exercises.addVideo": "新增示範影片",
+  "coach.exercises.editVideo": "編輯影片",
+  "coach.exercises.videoLabel": "YouTube 連結",
+  "coach.exercises.videoHint": "只有你的學員會看到這個連結。目前只接受 YouTube 連結。",
+  "coach.exercises.useDefaultVideo": "使用預設",
 };

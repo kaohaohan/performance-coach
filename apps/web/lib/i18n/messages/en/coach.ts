@@ -220,6 +220,11 @@ export const coach = {
   "coach.exercises.privateTitle": "My exercises",
   "coach.exercises.privateEmpty": "You haven't created any exercises yet.",
   "coach.exercises.watchVideo": "Watch demo",
+  "coach.exercises.addVideo": "Add demo video",
+  "coach.exercises.editVideo": "Edit video",
+  "coach.exercises.videoLabel": "YouTube link",
+  "coach.exercises.videoHint": "Only your Athletes see this link. YouTube links only for now.",
+  "coach.exercises.useDefaultVideo": "Use default",
 } as const;
 
 export type CoachMessages = Record<keyof typeof coach, string>;

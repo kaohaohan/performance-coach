@@ -81,7 +81,7 @@
 | 2. Migration `0013` | Done | up/down/verify written; applied to an empty scratch DB `performance_coach_migrate_test`, verified, down and up again; `go test ./internal/migrate` passes. Deviation recorded below |
 | 3. API set/clear | Done | `PUT/DELETE /exercises/{id}/media`, `exercise.ValidateVideoURL/SetVideoURL/ClearVideoURL`, `GET /exercises` override join (moved here from step 4: PUT returns the listed shape), `accountdeletion.pruneOwnedData` removes the Coach's rows. Allowed hosts in one map `allowedVideoHosts`. go vet, gofmt, full `go test ./...` pass on an isolated DB |
 | 4. Read paths | Done | Today (`scheduledworkout.go`) and session (`workoutsession.go`) now `COALESCE(scheduling coach override, catalog)` via `scheduled_workouts.coach_id`. Tests: two Coaches schedule the same exercise for one Athlete; another Coach's override does not leak. Full `go test ./...` passes |
-| 5. Frontend | Not Started | |
+| 5. Frontend | Done | `VideoEditor` in `app/coach/exercises/page.tsx` (Add/Edit video, Save, Use default, Cancel; reloads the list after a change); 5 en/zh-TW keys; UI spec row updated. `npm test` 226 pass, eslint and tsc clean. Not yet seen in a browser |
 | 6. Staging verification | Not Started | |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`.
