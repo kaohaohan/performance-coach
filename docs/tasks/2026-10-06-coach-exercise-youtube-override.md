@@ -54,7 +54,7 @@
   - `PUT /api/v1/exercises/{exerciseId}/media`, body `{ "youtubeUrl": string }` → `200` with the exercise as listed (`id`, `name`, `scope`, `description?`, `youtubeUrl`, `imageObjectKey?`).
   - `DELETE /api/v1/exercises/{exerciseId}/media` → `204`.
   - Authorization: Coach only; the exercise must be visible to the caller (SYSTEM, or owned by the caller). Another Coach's private exercise or an unknown id → `404`, indistinguishable. Athlete → `403`. No auth → `401`.
-  - Validation: trim; non-empty; length ≤ 300; parse with `net/url`; scheme `https`; host one of `youtube.com`, `www.youtube.com`, `m.youtube.com`, `youtu.be`; otherwise `400 INVALID_ARGUMENT`. Clearing is `DELETE` only.
+  - Validation (YouTube-only is deliberately temporary; founder wants other video platforms possible later, so the allowed hosts live in one Go constant and widening it is a one-line change plus tests): trim; non-empty; length ≤ 300; parse with `net/url`; scheme `https`; host one of `youtube.com`, `www.youtube.com`, `m.youtube.com`, `youtu.be`; otherwise `400 INVALID_ARGUMENT`. Clearing is `DELETE` only.
   - Read changes (response shape unchanged): `GET /exercises` uses the caller's override; Today and session responses use the override of the Coach who scheduled the workout.
 - State transitions: none.
 - Frontend state/UI impact: an "edit video" action on each exercise card with an input (prefilled), Save, and Use default. Reuses `apiFetch`, existing error policy and card styling. zh-TW strings must differ from en (i18n test).
@@ -77,7 +77,7 @@
 | --- | --- | --- |
 | Phase 0 inspection | Done | Findings in section 1 |
 | Task Doc | Done | This file |
-| 1. Contract and schema docs | Not Started | |
+| 1. Contract and schema docs | Done | Contract V0.14 note, §3.2 PUT/DELETE, read rules, permission row; schema table and DDL. Marked approved, not implemented. Committed locally, not pushed |
 | 2. Migration `0013` | Not Started | |
 | 3. API set/clear | Not Started | |
 | 4. Read paths | Not Started | |

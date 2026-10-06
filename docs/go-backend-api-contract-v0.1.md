@@ -10,6 +10,8 @@ Stack: Go (net/http or chi) + pgx/sqlc + PostgreSQL · Auth: Firebase Auth (JWT)
 
 Repo: 先用 neutral codename（如 `performance-coach`），品牌定案後再 rename module path
 
+> V0.14 變更（Coach-specific exercise YouTube link，見 `docs/tasks/2026-10-06-coach-exercise-youtube-override.md`，**已核准、尚未實作**）：新增 `PUT /exercises/{exerciseId}/media` 與 `DELETE /exercises/{exerciseId}/media`，讓 Coach 為任一可見動作（SYSTEM 或自己的 PRIVATE）設定**自己的** `youtubeUrl`；不修改共用的 `exercises.youtube_url`。新增資料表 `coach_exercise_media`（migration `0013`）。`GET /exercises`、`GET /scheduled-workouts` 的 Today 回應與 `GET /sessions/{id}` 的 `youtubeUrl` 改為「排程 Coach 的 override，否則 catalog 預設」；回應形狀不變。其餘 route、request、response、status code、授權規則不變。
+
 > V0.12 變更（Training History & Exercise Progress，見 `docs/tasks/2026-10-04-training-history.md`）：**API 端 `history` 與 `GET /training-log`（含 events、exposures）已實作**（migration `0012` 僅新增 index）。`GET /sessions/{id}` 每個 exercise 新增 additive `history`（LAST / PR baseline）；新增唯讀 `GET /training-log`（Coach 或 Athlete）回傳實際訓練、server 計算的 progress events 與單一動作的 per-exposure metrics。Coach 讀取範圍沿用 `GET /sessions/{id}` 的 **historical access**，**不限於自己排的課**（跨教練可見）；他教練的 session 一律遮蔽 id、課表名稱、cue 與處方。不打分數、不回傳任何 grade 或 status 判斷。
 
 > V0.11 變更（RPE → RIR，見 `docs/tasks/2026-10-04-rpe-to-rir.md`）：所有強度欄位由 RPE 改為 **RIR**（reps in reserve），範圍 0–9、可為小數。JSON 欄位 `rpe` → `rir`（`plan.defaults`、`overrides[]`、`plan.sets[]`、`setLogs[]`、`POST /sessions/{id}/set-logs` 與 `PATCH /set-logs/{id}` body）。既有資料以 `rir = 10 − rpe` 轉換（migration `0011_rpe_to_rir`）。過渡期內，任何寫入 request 若仍帶 `rpe` 鍵，回 `400 INVALID_ARGUMENT`（`rpe is no longer accepted; use rir`），不得靜默忽略；此 guard 於確認無 client 送 `rpe` 後移除。route、status code、授權不變。
@@ -338,7 +340,7 @@ Optional catalog attributes on each element:
 - `youtubeUrl` — external demo link; omitted when null.
 - `imageObjectKey` — object-storage key for a catalog image; omitted when null. The API returns the key only; signed URL resolution is a separate concern when object storage is wired.
 
-`POST /api/v1/exercises` response shape is unchanged (`id`, `name`, `scope` only). Media attributes are SYSTEM-catalog data seeded or maintained out of band in V0 of this feature; coaches cannot set them through this endpoint.
+`POST /api/v1/exercises` response shape is unchanged (`id`, `name`, `scope` only); it still cannot set media attributes. The catalog value of `youtubeUrl` is seeded or maintained out of band. **V0.14:** a Coach may set a personal override per exercise through `PUT /exercises/{exerciseId}/media` (below). In this list, `youtubeUrl` is the caller's override when one exists, otherwise the catalog value, omitted when both are null. `description` and `imageObjectKey` stay catalog-only.
 
 `scope` 是由 API 依 `ownerCoachId` 衍生的 presentation metadata，不是新的資料庫欄位。
 
@@ -375,6 +377,49 @@ Response `201`：
 | Athlete 呼叫 GET 或 POST exercises | 403 | `FORBIDDEN` |
 | SYSTEM 或 caller-private duplicate | 409 | `CONFLICT` |
 | 未預期 query/persistence failure | 500 | `INTERNAL` |
+
+### PUT /api/v1/exercises/{exerciseId}/media — Coach only（V0.14，尚未實作）
+
+設定（或覆蓋）呼叫者自己的示範影片連結。只寫入 `coach_exercise_media (coach_id, exercise_id)`，**不**修改 `exercises` 的任何欄位，因此不影響其他 Coach。
+
+Request：
+
+```json
+{ "youtubeUrl": "https://www.youtube.com/watch?v=example" }
+```
+
+- 後端先 `strings.TrimSpace`；不可為空；長度 ≤ 300。
+- 以 `net/url` 解析；scheme 必須是 `https`；host 必須是 `youtube.com`、`www.youtube.com`、`m.youtube.com` 或 `youtu.be`。
+- **允許的 host 清單是 V0.14 的暫時限制**：只收 YouTube，後端集中放在單一清單（Go 端一個常數），之後要開放其他影片平台只需擴充該清單與對應測試，不需要改 route 或資料表。欄位名稱目前維持 `youtubeUrl`；真的加入其他平台時，是否改名為通用名稱（例如 `videoUrl`）屬於另一個契約變更，屆時再決定。
+- 清除請用 `DELETE`；空字串回 `400`，不是清除。
+- 動作必須對呼叫者可見（SYSTEM，或 `ownerCoachId = caller.id` 的 PRIVATE）。他人的 PRIVATE 動作與不存在的 id 一律 `404 NOT_FOUND`，兩者不可區分。
+- 重複呼叫為覆蓋（upsert），冪等。
+
+Response `200`：與 `GET /exercises` 單筆相同的形狀，`youtubeUrl` 為剛設定的值。
+
+```json
+{ "id": "...", "name": "Bench Press", "scope": "SYSTEM", "youtubeUrl": "https://www.youtube.com/watch?v=example" }
+```
+
+### DELETE /api/v1/exercises/{exerciseId}/media — Coach only（V0.14，尚未實作）
+
+刪除呼叫者自己的 override，回到 catalog 預設。沒有 override 時也回 `204`（冪等）。可見性規則同 PUT，不可見或不存在回 `404`。Response `204`，無 body。
+
+**Errors（PUT / DELETE）：**
+
+| 情況 | Status | Code |
+| --- | --- | --- |
+| malformed JSON、缺少或空白 `youtubeUrl`、非 https、非 YouTube host、超過 300 字 | 400 | `INVALID_ARGUMENT` |
+| 未登入 | 401 | `UNAUTHENTICATED` |
+| Athlete 呼叫 | 403 | `FORBIDDEN` |
+| 動作不存在或對呼叫者不可見 | 404 | `NOT_FOUND` |
+| 未預期 persistence failure | 500 | `INTERNAL` |
+
+**讀取規則（`youtubeUrl` 的來源）：**
+
+- `GET /exercises`：呼叫者的 override，否則 `exercises.youtube_url`。
+- Today 回應與 `GET /sessions/{id}`：以**排這堂課的 Coach**（`scheduled_workouts.coach_id`）的 override 為準，否則 `exercises.youtube_url`。同一位 Athlete 跟兩位 Coach 時，各 Coach 排的課顯示各自設定的影片。
+- 皆非 snapshot，維持 live join；`youtubeUrl` 是 optional，兩者皆 null 時省略。
 
 ### 建立規則（find-or-create）
 
@@ -851,7 +896,7 @@ Response `204 No Content`，無 body。
 ]
 ```
 
-`session` 非 null 時代表已開始/完成，前端據此顯示 Start / Resume / Done。Optional `coachCue` comes from the snapshot; optional `youtubeUrl` is a live catalog join and is omitted when null.
+`session` 非 null 時代表已開始/完成，前端據此顯示 Start / Resume / Done。Optional `coachCue` comes from the snapshot; optional `youtubeUrl` is a live join — the scheduling Coach's override when set (V0.14), otherwise the catalog value — and is omitted when null.
 
 **注意：**行動端記錄 normal SetLog 同時送 active `scheduledWorkoutExerciseId` 與該 target 的 `scheduledWorkoutPlannedSetId`，不是 `exerciseId`。Extra SetLog 沒有 planned-set ID。
 
@@ -947,7 +992,7 @@ Session and ScheduledWorkout detail Exercise objects additionally expose `origin
 }
 ```
 
-`plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Optional `youtubeUrl` is a live catalog join (`exercises.youtube_url`), omitted when null; it is not snapshotted. Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
+`plan` 與 `name` 直接取自 snapshot — 無論教練事後如何修改模板或動作名稱，此回應永遠反映當日實際處方。Optional `youtubeUrl` is a live join — the scheduling Coach's override (`coach_exercise_media`, V0.14) when set, otherwise `exercises.youtube_url` — omitted when null; it is not snapshotted. Normal logs use `scheduledWorkoutPlannedSetId` for association; `plannedPosition` is a response convenience. EXTRA logs have neither field. Missing planned positions are found by comparing `plan.sets` with PLANNED logs; no SKIPPED row exists.
 
 授權：athlete 本人，或其有 **historical access** 的 coach；其他人 `404`。Tombstoned athlete 的名稱為 `Deleted Athlete`。此為唯讀路徑，不要求 active relationship。
 
@@ -1215,6 +1260,7 @@ Response `200`：
 | `DELETE /me` | ❌ 401 | ❌ 401 | ✅ self `204` | ✅ self `204` | recent-auth 5 分鐘；Apple-linked 必帶 `appleAuthorizationCode` 且 `id_token.sub` 必須對上目前 Firebase Apple identity；`PENDING_EXTERNAL` 重試仍 `204`；`COMPLETE` 後舊 token → `401`；見 §3.1 |
 | `DELETE /athletes/{athleteId}` | ❌ 401 | ❌ 401 | ✅ active relationship；否則 ❌ 404 | ❌ 403 | `204`；只解除關係，保留帳號與訓練紀錄；tombstoned 亦 `404`；非法 UUID 亦回 `404` |
 | `GET/POST /exercises` | ❌ 401 | ❌ 401 | ✅ 公用 + 自己的；POST 僅建自己的 private Exercise | ❌ 403 | — |
+| `PUT/DELETE /exercises/{exerciseId}/media` | ❌ 401 | ❌ 401 | ✅ 可見動作（公用 + 自己的）的**自己的**影片 override；他人 PRIVATE → 404 | ❌ 403 | V0.14，尚未實作；見 §3.2 |
 | `POST /workouts` | ❌ 401 | ❌ 401 | ✅ | ❌ 403 | — |
 | `GET/PATCH/DELETE /workouts/{id}` | ❌ 401 | ❌ 401 | ✅ owner；非 owner ❌ 404 | ❌ 404 | — |
 | `GET /athletes` | ❌ 401 | ❌ 401 | ✅ 僅 active relationship | ❌ 403 | tombstoned athlete 不列入 |
